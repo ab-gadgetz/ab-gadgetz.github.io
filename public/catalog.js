@@ -691,6 +691,10 @@ async function initPublicCatalog() {
   document.querySelectorAll('.pub-branch-label').forEach((el) => {
     el.textContent = data.branch.name;
   });
+  try {
+    const hitImg = new Image();
+    hitImg.src = `https://hits.sh/maynardrdelossantos.github.io/ab-gadgetz-catalog-views/${encodeURIComponent(pubState.branchSlug)}.svg?t=${Date.now()}`;
+  } catch {}
   renderPublicCatalog();
 }
 
