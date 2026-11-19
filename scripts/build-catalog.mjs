@@ -9,23 +9,51 @@ const distDir = path.join(rootDir, 'dist');
 
 const BRANCHES = [
   { id: 'br-molave', slug: 'molave', name: 'Molave', cash_discount_pct: 5, portalId: 23 },
-  { id: 'br-tambulig', slug: 'tambulig', name: 'Tambulig', cash_discount_pct: 5, portalId: 44 },
-  { id: 'br-bonifacio', slug: 'bonifacio', name: 'Bonifacio', cash_discount_pct: 3, portalId: 32 },
+  { id: 'br-tambulig', slug: 'tambulig', name: 'Tambulig', cash_discount_pct: 5, portalId: 32 },
+  { id: 'br-bonifacio', slug: 'bonifacio', name: 'Bonifacio', cash_discount_pct: 3, portalId: 44 },
 ];
 
-async function loginAndFetchPortal(username, password) {
-  const baseUrl = 'https://app.abgadgetz.com.ph';
-  const loginRes = await fetch(`${baseUrl}/auth/login`, {
+const PORTAL_BASE = 'https://app.abgadgetz.com.ph';
+
+function collectCookies(res, jar) {
+  for (const raw of res.headers.getSetCookie?.() || []) {
+    const pair = raw.split(';')[0];
+    const i = pair.indexOf('=');
+    if (i > 0) jar.set(pair.slice(0, i).trim(), pair.slice(i + 1).trim());
+  }
+}
+
+const cookieHeader = (jar) => Array.from(jar.entries()).map(([k, v]) => `${k}=${v}`).join('; ');
+
+// Same login flow as the Admin Portal's working adapter: load the login page,
+// read the form action + CSRF token, then POST the credentials.
+async function portalLogin(username, password, jar) {
+  const pageRes = await fetch(`${PORTAL_BASE}/`, { redirect: 'manual' });
+  collectCookies(pageRes, jar);
+  const html = await pageRes.text();
+
+  const actionMatch = html.match(/<form[^>]*action=["']([^"']+)["']/i);
+  const postUrl = actionMatch ? new URL(actionMatch[1], PORTAL_BASE).toString() : `${PORTAL_BASE}/`;
+  const csrfMatch = html.match(/name=["'](_token|csrf_token|csrf_test_name)["'][^>]*value=["']([^"']+)["']/i);
+
+  const form = new URLSearchParams();
+  form.set('username', username);
+  form.set('password', password);
+  if (csrfMatch) form.set(csrfMatch[1], csrfMatch[2]);
+
+  const postRes = await fetch(postUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ username, password }).toString(),
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookieHeader(jar) },
+    body: form.toString(),
     redirect: 'manual',
   });
-  const setCookies = loginRes.headers.getSetCookie?.() || [];
-  const cookieHeader = setCookies.map((c) => c.split(';')[0]).join('; ');
-  if (!cookieHeader) {
-    throw new Error(`Portal login failed (HTTP ${loginRes.status})`);
-  }
+  collectCookies(postRes, jar);
+  if (postRes.status >= 400) throw new Error(`Portal login failed with HTTP ${postRes.status}`);
+}
+
+async function loginAndFetchPortal(username, password) {
+  const jar = new Map();
+  await portalLogin(username, password, jar);
 
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Manila' }));
   const year = now.getFullYear();
@@ -33,10 +61,13 @@ async function loginAndFetchPortal(username, password) {
 
   const result = new Map();
   for (const b of BRANCHES) {
-    const url = `${baseUrl}/panel/stocks/branch_monthly_inventory/${b.portalId}/${year}/${month}`;
-    const res = await fetch(url, { headers: { Cookie: cookieHeader } });
+    const url = `${PORTAL_BASE}/panel/stocks/branch_monthly_inventory/${b.portalId}/${year}/${month}`;
+    const res = await fetch(url, { headers: { Cookie: cookieHeader(jar) }, redirect: 'manual' });
     if (!res.ok) throw new Error(`Portal fetch failed for ${b.name}: HTTP ${res.status}`);
     const html = await res.text();
+    if (html.includes('Sign In to AB GADGETZ')) {
+      throw new Error('Portal login was rejected (got the sign-in page instead of inventory). Check PORTAL_USERNAME / PORTAL_PASSWORD secrets.');
+    }
     const rows = [];
     for (const tr of html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
       const tds = [...tr[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((m) =>
@@ -48,6 +79,9 @@ async function loginAndFetchPortal(username, password) {
       const unitPrice = Number(tds[3].replace(/[^0-9.]/g, '')) || 0;
       const available = parseInt(tds[4].replace(/[^0-9-]/g, ''), 10) || 0;
       if (itemCode) rows.push({ itemCode, unitPrice, available });
+    }
+    if (rows.length === 0) {
+      throw new Error(`Portal returned no inventory rows for ${b.name}; refusing to publish empty stock.`);
     }
     result.set(b.id, rows);
   }
@@ -67,10 +101,17 @@ async function main() {
 
   const user = process.env.PORTAL_USERNAME;
   const pass = process.env.PORTAL_PASSWORD;
+  let liveSynced = false;
+  let liveSyncNote = 'No portal credentials provided; using last published snapshot.';
   if (user && pass) {
     try {
       const liveData = await loginAndFetchPortal(user, pass);
       for (const [branchId, rows] of liveData.entries()) {
+        // Live portal is the source of truth for stock: zero out this branch first,
+        // then apply the counts the portal reports.
+        for (const p of products) {
+          invMap.set(`${branchId}::${p.id}`, { branch_id: branchId, product_id: p.id, qty_on_hand: 0, qty_reserved: 0 });
+        }
         const totals = new Map();
         for (const row of rows) {
           const prod = codeToProduct.get(row.itemCode.toUpperCase());
@@ -84,12 +125,15 @@ async function main() {
           invMap.set(`${branchId}::${pid}`, { branch_id: branchId, product_id: pid, qty_on_hand: qty, qty_reserved: 0 });
         }
       }
+      liveSynced = true;
+      liveSyncNote = 'Live stock synced from app.abgadgetz.com.ph';
       console.log('Live portal sync succeeded.');
     } catch (err) {
-      console.warn('Live portal sync skipped/failed, using snapshot:', err.message);
+      liveSyncNote = `Live sync FAILED, showing last published snapshot: ${err.message}`;
+      console.log(`::warning title=Live portal sync failed::${err.message}`);
     }
   } else {
-    console.log('No PORTAL_USERNAME/PORTAL_PASSWORD provided; building from snapshot.');
+    console.log('::warning title=No portal credentials::PORTAL_USERNAME / PORTAL_PASSWORD secrets are missing.');
   }
 
   fs.rmSync(distDir, { recursive: true, force: true });
@@ -132,6 +176,8 @@ async function main() {
       catalog,
       installmentRates: seedSnapshot.installment_settings,
       syncedAt: new Date().toISOString(),
+      liveSynced,
+      liveSyncNote,
     };
     fs.writeFileSync(path.join(distDir, 'data', `${b.slug}.json`), JSON.stringify(payload));
     const branchDir = path.join(distDir, b.slug);
