@@ -75,10 +75,12 @@ async function loginAndFetchPortal(username, password) {
       );
       if (tds.length < 7) continue;
       const lines = tds[1].split('\n').map((s) => s.trim()).filter(Boolean);
+      const itemName = (lines[0] || '').trim();
       const itemCode = (lines[1] || '').trim();
+      const category = (tds[2] || '').trim();
       const unitPrice = Number(tds[3].replace(/[^0-9.]/g, '')) || 0;
       const available = parseInt(tds[4].replace(/[^0-9-]/g, ''), 10) || 0;
-      if (itemCode) rows.push({ itemCode, unitPrice, available });
+      if (itemCode) rows.push({ itemName, itemCode, category, unitPrice, available });
     }
     if (rows.length === 0) {
       throw new Error(`Portal returned no inventory rows for ${b.name}; refusing to publish empty stock.`);
@@ -88,8 +90,40 @@ async function loginAndFetchPortal(username, password) {
   return result;
 }
 
+const PHONE_CATEGORIES = new Set(['CELLPHONES', 'REPO', 'KEYPAD CELLPHONES']);
+const KNOWN_BRANDS = [
+  ['infinix', 'Infinix'], ['tecno', 'Tecno'], ['realme', 'Realme'], ['itel', 'Itel'], ['redmi', 'Redmi'],
+  ['vivo', 'Vivo'], ['samsung', 'Samsung'], ['nubia', 'Nubia'], ['oppo', 'Oppo'], ['apple', 'Apple'],
+  ['iphone', 'Apple'], ['ipad', 'Apple'], ['poco', 'Poco'], ['honor', 'Honor'], ['zte', 'ZTE'], ['tcl', 'TCL'],
+];
+
+// Builds a catalog entry for an item that exists on the AB website but not in our product list.
+function makePortalProduct(row) {
+  const name = row.itemName.trim();
+  const firstWord = name.split(/\s+/)[0].toLowerCase();
+  const brand = (KNOWN_BRANDS.find(([k]) => firstWord.startsWith(k)) || [null, 'Other'])[1];
+  const isPhone = PHONE_CATEGORIES.has(row.category.toUpperCase()) && row.unitPrice >= 2500;
+  return {
+    id: `portal-${row.itemCode.toUpperCase().replace(/[^A-Z0-9]+/g, '-')}`,
+    sku: row.itemCode,
+    brand,
+    model: name,
+    name,
+    category: row.category,
+    website_codes: row.itemCode,
+    product_type: isPhone ? 'Cellphones' : 'Accessories',
+    unit: 'pc',
+    cost_price: 0,
+    base_price: row.unitPrice,
+    image_urls: '',
+    lifecycle_status: 'Active',
+  };
+}
+
 async function main() {
   const products = seedSnapshot.products.map((p) => ({ ...p }));
+  const branchPrice = new Map(); // `${branchId}::${productId}` -> price from the AB website
+  const newProducts = new Set(); // ids of items auto-added from the AB website
   const invMap = new Map(seedSnapshot.branch_inventory.map((r) => [`${r.branch_id}::${r.product_id}`, { ...r }]));
   const ruleMap = new Map(seedSnapshot.customer_catalog_rules.map((r) => [`${r.customer_id}::${r.product_id}`, Boolean(r.is_visible)]));
 
@@ -114,11 +148,22 @@ async function main() {
         }
         const totals = new Map();
         for (const row of rows) {
-          const prod = codeToProduct.get(row.itemCode.toUpperCase());
+          let prod = codeToProduct.get(row.itemCode.toUpperCase());
+
+          // Brand-new item on the AB website that is not in our product list yet:
+          // add it automatically (only when it is actually in stock).
+          if (!prod && row.available > 0 && row.itemName) {
+            prod = makePortalProduct(row);
+            products.push(prod);
+            codeToProduct.set(row.itemCode.toUpperCase(), prod);
+            newProducts.add(prod.id);
+          }
           if (!prod) continue;
+
           totals.set(prod.id, (totals.get(prod.id) || 0) + Math.max(0, row.available));
-          if (row.unitPrice > 0 && (!prod.base_price || prod.base_price <= 0)) {
-            prod.base_price = row.unitPrice;
+          // Price on the AB website is the source of truth (per branch).
+          if (row.unitPrice > 0 && row.available > 0) {
+            branchPrice.set(`${branchId}::${prod.id}`, row.unitPrice);
           }
         }
         for (const [pid, qty] of totals.entries()) {
@@ -126,7 +171,7 @@ async function main() {
         }
       }
       liveSynced = true;
-      liveSyncNote = 'Live stock synced from app.abgadgetz.com.ph';
+      liveSyncNote = `Live stock & prices synced from app.abgadgetz.com.ph (${newProducts.size} new item(s) auto-added)`;
       console.log('Live portal sync succeeded.');
     } catch (err) {
       liveSyncNote = `Live sync FAILED, showing last published snapshot: ${err.message}`;
@@ -157,14 +202,16 @@ async function main() {
       const branchAvailable = cell ? Math.max(0, (cell.qty_on_hand || 0) - (cell.qty_reserved || 0)) : 0;
       if (branchAvailable <= 0) continue;
       const imageUrls = String(p.image_urls || '').split(/[|\r\n]+/).map((u) => u.trim()).filter(Boolean);
+      const price = branchPrice.get(`${b.id}::${p.id}`) ?? p.base_price;
+      if (!price || price <= 0) continue; // never show a ₱0 price to customers
       catalog.push({
         productId: p.id,
         brand: p.brand,
         model: p.model || p.name,
         name: p.name,
         productType: p.product_type || 'Cellphones',
-        basePrice: p.base_price,
-        cashPrice: Math.round(p.base_price * (1 - discountRate)),
+        basePrice: price,
+        cashPrice: Math.round(price * (1 - discountRate)),
         imageUrl: imageUrls[0] || '',
         imageUrls,
         branchAvailable,
