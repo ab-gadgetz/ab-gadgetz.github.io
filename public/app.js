@@ -215,7 +215,7 @@ async function staticGhApi(url, opts = {}) {
   }
   if (pathname === '/api/sync/now') {
     await getGhBundle(true);
-    window.open('https://github.com/maynardrdelossantos/ab-gadgetz-catalog/actions/workflows/deploy-catalog.yml', '_blank');
+    window.open('https://github.com/ab-gadgetz/ab-gadgetz.github.io/actions/workflows/deploy-catalog.yml', '_blank');
     return { ok: true };
   }
   if (method !== 'GET') {
