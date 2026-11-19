@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#15191f" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="AB Gadgetz" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/ab-logo-square.png" type="image/png" />
+  <link rel="apple-touch-icon" href="/ab-logo-square.png" />
+  <title>Owner Admin Portal</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand-head">
+      <img src="/ab-logo-square.png" alt="Logo" class="portal-logo-img" />
+      <div>OWNER ADMIN PORTAL • REALTIME SYNC</div>
+    </div>
+
+    <!-- OWNER PIN LOGIN / SETUP GATE -->
+    <div id="authGate" class="card hidden" style="max-width:420px;margin:24px auto;">
+      <h3 id="authTitle" style="margin:0 0 6px;color:var(--gold-bright);">Owner Login</h3>
+      <p id="authSubtitle" class="muted small" style="margin:0 0 12px;">Enter your 6–12 digit Owner PIN to unlock the portal.</p>
+      <label for="ownerPinInput">OWNER PIN</label>
+      <input type="password" id="ownerPinInput" inputmode="numeric" maxlength="12" placeholder="Enter 6–12 digit PIN" />
+      <button type="button" id="authSubmitBtn" style="width:100%;margin-top:12px;">UNLOCK PORTAL</button>
+      <div id="authErrorMsg" class="error-msg"></div>
+    </div>
+
+    <div id="appShell" class="hidden">
+    <div class="card owner-bar">
+      <div class="owner-bar-main">
+        <strong>Welcome, Maynard</strong>
+        <div class="owner-branch">
+          <label for="globalBranch">BRANCH</label>
+          <select id="globalBranch">
+            <option value="">All Branches</option>
+          </select>
+        </div>
+      </div>
+      <div class="sync-controls">
+        <div class="sync-pill">
+          <span class="dot" id="syncDot"></span>
+          <span id="syncStatusText">Connecting...</span>
+        </div>
+        <button class="secondary" id="syncNowBtn">Sync Now</button>
+        <button class="secondary publish-github-btn" style="border-color:var(--gold);color:var(--gold-bright);">🚀 Publish Catalogs</button>
+        <button class="secondary" id="toggleSyncBtn">Pause</button>
+        <button class="secondary" id="logoutBtn">LOG OUT</button>
+      </div>
+    </div>
+
+    <div class="nav-drawer-wrap">
+      <div class="nav-toggle-bar">
+        <button type="button" id="menuToggleBtn" class="hamburger-btn" aria-expanded="false" aria-controls="mainTabsMenu">
+          <span aria-hidden="true">☰</span>
+          <span id="currentTabLabel">INVENTORY</span>
+        </button>
+        <div class="nav-type-checks" id="productTypeFilter">
+          <label class="stock-view-option selected" style="padding:7px 12px;">
+            <input type="radio" name="productType" value="Cellphones" checked />
+            Cellphones
+          </label>
+          <label class="stock-view-option" style="padding:7px 12px;">
+            <input type="radio" name="productType" value="Accessories" />
+            Accessories
+          </label>
+        </div>
+        <div class="nav-kpis" id="inventorySummaryGrid"></div>
+      </div>
+      <nav class="tabs hidden" id="mainTabsMenu" role="tablist">
+        <button type="button" class="tab active" data-tab="inventory">INVENTORY</button>
+        <button type="button" class="tab" data-tab="receivables">RECEIVABLES</button>
+        <button type="button" class="tab" data-tab="finance">FINANCE &amp; P&amp;L</button>
+        <button type="button" class="tab" data-tab="stockChanges">STOCK CHANGES</button>
+        <button type="button" class="tab" data-tab="websiteStock">WEBSITE STOCK</button>
+        <button type="button" class="tab" data-tab="catalogs">CUSTOMER CATALOGS</button>
+        <button type="button" class="tab" data-tab="activity">ACTIVITY LOG</button>
+      </nav>
+    </div>
+
+    <!-- TAB 1: INVENTORY -->
+    <section id="tab-inventory" class="tab-panel active card">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+        <div class="inv-tools-wrap" style="margin-bottom:0;">
+          <button type="button" id="invToolsMenuBtn" class="grid-menu-btn" aria-expanded="false" aria-controls="invToolsMenu">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true">
+              <rect x="1" y="2" width="4" height="4" rx="1"/>
+              <rect x="7" y="2" width="4" height="4" rx="1"/>
+              <rect x="13" y="2" width="4" height="4" rx="1"/>
+              <rect x="1" y="9" width="4" height="4" rx="1"/>
+              <rect x="7" y="9" width="4" height="4" rx="1"/>
+              <rect x="13" y="9" width="4" height="4" rx="1"/>
+            </svg>
+            <span id="invToolsLabel">INVENTORY TOOLS</span>
+          </button>
+          <div class="inventory-tool-tabs hidden" id="invToolsMenu">
+            <button type="button" class="inv-tool-btn" data-tool="filters" aria-expanded="false">FILTERS &amp; SEARCH</button>
+            <button type="button" class="inv-tool-btn" data-tool="restock" aria-expanded="false">RESTOCK</button>
+            <button type="button" class="inv-tool-btn" data-tool="health" aria-expanded="false">HEALTH</button>
+            <button type="button" class="inv-tool-btn" data-tool="lifecycle" aria-expanded="false">LIFECYCLE</button>
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:6px;">
+          <label for="cardGroupingMode" style="margin:0;color:var(--muted);font-size:11px;">GROUPING</label>
+          <select id="cardGroupingMode" style="width:auto;padding:7px 10px;font-size:12px;">
+            <option value="brand">Group by Brand</option>
+            <option value="flat">Flat List (No Grouping)</option>
+          </select>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:6px;">
+          <label for="stockViewSelect" style="margin:0;color:var(--muted);font-size:11px;">STOCK VIEW</label>
+          <select id="stockViewSelect" style="width:auto;padding:7px 10px;font-size:12px;">
+            <option value="available">Available phones</option>
+            <option value="phaseout">Phaseout products (include 0)</option>
+            <option value="all">All products, incl. unavailable</option>
+            <option value="unavailable">Unavailable</option>
+            <option value="reorder">Reorder suggestions</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Tool Panel: Filters & Search -->
+      <div id="tool-filters" class="sub-panel hidden">
+        <h3>Filters &amp; Search</h3>
+        <div class="grid-2">
+          <div>
+            <label for="invSearch">Search Model / Website Code</label>
+            <input type="text" id="invSearch" placeholder="e.g. Infinix, Hot 70, INFINIX-018..." />
+          </div>
+          <div>
+            <label for="invCategory">Brand / Category</label>
+            <select id="invCategory"><option value="">All Brands / Categories</option></select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tool Panel: Restock / Planning -->
+      <div id="tool-restock" class="sub-panel hidden">
+        <h3>Order Budget &amp; Cash-on-Hand (Finance Export)</h3>
+        <div class="summary-grid" id="budgetSummaryGrid" style="margin-bottom:12px;"></div>
+        <h3>Restock &amp; Inter-Branch Transfers</h3>
+        <p class="muted small">Active models at or below reorder point, plus inter-branch transfer opportunities.</p>
+        <div class="table-wrap" style="margin-top:8px;">
+          <table class="data-table" id="reorderTable">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Branch</th>
+                <th>Avail / Reorder</th>
+                <th>Suggested Order</th>
+                <th>Est. Cost (DP)</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <h3 style="margin-top:14px;">Inter-Branch Transfer Opportunities</h3>
+        <div class="table-wrap">
+          <table class="data-table" id="transferTable">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>From Branch</th>
+                <th>To Branch</th>
+                <th>Suggested Transfer</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Tool Panel: Health -->
+      <div id="tool-health" class="sub-panel hidden">
+        <h3>Inventory Health (code.gs Tier Rules)</h3>
+        <p class="muted small">Low stock: &lt;₱10k (≤2 Molave / ≤1 others), ₱10k–₱20k (≤2), or Out of Stock.</p>
+        <div id="healthList" class="table-wrap" style="margin-top:8px;"></div>
+      </div>
+
+      <!-- Tool Panel: Lifecycle -->
+      <div id="tool-lifecycle" class="sub-panel hidden">
+        <h3>Product Lifecycle Manager</h3>
+        <div class="grid-2">
+          <div>
+            <label for="lifecycleProduct">Select Product</label>
+            <select id="lifecycleProduct"></select>
+          </div>
+          <div>
+            <label for="lifecycleStatus">Lifecycle Status</label>
+            <select id="lifecycleStatus">
+              <option value="Active">Active</option>
+              <option value="Clearance">Clearance</option>
+              <option value="Phaseout / Do Not Reorder">Phaseout / Do Not Reorder</option>
+            </select>
+          </div>
+        </div>
+        <button type="button" id="saveLifecycleBtn" style="margin-top:10px;">SAVE LIFECYCLE</button>
+        <div id="lifecycleMsg" class="status-msg"></div>
+      </div>
+
+      <!-- BULK SELECTION / GROUPING BAR -->
+      <div id="bulkActionBar" class="sub-panel hidden" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;border-color:var(--gold);">
+        <strong id="bulkSelectedCount" style="color:var(--gold-bright);font-size:12.5px;">0 selected</strong>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          <button type="button" class="secondary" id="bulkToCellphonesBtn">Move to Cellphones</button>
+          <button type="button" class="secondary" id="bulkToAccessoriesBtn">Move to Accessories</button>
+          <input type="text" id="bulkBrandInput" placeholder="New Brand name..." style="width:140px;padding:6px 8px;font-size:12px;" />
+          <button type="button" id="bulkSetBrandBtn">Set Brand</button>
+          <button type="button" class="secondary" id="bulkClearBtn">Clear</button>
+        </div>
+      </div>
+
+      <div id="brandGrid" class="brand-grid"></div>
+    </section>
+
+    <!-- TAB: RECEIVABLES & PAST DUES -->
+    <section id="tab-receivables" class="tab-panel card">
+      <div class="sub-panel">
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+          <div>
+            <h3 style="margin:0;">Receivables, Installment Portfolio &amp; Past Dues</h3>
+            <p class="muted small" style="margin:3px 0 0;">Synced live from <code>app.abgadgetz.com.ph</code> Installments &amp; Past Dues across Molave, Tambulig, and Bonifacio.</p>
+          </div>
+          <input type="text" id="recSearchInput" placeholder="Search customer, account #, barangay, unit..." style="width:280px;" />
+        </div>
+        <div class="summary-grid" id="receivablesKpiGrid" style="grid-template-columns:repeat(4,minmax(0,1fr));"></div>
+      </div>
+
+      <div class="sub-panel">
+        <h3>Branch Receivables Breakdown</h3>
+        <div class="table-wrap">
+          <table class="data-table" id="receivablesBranchTable">
+            <thead>
+              <tr>
+                <th>Branch</th>
+                <th>Installment Contracts</th>
+                <th>Total Contract Portfolio</th>
+                <th>Principal Financed</th>
+                <th>Overall Past-Due Accounts</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="sub-panel">
+          <h3>Overall Past-Due / Follow-Up Accounts</h3>
+          <div class="table-wrap">
+            <table class="data-table" id="pastDuesTable">
+              <thead>
+                <tr>
+                  <th>Release Date</th>
+                  <th>Branch</th>
+                  <th>Account # / Customer</th>
+                  <th>Contact / Barangay</th>
+                  <th>Unit</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="sub-panel">
+          <h3>Installment Sales Contracts</h3>
+          <div class="table-wrap">
+            <table class="data-table" id="installmentsTable">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Branch</th>
+                  <th>Unit</th>
+                  <th>Term</th>
+                  <th>Monthly</th>
+                  <th>Contract Amt</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: FINANCE & P&L (SALES, INCOME & EXPENSES) -->
+    <section id="tab-finance" class="tab-panel card">
+      <div class="sub-panel">
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+          <div>
+            <h3 style="margin:0;">Sales, Financing Income &amp; Expenses Analysis</h3>
+            <p class="muted small" style="margin:3px 0 0;">Synced live from <code>app.abgadgetz.com.ph</code> Payments &amp; Expenses across Molave, Tambulig, and Bonifacio.</p>
+          </div>
+          <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+            <div>
+              <label for="finStart">FROM</label>
+              <input type="date" id="finStart" style="width:auto;" />
+            </div>
+            <div>
+              <label for="finEnd">TO</label>
+              <input type="date" id="finEnd" style="width:auto;" />
+            </div>
+            <button type="button" id="refreshFinanceBtn">APPLY DATES</button>
+          </div>
+        </div>
+
+        <div class="summary-grid" id="financeKpiGrid" style="grid-template-columns:repeat(4,minmax(0,1fr));"></div>
+      </div>
+
+      <div class="grid-2">
+        <div class="sub-panel">
+          <h3>Branch Financial Comparison</h3>
+          <div class="table-wrap">
+            <table class="data-table" id="financeBranchTable">
+              <thead>
+                <tr>
+                  <th>Branch</th>
+                  <th>Collections</th>
+                  <th>Financing Income</th>
+                  <th>Expenses</th>
+                  <th>Net Cash Flow</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="sub-panel">
+          <h3>Expenses by Category</h3>
+          <div class="table-wrap">
+            <table class="data-table" id="financeExpenseTypeTable">
+              <thead>
+                <tr>
+                  <th>Expense Type</th>
+                  <th>Total Amount</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="sub-panel">
+          <h3>Recent Payments (Collections)</h3>
+          <div class="table-wrap">
+            <table class="data-table" id="financePaymentsTable">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Branch</th>
+                  <th>Customer / Acct</th>
+                  <th>Amount</th>
+                  <th>Principal</th>
+                  <th>Interest</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="sub-panel">
+          <h3>Recent Branch Expenses</h3>
+          <div class="table-wrap">
+            <table class="data-table" id="financeExpensesTable">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Branch</th>
+                  <th>Type</th>
+                  <th>Particular</th>
+                  <th>Amount</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: STOCK CHANGES -->
+    <section id="tab-stockChanges" class="tab-panel card">
+      <div class="stock-change-tabs">
+        <button type="button" class="sc-tab active" data-sc="record">RECORD</button>
+        <button type="button" class="sc-tab" data-sc="price">PRICE</button>
+        <button type="button" class="sc-tab" data-sc="add">ADD</button>
+        <button type="button" class="sc-tab" data-sc="cost">COST</button>
+        <button type="button" class="sc-tab" data-sc="photos">PHOTOS</button>
+      </div>
+
+      <!-- RECORD -->
+      <div id="sc-record" class="sc-panel">
+        <div class="sub-panel">
+          <h3>Record Stock Change</h3>
+          <div class="grid-2">
+            <div>
+              <label for="recBranch">Branch</label>
+              <select id="recBranch"></select>
+            </div>
+            <div>
+              <label for="recProduct">Product</label>
+              <select id="recProduct"></select>
+            </div>
+            <div>
+              <label for="recAction">Action</label>
+              <select id="recAction">
+                <option value="Sold">Sold</option>
+                <option value="Received">Received</option>
+                <option value="Stock swap">Stock swap</option>
+                <option value="Stock correction">Stock correction (Admin only)</option>
+              </select>
+            </div>
+            <div>
+              <label for="recQty">Number of Phones / Physical Count</label>
+              <input type="number" id="recQty" min="0" step="1" placeholder="Enter quantity" />
+            </div>
+            <div id="recDestWrap" class="hidden">
+              <label for="recDestBranch">Receiving Branch (For Stock Swap)</label>
+              <select id="recDestBranch"></select>
+            </div>
+          </div>
+          <button type="button" id="saveMovementBtn" style="margin-top:12px;">SAVE STOCK CHANGE</button>
+          <div id="recMsg" class="status-msg"></div>
+        </div>
+      </div>
+
+      <!-- PRICE -->
+      <div id="sc-price" class="sc-panel hidden">
+        <div class="sub-panel">
+          <h3>Price Change</h3>
+          <div class="grid-2">
+            <div>
+              <label for="priceProduct">Product</label>
+              <select id="priceProduct"></select>
+            </div>
+            <div>
+              <label for="priceNewVal">New Selling Price (₱)</label>
+              <input type="number" id="priceNewVal" min="1" step="0.01" placeholder="Enter new price" />
+            </div>
+          </div>
+          <button type="button" id="savePriceBtn" style="margin-top:12px;">SAVE PRICE</button>
+          <div id="priceMsg" class="status-msg"></div>
+        </div>
+      </div>
+
+      <!-- ADD -->
+      <div id="sc-add" class="sc-panel hidden">
+        <div class="sub-panel">
+          <h3>Add New Product</h3>
+          <div class="grid-2">
+            <div>
+              <label for="addBranch">Initial Branch</label>
+              <select id="addBranch"></select>
+            </div>
+            <div>
+              <label for="addBrand">Brand</label>
+              <input type="text" id="addBrand" placeholder="e.g. Infinix" />
+            </div>
+            <div>
+              <label for="addModel">Model</label>
+              <input type="text" id="addModel" placeholder="e.g. Hot 70 4/128gb" />
+            </div>
+            <div>
+              <label for="addCode">Website Code (Optional)</label>
+              <input type="text" id="addCode" placeholder="e.g. INFINIX-018" />
+            </div>
+            <div>
+              <label for="addPrice">Selling Price (₱)</label>
+              <input type="number" id="addPrice" min="1" step="0.01" />
+            </div>
+            <div>
+              <label for="addQty">Opening Quantity</label>
+              <input type="number" id="addQty" min="0" step="1" value="0" />
+            </div>
+          </div>
+          <button type="button" id="saveAddProductBtn" style="margin-top:12px;">SAVE PRODUCT</button>
+          <div id="addMsg" class="status-msg"></div>
+        </div>
+      </div>
+
+      <!-- COST (3 Suppliers) -->
+      <div id="sc-cost" class="sc-panel hidden">
+        <div class="sub-panel">
+          <h3>Supplier Cost (DP) Manager</h3>
+          <p class="muted small">Update costs from your 3 suppliers. The lowest cost automatically powers your Inventory Cost Valuation.</p>
+          <div style="margin-bottom:8px;">
+            <label for="costProduct">Product</label>
+            <select id="costProduct"></select>
+          </div>
+          <div class="grid-3">
+            <div>
+              <label for="costAb">AB Main Supplier DP (₱)</label>
+              <input type="number" id="costAb" min="0" step="0.01" placeholder="Optional" />
+            </div>
+            <div>
+              <label for="costAk">A&amp;K DP (₱)</label>
+              <input type="number" id="costAk" min="0" step="0.01" placeholder="Optional" />
+            </div>
+            <div>
+              <label for="costOnline">Online Purchase DP (₱)</label>
+              <input type="number" id="costOnline" min="0" step="0.01" placeholder="Optional" />
+            </div>
+          </div>
+          <button type="button" id="saveCostBtn" style="margin-top:12px;">SAVE COST CHANGES</button>
+          <div id="costMsg" class="status-msg"></div>
+        </div>
+      </div>
+
+      <!-- PHOTOS -->
+      <div id="sc-photos" class="sc-panel hidden">
+        <div class="sub-panel">
+          <h3>Product Photos Manager</h3>
+          <p class="muted small">Right-click any product photo online → <strong>Copy image address</strong>, then paste the URL below to add it to your Inventory &amp; Customer Catalog.</p>
+          <div style="margin-bottom:10px;">
+            <label for="photoProduct">Select Product</label>
+            <select id="photoProduct"></select>
+          </div>
+          <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">
+            <div style="flex:1;min-width:240px;">
+              <label for="photoUrlInput">Paste Image Address (URL)</label>
+              <input type="url" id="photoUrlInput" placeholder="https://..." />
+            </div>
+            <button type="button" id="addPhotoBtn">ADD PHOTO</button>
+            <button type="button" class="publish-github-btn secondary" style="border-color:var(--gold);color:var(--gold-bright);">🚀 PUBLISH TO LIVE CATALOGS</button>
+          </div>
+          <div id="photoPreviewGrid" style="display:flex;gap:10px;flex-wrap:wrap;"></div>
+          <div id="photoMsg" class="status-msg"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: WEBSITE STOCK (LIVE PORTAL SYNC) -->
+    <section id="tab-websiteStock" class="tab-panel card">
+      <div class="grid-2">
+        <div class="sub-panel">
+          <h3>Realtime Portal Sync (<span id="adapterModeBadge">ABGADGETZ_LIVE</span>)</h3>
+          <p class="muted small">Automatically pulls live stock from <code>app.abgadgetz.com.ph</code> for Molave (23), Tambulig (32), and Bonifacio (44) every 15s.</p>
+          <div class="table-wrap" style="margin-top:8px;">
+            <table class="data-table" id="syncLogsTable">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Status</th>
+                  <th>Updates</th>
+                  <th>Session</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="sub-panel">
+          <h3>Connect Live Portal (No Re-Login Needed)</h3>
+          <p class="muted small">Your credentials stay saved locally on this PC and auto-refresh whenever the session expires.</p>
+          <label for="portalUsername">Username</label>
+          <input type="text" id="portalUsername" placeholder="admin.maynard" />
+          <label for="portalPassword">Password</label>
+          <input type="password" id="portalPassword" placeholder="Password" />
+          <button type="button" id="connectPortalBtn" style="margin-top:12px;width:100%;">Connect &amp; Sync Now</button>
+          <div id="connectPortalMsg" class="status-msg"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: CUSTOMER CATALOGS (ALL BRANCHES, MOLAVE, TAMBULIG, BONIFACIO) -->
+    <section id="tab-catalogs" class="tab-panel card">
+      <div class="sub-panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;" id="catalogBranchTabs">
+            <button type="button" class="secondary cat-branch-btn active" data-branch="ALL">All Branches</button>
+            <button type="button" class="secondary cat-branch-btn" data-branch="br-molave">Molave</button>
+            <button type="button" class="secondary cat-branch-btn" data-branch="br-tambulig">Tambulig</button>
+            <button type="button" class="secondary cat-branch-btn" data-branch="br-bonifacio">Bonifacio</button>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <select id="catProductType" style="width:auto;padding:6px 10px;font-size:12px;">
+              <option value="Cellphones">Cellphones</option>
+              <option value="Accessories">Accessories</option>
+              <option value="ALL">All Products</option>
+            </select>
+            <select id="catPriceRange" style="width:auto;padding:6px 10px;font-size:12px;">
+              <option value="ALL">All Prices</option>
+              <option value="0-5000">Under ₱5,000</option>
+              <option value="5000-8000">₱5,000 – ₱8,000</option>
+              <option value="8000-12000">₱8,000 – ₱12,000</option>
+              <option value="12000-18000">₱12,000 – ₱18,000</option>
+              <option value="18000-9999999">₱18,000+</option>
+            </select>
+            <select id="catRamRom" style="width:auto;padding:6px 10px;font-size:12px;">
+              <option value="ALL">All RAM/ROM</option>
+            </select>
+            <button type="button" id="catPriceSortBtn" class="secondary" style="padding:6px 10px;font-size:12px;">Price ↑</button>
+            <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--gold-bright);cursor:pointer;font-size:12px;font-weight:700;">
+              <input type="checkbox" id="catEditMode" style="width:16px;height:16px;margin:0;accent-color:var(--gold);" />
+              Edit Catalog
+            </label>
+            <span id="catEditControls" class="hidden" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+              <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--gold-bright);cursor:pointer;font-size:12px;font-weight:700;">
+                <input type="checkbox" id="catSelectAllVisible" style="width:16px;height:16px;margin:0;accent-color:var(--gold);" />
+                Select All Visible
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--text);cursor:pointer;font-size:12px;">
+                <input type="checkbox" id="catIncludeUnavailable" style="width:16px;height:16px;margin:0;accent-color:var(--gold);" />
+                Include unavailable
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--muted);cursor:pointer;font-size:12px;">
+                <input type="checkbox" id="showHiddenToggle" checked style="width:16px;height:16px;margin:0;accent-color:var(--gold);" />
+                Show hidden
+              </label>
+            </span>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+          <p class="muted small" id="catalogBranchMeta" style="margin:0;"></p>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+            <button type="button" class="publish-github-btn" style="padding:5px 10px;border-radius:7px;font-size:11px;">🚀 Publish to Live Catalogs</button>
+            <a href="https://maynardrdelossantos.github.io/ab-gadgetz-catalog/molave/" target="_blank" class="secondary" style="padding:4px 9px;border-radius:7px;font-size:11px;text-decoration:none;border:1px solid var(--border-soft);color:var(--gold-bright);">Molave Live ↗</a>
+            <a href="https://maynardrdelossantos.github.io/ab-gadgetz-catalog/tambulig/" target="_blank" class="secondary" style="padding:4px 9px;border-radius:7px;font-size:11px;text-decoration:none;border:1px solid var(--border-soft);color:var(--gold-bright);">Tambulig Live ↗</a>
+            <a href="https://maynardrdelossantos.github.io/ab-gadgetz-catalog/bonifacio/" target="_blank" class="secondary" style="padding:4px 9px;border-radius:7px;font-size:11px;text-decoration:none;border:1px solid var(--border-soft);color:var(--gold-bright);">Bonifacio Live ↗</a>
+          </div>
+        </div>
+        <div id="publishCatalogMsg" class="status-msg"></div>
+      </div>
+      <div id="catBrandStrip" class="shopee-brand-strip hidden"></div>
+      <div id="catalogBrandGrid" class="brand-grid"></div>
+    </section>
+
+    <!-- TAB 5: ACTIVITY LOG -->
+    <section id="tab-activity" class="tab-panel card">
+      <div class="sub-panel">
+        <h3>Sales Summary &amp; Activity Log</h3>
+        <div class="grid-3" style="margin-bottom:10px;">
+          <div>
+            <label for="actStart">FROM</label>
+            <input type="date" id="actStart" />
+          </div>
+          <div>
+            <label for="actEnd">TO</label>
+            <input type="date" id="actEnd" />
+          </div>
+          <div style="display:flex;align-items:flex-end;">
+            <button type="button" id="refreshActivityBtn" style="width:100%;">APPLY DATES</button>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;" id="actProductTypeFilter">
+            <button type="button" class="secondary act-type-btn active" data-type="ALL">All Products</button>
+            <button type="button" class="secondary act-type-btn" data-type="Cellphones">Cellphones</button>
+            <button type="button" class="secondary act-type-btn" data-type="Accessories">Accessories</button>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;" id="actSaleModeFilter">
+            <button type="button" class="secondary act-mode-btn active" data-mode="ALL">All Activity</button>
+            <button type="button" class="secondary act-mode-btn" data-mode="CASH">Cash Sales</button>
+            <button type="button" class="secondary act-mode-btn" data-mode="INSTALLMENT">Installment Sales</button>
+          </div>
+        </div>
+
+        <div class="summary-grid" id="activityViewsGrid" style="grid-template-columns:repeat(4,1fr);margin-bottom:10px;"></div>
+        <div class="summary-grid" id="activitySalesGrid" style="grid-template-columns:repeat(4,1fr);"></div>
+        <div id="installmentDpSummary" class="sub-panel hidden" style="margin-bottom:10px;border-color:var(--gold);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <div>
+            <strong style="color:var(--gold-bright);">INSTALLMENT DOWNPAYMENTS</strong>
+            <span class="muted small" id="installmentCountNote" style="margin-left:8px;">0 sales</span>
+          </div>
+          <div style="font-size:18px;font-weight:800;color:var(--green);" id="totalDownpaymentVal">₱0.00</div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="data-table" id="activityTable">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    </div>
+  </div>
+
+  <!-- MOBILE NATIVE BOTTOM NAVIGATION BAR (shown on <= 768px) -->
+  <nav class="mobile-bottom-nav hidden" id="mobileBottomNav" aria-label="Mobile navigation">
+    <button type="button" class="mnav-btn active" data-tab="inventory">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+      <span>Inventory</span>
+    </button>
+    <button type="button" class="mnav-btn" data-tab="catalogs">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      <span>Catalogs</span>
+    </button>
+    <button type="button" class="mnav-btn" data-tab="receivables">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      <span>Receivables</span>
+    </button>
+    <button type="button" class="mnav-btn" data-tab="finance">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+      <span>Finance</span>
+    </button>
+    <button type="button" class="mnav-btn" id="mobileMoreBtn">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      <span>More</span>
+    </button>
+  </nav>
+
+  <!-- CUSTOMER PRODUCT INSTALLMENT & CASH MODAL -->
+  <div id="customerCalcModal" class="calc-modal hidden" role="dialog" aria-modal="true">
+    <div class="calc-modal-sheet">
+      <div class="calc-modal-head">
+        <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+          <img src="/ab-logo-square.png" alt="Logo" class="modal-logo-img" />
+          <div style="min-width:0;">
+            <h3 id="calcModalTitle" style="margin:0;color:var(--gold-bright);">Product</h3>
+            <div id="calcModalSub" class="small muted"></div>
+          </div>
+        </div>
+        <button type="button" id="closeCalcModalBtn" class="secondary" style="padding:6px 12px;">✕</button>
+      </div>
+
+      <div class="calc-product-hero">
+        <div class="calc-photo-box">
+          <img id="calcModalImg" alt="Product photo" class="hidden" style="cursor:zoom-in;" title="Tap to zoom" />
+          <div id="calcModalNoImg" style="font-size:32px;">📱</div>
+          <button type="button" id="calcZoomBtn" class="secondary hidden" style="padding:3px 8px;font-size:11px;margin-top:4px;">🔍 View / Zoom</button>
+          <div id="calcPhotoNav" class="hidden" style="display:flex;align-items:center;gap:6px;margin-top:4px;">
+            <button type="button" id="calcPrevPhoto" class="secondary" style="padding:2px 8px;font-size:12px;">‹</button>
+            <span id="calcPhotoCount" class="small muted">1/1</span>
+            <button type="button" id="calcNextPhoto" class="secondary" style="padding:2px 8px;font-size:12px;">›</button>
+          </div>
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:16px;font-weight:800;color:var(--gold-bright);" id="calcSrpText"></div>
+          <div style="font-size:14px;font-weight:700;color:var(--green);margin-top:4px;" id="calcCashText"></div>
+          <div class="small muted" style="margin-top:4px;" id="calcMinDpText"></div>
+          <div style="margin-top:8px;">
+            <label for="calcDpInput" style="margin:0 0 3px;">DOWN PAYMENT (₱)</label>
+            <input type="text" id="calcDpInput" inputmode="numeric" style="padding:7px 10px;font-size:16px;" />
+            <div id="calcDpError" class="error-msg" style="margin-top:4px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;font-size:11px;font-weight:800;color:var(--gold);letter-spacing:.4px;">CHOOSE YOUR INSTALLMENT TERM (TAP FOR DETAILS)</div>
+      <div id="calcTermsGrid" class="calc-terms-grid"></div>
+      <div id="calcBreakdownBox" class="sub-panel hidden" style="margin-top:12px;border-color:var(--gold);"></div>
+    </div>
+  </div>
+
+  <!-- FULLSCREEN PHOTO ZOOM LIGHTBOX -->
+  <div id="photoLightboxModal" class="lightbox-modal hidden" role="dialog" aria-modal="true">
+    <div class="lightbox-bar">
+      <div style="min-width:0;">
+        <div id="lightboxTitle" style="font-weight:700;color:var(--gold-bright);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Photo</div>
+        <div id="lightboxCount" class="small muted"></div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
+        <button type="button" id="lightboxZoomOut" class="secondary" style="padding:5px 10px;font-size:14px;" title="Zoom out">−</button>
+        <span id="lightboxZoomPct" class="small" style="min-width:44px;text-align:center;font-weight:700;">100%</span>
+        <button type="button" id="lightboxZoomIn" class="secondary" style="padding:5px 10px;font-size:14px;" title="Zoom in">+</button>
+        <button type="button" id="lightboxZoomReset" class="secondary" style="padding:5px 9px;font-size:11px;">Reset</button>
+        <button type="button" id="closeLightboxBtn" class="secondary" style="padding:5px 11px;">✕</button>
+      </div>
+    </div>
+    <div id="lightboxStage" class="lightbox-stage">
+      <button type="button" id="lightboxPrev" class="lightbox-nav lightbox-prev hidden" aria-label="Previous photo">‹</button>
+      <div id="lightboxMediaWrap" class="lightbox-media-wrap">
+        <img id="lightboxImg" alt="Zoomed product photo" draggable="false" />
+        <img src="/ab-logo-square.png" alt="Logo" class="lightbox-watermark-logo" />
+      </div>
+      <button type="button" id="lightboxNext" class="lightbox-nav lightbox-next hidden" aria-label="Next photo">›</button>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
