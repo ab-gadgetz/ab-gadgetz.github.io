@@ -1,0 +1,9 @@
+{
+  "name": "ab-gadgetz-catalog",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build-catalog.mjs"
+  }
+}
