@@ -1757,21 +1757,172 @@ function resolveSupplierForProduct(item, mode = 'LOWEST') {
   return { supplier: 'AB Main Supplier', unitCost: 0 };
 }
 
+function buildMovementStatsMap() {
+  const stats = new Map();
+  const addStat = (key, field) => {
+    if (!key) return;
+    const k = String(key).trim().toLowerCase();
+    if (!stats.has(k)) stats.set(k, { sold: 0, restocked: 0, totalMovements: 0 });
+    const s = stats.get(k);
+    s[field]++;
+    s.totalMovements++;
+  };
+  const act = state.planningActivity || state.activityData;
+  if (act) {
+    for (const s of act.sales || []) {
+      addStat(s.product_id, 'sold');
+      addStat(s.sku, 'sold');
+      addStat(s.product_name, 'sold');
+    }
+    for (const m of act.movements || []) {
+      const actType = String(m.action || m.type || '').toUpperCase();
+      const field = actType.includes('SOLD') || actType.includes('OUT') ? 'sold' : 'restocked';
+      addStat(m.product_id, field);
+      addStat(m.sku, field);
+      addStat(m.product_name, field);
+    }
+  }
+  return stats;
+}
+
+function getProductMovementSummary(item, statsMap) {
+  const keys = [item.id, item.sku, item.website_codes, item.name, item.model]
+    .filter(Boolean)
+    .map((k) => String(k).trim().toLowerCase());
+  let sold = 0;
+  let restocked = 0;
+  let totalMovements = 0;
+  for (const k of keys) {
+    const s = statsMap.get(k);
+    if (s) {
+      sold = Math.max(sold, s.sold);
+      restocked = Math.max(restocked, s.restocked);
+      totalMovements = Math.max(totalMovements, s.totalMovements);
+    }
+  }
+  return { sold, restocked, totalMovements };
+}
+
+function isObsoleteOrNonMoving(item, branches, statsMap) {
+  let totalAvail = 0;
+  for (const b of branches) totalAvail += Number(item.byBranch[b.id]?.qtyAvailable) || 0;
+  const hasSupplierCost = Number(item.cost_ab) > 0 || Number(item.cost_ak) > 0 || Number(item.cost_online) > 0;
+  const mv = getProductMovementSummary(item, statsMap);
+
+  if (totalAvail === 0 && mv.sold === 0 && mv.restocked === 0 && !hasSupplierCost) {
+    return { status: 'DEAD_OBSOLETE', label: 'Obsolete / Dead (0 stock, 0 sales, 0 reorders)', totalAvail, mv };
+  }
+  if (totalAvail > 0 && mv.sold === 0 && mv.restocked === 0 && !hasSupplierCost) {
+    return { status: 'NON_MOVING', label: `Non-Moving (${totalAvail} unsold on hand, 0 sales/reorders)`, totalAvail, mv };
+  }
+  return { status: 'ACTIVE_MOVING', label: 'Active / Moving', totalAvail, mv };
+}
+
+async function markProductsPhaseout(productIds) {
+  if (!productIds || !productIds.length) return;
+  for (const id of productIds) {
+    const prod = state.inventory?.items?.find((i) => i.id === id);
+    if (prod) prod.lifecycle_status = 'Phaseout / Do Not Reorder';
+  }
+  if (!IS_STATIC_GH) {
+    try {
+      await api('/api/products/lifecycle', {
+        method: 'PATCH',
+        body: JSON.stringify({ productIds, lifecycleStatus: 'Phaseout / Do Not Reorder' }),
+      });
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+  buildRestockDraftPlan();
+  renderRestockCards();
+  renderInventory();
+}
+
+function renderObsoleteAuditUI(obsoleteList) {
+  const bannerEl = document.getElementById('restockObsoleteBanner');
+  const panelEl = document.getElementById('restockObsoletePanel');
+  const tbody = document.querySelector('#restockObsoleteTable tbody');
+  const excludeChk = document.getElementById('restockExcludeObsoleteChk')?.checked;
+  if (!bannerEl) return;
+
+  const deadCount = obsoleteList.filter((x) => x.status === 'DEAD_OBSOLETE').length;
+  const nonMovingCount = obsoleteList.filter((x) => x.status === 'NON_MOVING').length;
+  state.lastObsoleteList = obsoleteList;
+
+  if (!obsoleteList.length) {
+    bannerEl.classList.add('hidden');
+    if (panelEl) panelEl.classList.add('hidden');
+    return;
+  }
+
+  bannerEl.classList.remove('hidden');
+  bannerEl.innerHTML = `
+    <div>
+      <strong>Web-Sync Cleanup:</strong> ${excludeChk ? 'Auto-hiding' : 'Found'}
+      <strong>${fmtNum(deadCount)}</strong> obsolete dead model(s) (0 stock, 0 sales, 0 reorders) &amp;
+      <strong>${fmtNum(nonMovingCount)}</strong> non-moving model(s) (unsold stock, 0 sales).
+    </div>
+    <button type="button" id="toggleObsoleteAuditBtn" class="secondary" style="padding:4px 10px;font-size:11px;min-height:0;">
+      ${panelEl && !panelEl.classList.contains('hidden') ? 'HIDE ANALYSIS' : 'ANALYZE / MARK PHASEOUT'}
+    </button>
+  `;
+
+  document.getElementById('toggleObsoleteAuditBtn')?.addEventListener('click', () => {
+    panelEl?.classList.toggle('hidden');
+    renderObsoleteAuditUI(state.lastObsoleteList || []);
+  });
+
+  if (tbody) {
+    tbody.innerHTML = obsoleteList
+      .slice(0, 200)
+      .map(
+        (x) => `
+        <tr>
+          <td><strong>${x.displayModel}</strong><div class="small muted">${x.sku}</div></td>
+          <td>${fmtNum(x.totalAvail)} pcs</td>
+          <td class="small muted">${x.mv.sold} sold • ${x.mv.restocked} restocked</td>
+          <td><span class="badge ${x.status === 'DEAD_OBSOLETE' ? 'badge-danger' : 'badge-warn'}">${x.status === 'DEAD_OBSOLETE' ? 'Obsolete / Dead' : 'Non-Moving'}</span></td>
+          <td><button type="button" class="secondary single-phaseout-btn" data-pid="${x.id}" style="padding:3px 8px;font-size:11px;min-height:0;">Phaseout</button></td>
+        </tr>`
+      )
+      .join('');
+
+    tbody.querySelectorAll('.single-phaseout-btn').forEach((btn) => {
+      btn.addEventListener('click', () => markProductsPhaseout([btn.dataset.pid]));
+    });
+  }
+}
+
 function buildRestockDraftPlan() {
   if (!state.inventory) return [];
   const mode = document.querySelector('input[name="restockSupplierMode"]:checked')?.value || 'LOWEST';
   const typeFilter = document.getElementById('restockTypeFilter')?.value || 'Cellphones';
   const budgetVal = Number(document.getElementById('restockBudgetInput')?.value) || 0;
   const globalBranchId = document.getElementById('globalBranch')?.value || '';
+  const excludeObsolete = document.getElementById('restockExcludeObsoleteChk')?.checked !== false;
 
   const { branches, items } = state.inventory;
   const targetBranches = globalBranchId ? branches.filter((b) => b.id === globalBranchId) : branches;
+  const statsMap = buildMovementStatsMap();
 
   const candidates = [];
+  const obsoleteList = [];
   for (const item of items) {
     if ((item.lifecycle_status || 'Active') !== 'Active') continue;
     const pType = item.product_type || 'Cellphones';
     if (typeFilter !== 'ALL' && pType !== typeFilter) continue;
+
+    const health = isObsoleteOrNonMoving(item, branches, statsMap);
+    if (health.status !== 'ACTIVE_MOVING') {
+      obsoleteList.push({
+        id: item.id,
+        displayModel: formatSwapModelName({ brand: item.brand || '', model: item.model || item.name }),
+        sku: item.website_codes || item.sku,
+        ...health,
+      });
+      if (excludeObsolete) continue;
+    }
 
     const sup = resolveSupplierForProduct(item, mode);
     if (!sup) continue;
@@ -1843,6 +1994,7 @@ function buildRestockDraftPlan() {
   }
 
   state.restockPlan = candidates;
+  renderObsoleteAuditUI(obsoleteList);
   return candidates;
 }
 
@@ -2376,9 +2528,14 @@ async function downloadReorderPlanExcel() {
 
 async function loadPlanning() {
   try {
-    const [planning, budget] = await Promise.all([api('/api/planning'), api('/api/budget')]);
+    const [planning, budget, act] = await Promise.all([
+      api('/api/planning'),
+      api('/api/budget'),
+      state.planningActivity ? Promise.resolve(state.planningActivity) : api('/api/activity?start=2024-01-01&end=2099-12-31').catch(() => null),
+    ]);
     state.planning = planning;
     state.budget = budget;
+    if (act) state.planningActivity = act;
   } catch {
     // static GitHub Pages bundle fallback
   }
@@ -2692,6 +2849,15 @@ document.querySelectorAll('input[name="restockSupplierMode"]').forEach((r) => {
 document.getElementById('restockSearchInput')?.addEventListener('input', renderRestockCards);
 document.getElementById('restockBrandFilter')?.addEventListener('change', renderRestockCards);
 document.getElementById('restockShowFilter')?.addEventListener('change', renderRestockCards);
+document.getElementById('restockExcludeObsoleteChk')?.addEventListener('change', () => {
+  buildRestockDraftPlan();
+  renderRestockCards();
+});
+document.getElementById('markAllObsoletePhaseoutBtn')?.addEventListener('click', () => {
+  const deadIds = (state.lastObsoleteList || []).filter((x) => x.status === 'DEAD_OBSOLETE').map((x) => x.id);
+  if (!deadIds.length) return;
+  markProductsPhaseout(deadIds);
+});
 
 document.getElementById('reorderSelectAllChk')?.addEventListener('change', (e) => {
   const checked = e.target.checked;
