@@ -241,8 +241,8 @@ function renderPublicCatalog() {
       const isLocal = (item.branchAvailable || 0) > 0;
       const otherList = Array.isArray(item.otherBranches) ? item.otherBranches : [];
       const availBadgeHtml = isLocal
-        ? `<span class="shopee-badge-avail">Available</span>`
-        : `<span class="shopee-badge-avail" style="background:rgba(245,158,11,0.18);color:#fbbf24;border-color:rgba(245,158,11,0.5);">At ${otherList.join(' / ')}</span>`;
+        ? `<span class="shopee-badge-avail" style="background:rgba(21,25,31,0.92);">Available</span>`
+        : `<span class="shopee-badge-avail" style="background:#15191f;color:#fbbf24;border-color:#fbbf24;box-shadow:0 2px 6px rgba(0,0,0,0.45);">At ${otherList.join(' / ')}</span>`;
       return `
         <div class="shopee-card" data-calc-id="${item.productId}">
           <div class="shopee-thumb">
