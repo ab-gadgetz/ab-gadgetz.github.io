@@ -2973,6 +2973,11 @@ function renderCostCompareTool() {
 
     const highestSup = sups.length > 1 ? sups[sups.length - 1] : null;
     const supplierSpread = best && highestSup ? highestSup.val - best.val : 0;
+    const srp = Number(item.base_price) || 0;
+    const cashPrice = Math.round(srp * 0.95);
+    const refCost = best?.val || webCost;
+    const srpMarginPct = srp > 0 && refCost > 0 ? ((srp - refCost) / srp) * 100 : null;
+    const cashMarginPct = cashPrice > 0 && refCost > 0 ? ((cashPrice - refCost) / cashPrice) * 100 : null;
 
     rows.push({
       id: item.id,
@@ -2980,6 +2985,10 @@ function renderCostCompareTool() {
       sku: item.website_codes || item.sku,
       totalAvail,
       needsRestock,
+      srp,
+      cashPrice,
+      srpMarginPct,
+      cashMarginPct,
       webCost,
       cAb,
       cAk,
@@ -2992,6 +3001,9 @@ function renderCostCompareTool() {
   }
 
   rows.sort((a, b) => {
+    if (sortMode === 'MARGIN_DESC') {
+      return (b.srpMarginPct ?? -999) - (a.srpMarginPct ?? -999);
+    }
     if (sortMode === 'NEED_SAVINGS') {
       if (a.needsRestock !== b.needsRestock) return a.needsRestock ? -1 : 1;
       if (a.diffVsWeb !== b.diffVsWeb) return b.diffVsWeb - a.diffVsWeb;
@@ -3057,9 +3069,21 @@ function renderCostCompareTool() {
                 ? `<span style="color:var(--text);">Restock Needed (${r.totalAvail} avail)</span><div class="small muted">Use ${r.best.name}</div>`
                 : `<span class="muted small">Stock OK (${r.totalAvail} avail)</span>`;
 
+          const marginColor = r.srpMarginPct === null
+            ? 'var(--muted)'
+            : r.srpMarginPct >= 10
+              ? 'var(--green)'
+              : r.srpMarginPct >= 5
+                ? 'var(--gold-bright)'
+                : '#f87171';
+          const priceMarginHtml = r.srp > 0
+            ? `<strong>${fmtCurrency(r.srp)}</strong><div class="small" style="color:${marginColor};font-weight:700;">${r.srpMarginPct !== null ? `${r.srpMarginPct.toFixed(1)}% SRP • ${r.cashMarginPct.toFixed(1)}% Cash` : '—'}</div>`
+            : '<span class="muted">—</span>';
+
           return `
             <tr data-pid="${r.id}">
               <td><strong>${r.displayModel}</strong><div class="small muted">${r.sku} • ${r.totalAvail} avail</div></td>
+              <td>${priceMarginHtml}</td>
               <td><strong>${r.webCost > 0 ? fmtCurrency(r.webCost) : '—'}</strong></td>
               <td>${fmtCell(r.cAb, r.webCost, 'cc-ab-inp', r.id)}</td>
               <td>${fmtCell(r.cAk, r.webCost, 'cc-ak-inp', r.id)}</td>
@@ -3074,7 +3098,7 @@ function renderCostCompareTool() {
             </tr>`;
         })
         .join('')
-    : '<tr><td colspan="7" class="muted">No products match the current filter.</td></tr>';
+    : '<tr><td colspan="8" class="muted">No products match the current filter.</td></tr>';
 
   tbody.querySelectorAll('.cc-save-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
