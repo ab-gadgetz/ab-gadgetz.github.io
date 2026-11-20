@@ -1848,9 +1848,10 @@ function renderActivity() {
   const branchFilter = state.actBranchFilter;
 
   const filterMovementType = (m) => pType === 'ALL' || (m.product_type || 'Cellphones') === pType;
-  const isCashSale = (m) => m.delta_qty < 0 && m.movement_type.includes('SALE');
+  const isCashSale = (m) => m.delta_qty < 0 && m.movement_type.includes('SALE') && !m.movement_type.includes('INSTALLMENT');
+  const isAnySale = (m) => m.delta_qty < 0 && m.movement_type.includes('SALE');
 
-  // Compute clickable branch sold totals (Installment mode counts installment sales; otherwise cash/all sales)
+  // Compute clickable branch sold totals (Installment mode counts installment sales; Cash mode counts cash sales; All counts all sales)
   const soldByBranch = { 'br-molave': 0, 'br-tambulig': 0, 'br-bonifacio': 0 };
   if (mode === 'INSTALLMENT') {
     if (pType !== 'Accessories') {
@@ -1859,8 +1860,9 @@ function renderActivity() {
       }
     }
   } else {
+    const matchSale = mode === 'CASH' ? isCashSale : isAnySale;
     for (const m of data.allMovements || []) {
-      if (isCashSale(m) && filterMovementType(m) && soldByBranch[m.branch_id] !== undefined) {
+      if (matchSale(m) && filterMovementType(m) && soldByBranch[m.branch_id] !== undefined) {
         soldByBranch[m.branch_id] += Math.abs(m.delta_qty);
       }
     }
@@ -1966,7 +1968,7 @@ function renderActivity() {
 
     thead.innerHTML = `
       <tr>
-        <th>Time</th>
+        <th>Date / Time</th>
         <th>Branch</th>
         <th>Product</th>
         <th>Category</th>
@@ -1978,11 +1980,11 @@ function renderActivity() {
           .map(
             (m) => `
           <tr>
-            <td>${fmtTime(m.recorded_at)}</td>
+            <td>${String(m.movement_type || '').startsWith('STOCKCARD_') ? String(m.recorded_at || '').slice(0, 10) : fmtTime(m.recorded_at)}</td>
             <td>${m.branch_name}</td>
             <td>${m.product_name}</td>
             <td><span class="badge badge-info">${m.product_type || 'Cellphones'}</span></td>
-            <td>${m.movement_type}</td>
+            <td>${String(m.movement_type || '').replace(/^STOCKCARD_SALE_ORDER$/, 'CASH SALE (ORDER)').replace(/^STOCKCARD_SALE_INSTALLMENT$/, 'INSTALLMENT SALE').replace(/^STOCKCARD_/, '')}</td>
             <td><strong>${m.delta_qty > 0 ? '+' + m.delta_qty : m.delta_qty}</strong></td>
           </tr>`
           )
@@ -2425,22 +2427,66 @@ function setInventoryDownloadMsg(text, isError) {
   el.classList.toggle('error', Boolean(isError && text));
 }
 
-function generateInventoryPdfForType(productType, reportDateStr) {
+function generateInventoryPdfForType(productType, reportDateStr, movementsList = []) {
   const jspdfNs = window.jspdf;
   if (!jspdfNs || typeof jspdfNs.jsPDF !== 'function') {
     throw new Error('PDF generator library is still loading. Please try again in a second.');
   }
-  const { branchLabel, items } = getScopedInventoryForExport(productType);
-  const parsedDate = reportDateStr ? new Date(`${reportDateStr}T00:00:00`) : new Date();
-  const validDate = Number.isNaN(parsedDate.getTime()) ? new Date() : parsedDate;
-  const year = validDate.getFullYear();
-  const monthIndex = validDate.getMonth();
-  const asOfDay = validDate.getDate();
+  const { branchLabel, visibleBranches, items } = getScopedInventoryForExport(productType);
+  const visibleBranchIds = new Set((visibleBranches || []).map((b) => b.id));
+  const dateParts = String(reportDateStr || todayStr).split('-').map(Number);
+  const year = dateParts[0] || new Date().getFullYear();
+  const monthIndex = (dateParts[1] || new Date().getMonth() + 1) - 1;
+  const asOfDay = dateParts[2] || new Date().getDate();
+  const monthKey = `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
+  const monthStart = `${monthKey}-01`;
   const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
-  const monthName = validDate.toLocaleDateString('en-US', { month: 'long' });
+  const monthName = new Date(year, monthIndex, 1).toLocaleDateString('en-US', { month: 'long' });
 
-  // Available models (> 0 stock) matching Apps Script daily balance sheet
-  const activeItems = items.filter((i) => i.exportQty > 0);
+  // Build exact day-by-day balance changes from monthStart -> todayStr using synced Stock Card / Sale movements
+  const netChangesSinceMonthStart = new Map();
+  const monthlyDailyChanges = new Map();
+  for (const m of movementsList || []) {
+    if (visibleBranchIds.size && m.branch_id && !visibleBranchIds.has(m.branch_id)) continue;
+    const moveDate = String(m.recorded_at || '').slice(0, 10);
+    if (!moveDate || moveDate < monthStart || moveDate > todayStr) continue;
+    const pid = m.product_id;
+    const delta = Number(m.delta_qty) || 0;
+    if (!pid || delta === 0) continue;
+    netChangesSinceMonthStart.set(pid, (netChangesSinceMonthStart.get(pid) || 0) + delta);
+    if (moveDate.slice(0, 7) === monthKey) {
+      const dayNum = Number(moveDate.slice(8, 10));
+      if (dayNum >= 1 && dayNum <= daysInMonth) {
+        if (!monthlyDailyChanges.has(pid)) {
+          monthlyDailyChanges.set(pid, new Array(daysInMonth + 1).fill(0));
+        }
+        monthlyDailyChanges.get(pid)[dayNum] += delta;
+      }
+    }
+  }
+
+  // Reconstruct daily balance per model for days 1..asOfDay
+  const itemsWithDaily = items.map((item) => {
+    const pid = item.id;
+    const changes = monthlyDailyChanges.get(pid) || new Array(daysInMonth + 1).fill(0);
+    let balance = (Number(item.exportQty) || 0) - (netChangesSinceMonthStart.get(pid) || 0);
+    const daily = [];
+    let hasPositiveDay = item.exportQty > 0;
+    for (let day = 1; day <= daysInMonth; day++) {
+      if (day <= asOfDay) {
+        balance += changes[day];
+        const cleanBal = Math.max(0, balance);
+        if (cleanBal > 0) hasPositiveDay = true;
+        daily.push(cleanBal);
+      } else {
+        daily.push(null);
+      }
+    }
+    return { ...item, daily, hasPositiveDay };
+  });
+
+  // Include any model that had > 0 stock on any day 1..asOfDay in that month
+  const activeItems = itemsWithDaily.filter((i) => i.hasPositiveDay);
   const groups = groupInventoryForPdf(activeItems);
 
   const doc = new jspdfNs.jsPDF({
@@ -2463,11 +2509,12 @@ function generateInventoryPdfForType(productType, reportDateStr) {
   const modelWidth = 125 / 72;
   const priceWidth = 84 / 72;
 
-  const dailyTotals = Array.from({ length: daysInMonth }, (_, idx) => {
-    const day = idx + 1;
-    if (day > asOfDay) return 0;
-    return activeItems.reduce((sum, it) => sum + (Number(it.exportQty) || 0), 0);
-  });
+  const dailyTotals = new Array(daysInMonth).fill(0);
+  for (const it of activeItems) {
+    it.daily.forEach((val, idx) => {
+      if (val !== null && val > 0) dailyTotals[idx] += val;
+    });
+  }
 
   const totalModelRows = groups.reduce((s, g) => s + g.items.length, 0);
   const totalVisualRows = Math.max(1, groups.length + totalModelRows + 2);
@@ -2514,8 +2561,8 @@ function generateInventoryPdfForType(productType, reportDateStr) {
         const priceNum = Number(item.base_price) || 0;
         const priceText = 'PHP ' + priceNum.toLocaleString('en-PH', { maximumFractionDigits: 0 });
         const dayCells = panelDays.map((d) => {
-          if (d > asOfDay) return '';
-          return item.exportQty > 0 ? item.exportQty.toLocaleString('en-PH') : '';
+          const val = item.daily ? item.daily[d - 1] : (d <= asOfDay ? item.exportQty : null);
+          return val !== null && Number(val) > 0 ? Number(val).toLocaleString('en-PH') : '';
         });
         bodyRows.push([String(item.model || item.name || ''), priceText, ...dayCells]);
       });
@@ -2591,13 +2638,20 @@ function generateInventoryPdfForType(productType, reportDateStr) {
   return fileName;
 }
 
-function downloadInventoryPdf() {
+async function downloadInventoryPdf() {
   try {
-    setInventoryDownloadMsg('Generating PDF...', false);
+    setInventoryDownloadMsg('Generating PDF with daily stock history...', false);
     const reportDateStr = document.getElementById('inventoryReportDate')?.value || todayStr;
+    const monthStart = `${reportDateStr.slice(0, 7)}-01`;
+    const globalBranchId = document.getElementById('globalBranch')?.value || '';
+    let movementsList = [];
+    try {
+      const actData = await api(`/api/activity?start=${monthStart}&end=${todayStr}&branchId=${globalBranchId}`);
+      movementsList = actData?.allMovements || actData?.movements || [];
+    } catch {}
     const selectedTypes = getSelectedProductTypes();
     const typesToExport = selectedTypes.length ? selectedTypes : ['Cellphones'];
-    const files = typesToExport.map((t) => generateInventoryPdfForType(t, reportDateStr));
+    const files = typesToExport.map((t) => generateInventoryPdfForType(t, reportDateStr, movementsList));
     setInventoryDownloadMsg(`Downloaded: ${files.join(', ')}`, false);
   } catch (err) {
     setInventoryDownloadMsg(err.message || 'Unable to generate PDF.', true);

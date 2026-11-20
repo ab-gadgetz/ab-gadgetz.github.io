@@ -64,20 +64,34 @@ async function loginAndFetchPortal(username, password) {
     [...trHtml.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((m) =>
       m[1].replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim()
     );
-  const result = new Map();
-  const liveInstallments = [];
-  const livePayments = [];
-  const liveExpenses = [];
-  const livePastDues = [];
-
-  for (const b of BRANCHES) {
-    const url = `${PORTAL_BASE}/panel/stocks/branch_monthly_inventory/${b.portalId}/${year}/${month}`;
-    const res = await fetch(url, { headers: { Cookie: cookieHeader(jar) }, redirect: 'manual' });
-    if (!res.ok) throw new Error(`Portal fetch failed for ${b.name}: HTTP ${res.status}`);
-    const html = await res.text();
-    if (html.includes('Sign In to AB GADGETZ')) {
-      throw new Error('Portal login was rejected (got the sign-in page instead of inventory). Check PORTAL_USERNAME / PORTAL_PASSWORD secrets.');
+  const parseStockCardDate = (raw) => {
+    const MONTHS = { jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06', jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12' };
+    const m = String(raw || '').trim().match(/^([A-Za-z]{3})-(\d{1,2})-(\d{2,4})$/);
+    if (!m) return '';
+    const mm = MONTHS[m[1].toLowerCase()];
+    if (!mm) return '';
+    const dd = String(m[2]).padStart(2, '0');
+    const yy = m[3].length === 2 ? `20${m[3]}` : m[3];
+    return `${yy}-${mm}-${dd}`;
+  };
+  const parseStockCardTable = (html) => {
+    const entries = [];
+    for (const tr of html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
+      const tds = extractCells(tr[1]);
+      if (tds.length < 6) continue;
+      const dateStr = parseStockCardDate(tds[0]);
+      if (!dateStr) continue;
+      const txType = (tds[2] || '').toUpperCase().trim();
+      const oldQty = parseInt(String(tds[4] || '').replace(/[^0-9-]/g, ''), 10);
+      const newQty = parseInt(String(tds[5] || '').replace(/[^0-9-]/g, ''), 10);
+      if (!Number.isFinite(oldQty) || !Number.isFinite(newQty)) continue;
+      const deltaQty = newQty - oldQty;
+      if (deltaQty === 0) continue;
+      entries.push({ dateStr, ref: tds[1] || '', txType, oldQty, newQty, deltaQty });
     }
+    return entries;
+  };
+  const parseMonthlyRows = (html) => {
     const rows = [];
     for (const tr of html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
       const tds = [...tr[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((m) =>
@@ -92,12 +106,71 @@ async function loginAndFetchPortal(username, password) {
       const available = parseInt(tds[4].replace(/[^0-9-]/g, ''), 10) || 0;
       const sales = parseInt(tds[5].replace(/[^0-9-]/g, ''), 10) || 0;
       const installment = parseInt(tds[6].replace(/[^0-9-]/g, ''), 10) || 0;
-      if (itemCode) rows.push({ itemName, itemCode, category, unitPrice, available, sales, installment });
+      const hasMonthlyMove = [5, 6, 7, 8, 9, 10, 11, 12].some((idx) => (parseInt((tds[idx] || '').replace(/[^0-9-]/g, ''), 10) || 0) !== 0);
+      const viewLink = (tr[1].match(/href=["'](\/panel\/stocks\/view\/\d+)["']/i) || [])[1] || '';
+      if (itemCode) rows.push({ itemName, itemCode, category, unitPrice, available, sales, installment, hasMonthlyMove, viewLink });
     }
+    return rows;
+  };
+
+  const result = new Map();
+  const stockCardsByBranch = new Map();
+  const liveInstallments = [];
+  const livePayments = [];
+  const liveExpenses = [];
+  const livePastDues = [];
+
+  const prevMonthDate = new Date(year, now.getMonth() - 1, 1);
+  const prevY = prevMonthDate.getFullYear();
+  const prevM = String(prevMonthDate.getMonth() + 1).padStart(2, '0');
+
+  for (const b of BRANCHES) {
+    const url = `${PORTAL_BASE}/panel/stocks/branch_monthly_inventory/${b.portalId}/${year}/${month}`;
+    const res = await fetch(url, { headers: { Cookie: cookieHeader(jar) }, redirect: 'manual' });
+    if (!res.ok) throw new Error(`Portal fetch failed for ${b.name}: HTTP ${res.status}`);
+    const html = await res.text();
+    if (html.includes('Sign In to AB GADGETZ')) {
+      throw new Error('Portal login was rejected (got the sign-in page instead of inventory). Check PORTAL_USERNAME / PORTAL_PASSWORD secrets.');
+    }
+    const rows = parseMonthlyRows(html);
     if (rows.length === 0) {
       throw new Error(`Portal returned no inventory rows for ${b.name}; refusing to publish empty stock.`);
     }
     result.set(b.id, rows);
+
+    // Collect items that had movements in current or previous month and fetch their daily Stock Cards
+    const linkToRow = new Map();
+    for (const r of rows) {
+      if (r.hasMonthlyMove && r.viewLink) linkToRow.set(r.viewLink, r);
+    }
+    try {
+      const prevRes = await fetch(`${PORTAL_BASE}/panel/stocks/branch_monthly_inventory/${b.portalId}/${prevY}/${prevM}`, { headers: { Cookie: cookieHeader(jar) } });
+      if (prevRes.ok) {
+        for (const r of parseMonthlyRows(await prevRes.text())) {
+          if (r.hasMonthlyMove && r.viewLink && !linkToRow.has(r.viewLink)) linkToRow.set(r.viewLink, r);
+        }
+      }
+    } catch {}
+
+    const cardItems = Array.from(linkToRow.values());
+    const branchCardEntries = [];
+    const batchSize = 8;
+    for (let i = 0; i < cardItems.length; i += batchSize) {
+      const batch = cardItems.slice(i, i + batchSize);
+      await Promise.all(
+        batch.map(async (r) => {
+          try {
+            const cRes = await fetch(`${PORTAL_BASE}${r.viewLink}`, { headers: { Cookie: cookieHeader(jar) } });
+            if (!cRes.ok) return;
+            const entries = parseStockCardTable(await cRes.text());
+            for (const e of entries) {
+              branchCardEntries.push({ ...e, itemCode: r.itemCode, itemName: r.itemName, category: r.category, unitPrice: r.unitPrice });
+            }
+          } catch {}
+        })
+      );
+    }
+    stockCardsByBranch.set(b.id, branchCardEntries);
 
     try {
       const instRes = await fetch(`${PORTAL_BASE}/panel/franchise/installments/${b.portalId}`, { headers: { Cookie: cookieHeader(jar) } });
@@ -162,7 +235,7 @@ async function loginAndFetchPortal(username, password) {
       }
     } catch {}
   }
-  return { inventoryByBranch: result, liveInstallments, livePayments, liveExpenses, livePastDues };
+  return { inventoryByBranch: result, stockCardsByBranch, liveInstallments, livePayments, liveExpenses, livePastDues };
 }
 
 const PHONE_CATEGORIES = new Set(['CELLPHONES', 'REPO', 'KEYPAD CELLPHONES']);
@@ -255,6 +328,7 @@ async function main() {
     try {
       const {
         inventoryByBranch: liveData,
+        stockCardsByBranch: fetchedStockCards,
         liveInstallments: fetchedInstallments,
         livePayments: fetchedPayments,
         liveExpenses: fetchedExpenses,
@@ -273,6 +347,7 @@ async function main() {
         allPastDues = fetchedPastDues.sort((a, b) => String(b.release_date).localeCompare(String(a.release_date)));
       }
       const nowIso = new Date().toISOString();
+      const liveCardMovements = [];
       for (const [branchId, rows] of liveData.entries()) {
         const bObj = BRANCHES.find((x) => x.id === branchId);
         // Live portal is the source of truth for stock: zero out this branch first,
@@ -285,8 +360,8 @@ async function main() {
           let prod = codeToProduct.get(row.itemCode.trim().toUpperCase());
 
           // Brand-new item on the AB website that is not in our product list yet:
-          // add it automatically (only when it is actually in stock).
-          if (!prod && row.available > 0 && row.itemName) {
+          // add it automatically (only when it is actually in stock or had movements).
+          if (!prod && (row.available > 0 || row.hasMonthlyMove) && row.itemName) {
             prod = makePortalProduct(row);
             products.push(prod);
             codeToProduct.set(row.itemCode.trim().toUpperCase(), prod);
@@ -296,34 +371,47 @@ async function main() {
 
           totals.set(prod.id, (totals.get(prod.id) || 0) + Math.max(0, row.available));
           // Price on the AB website is the source of truth (per branch).
-          if (row.unitPrice > 0 && row.available > 0) {
+          if (row.unitPrice > 0 && (row.available > 0 || row.hasMonthlyMove)) {
             branchPrice.set(`${branchId}::${prod.id}`, row.unitPrice);
           }
         }
         for (const [pid, qty] of totals.entries()) {
           invMap.set(`${branchId}::${pid}`, { branch_id: branchId, product_id: pid, qty_on_hand: qty, qty_reserved: 0 });
-          const prevQty = prevInvMap.get(`${branchId}::${pid}`);
-          if (prevQty !== undefined && qty !== prevQty) {
-            const pObj = products.find((x) => x.id === pid);
-            if (pObj) {
-              console.log(`Recorded movement: ${branchId} ${pid} (${pObj.name}): ${prevQty} -> ${qty}`);
-              allMovements.unshift({
-                id: `live-${nowIso}-${branchId}-${pid}`,
-                branch_id: branchId,
-                branch_name: bObj ? bObj.name : branchId,
-                product_id: pid,
-                product_name: pObj.name,
-                brand: pObj.brand,
-                model: pObj.model || pObj.name,
-                product_type: pObj.product_type || 'Cellphones',
-                base_price: branchPrice.get(`${branchId}::${pid}`) ?? pObj.base_price,
-                delta_qty: qty - prevQty,
-                movement_type: qty < prevQty ? 'PORTAL_SALE_SYNC' : 'PORTAL_RESTOCK_SYNC',
-                recorded_at: nowIso,
-              });
-            }
-          }
         }
+
+        // Convert actual portal Stock Card daily entries into movements for Activity Log & Daily Inventory PDF
+        const cardEntries = fetchedStockCards?.get(branchId) || [];
+        let cardIdx = 0;
+        for (const ce of cardEntries) {
+          let prod = codeToProduct.get(String(ce.itemCode || '').trim().toUpperCase());
+          if (!prod && ce.itemName) {
+            prod = makePortalProduct(ce);
+            products.push(prod);
+            codeToProduct.set(String(ce.itemCode || '').trim().toUpperCase(), prod);
+            newProducts.add(prod.id);
+          }
+          if (!prod) continue;
+          const isSale = ce.txType === 'ORDER' || ce.txType === 'INSTALLMENT';
+          const mType = isSale ? `STOCKCARD_SALE_${ce.txType}` : `STOCKCARD_${ce.txType}`;
+          liveCardMovements.push({
+            id: `sc-${branchId}-${prod.id}-${ce.dateStr}-${ce.ref || cardIdx++}`,
+            branch_id: branchId,
+            branch_name: bObj ? bObj.name : branchId,
+            product_id: prod.id,
+            sku: prod.sku,
+            product_name: prod.name,
+            brand: prod.brand,
+            model: prod.model || prod.name,
+            product_type: prod.product_type || 'Cellphones',
+            base_price: branchPrice.get(`${branchId}::${prod.id}`) ?? prod.base_price,
+            delta_qty: ce.deltaQty,
+            movement_type: mType,
+            recorded_at: `${ce.dateStr}T12:00:00.000Z`,
+          });
+        }
+      }
+      if (liveCardMovements.length > 0) {
+        allMovements = liveCardMovements.sort((a, b) => String(b.recorded_at).localeCompare(String(a.recorded_at)));
       }
       liveSynced = true;
       liveSyncNote = `Live stock & prices synced from app.abgadgetz.com.ph (${newProducts.size} new item(s) auto-added)`;
@@ -471,11 +559,11 @@ async function main() {
     catalogRules: seedSnapshot.customer_catalog_rules || [],
     installmentRates: seedSnapshot.installment_settings || [],
     orderBudgetItems: seedSnapshot.order_budget_items || [],
-    allMovements: allMovements.slice(0, 800),
-    allInstallments: allInstallments.slice(0, 800),
-    allPayments: allPayments.slice(0, 1200),
-    allExpenses: allExpenses.slice(0, 800),
-    allPastDues: allPastDues.slice(0, 600),
+    allMovements: allMovements.slice(0, 3500),
+    allInstallments: allInstallments.slice(0, 1200),
+    allPayments: allPayments.slice(0, 1500),
+    allExpenses: allExpenses.slice(0, 1000),
+    allPastDues: allPastDues.slice(0, 800),
     syncedAt: syncedAtIso,
     liveSynced,
     liveSyncNote,
