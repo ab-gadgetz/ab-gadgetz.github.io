@@ -313,24 +313,25 @@
           </div>
         </div>
 
-        <div id="restockDraftSummary" class="muted small" style="margin-bottom:8px;"></div>
-        <div class="table-wrap" style="margin-top:8px;">
-          <table class="data-table" id="reorderTable">
-            <thead>
-              <tr>
-                <th style="width:32px;"><input type="checkbox" id="reorderSelectAllChk" checked style="width:15px;height:15px;accent-color:var(--gold);" /></th>
-                <th>Model</th>
-                <th>Branch</th>
-                <th>Supplier</th>
-                <th>Avail / Reorder</th>
-                <th>Order Qty</th>
-                <th>Unit Cost</th>
-                <th>Subtotal</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+          <div id="restockDraftSummary" class="muted small"></div>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <input type="search" id="restockSearchInput" placeholder="Search model..." style="width:150px;padding:5px 9px;font-size:12px;" />
+            <select id="restockBrandFilter" style="width:auto;padding:5px 9px;font-size:12px;">
+              <option value="ALL">All Brands</option>
+            </select>
+            <select id="restockShowFilter" style="width:auto;padding:5px 9px;font-size:12px;">
+              <option value="SELECTED">Selected / Budgeted Only</option>
+              <option value="ALL">All Low-Stock</option>
+              <option value="ZERO">Out of Stock (0) Only</option>
+            </select>
+            <label style="display:flex;align-items:center;gap:5px;margin:0;font-size:12px;cursor:pointer;">
+              <input type="checkbox" id="reorderSelectAllChk" style="width:15px;height:15px;margin:0;accent-color:var(--gold);" />
+              <span>Select All Visible</span>
+            </label>
+          </div>
         </div>
+        <div id="reorderCardGrid" class="brand-grid"></div>
       </div>
 
       <!-- Tool Panel: Health -->

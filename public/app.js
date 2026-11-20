@@ -1689,6 +1689,7 @@ function buildRestockDraftPlan() {
         model: item.model || item.name,
         displayModel: formatSwapModelName({ brand: item.brand || '', model: item.model || item.name }),
         sku: item.website_codes || item.sku,
+        imageUrl: item.imageUrl || '',
         branchId: b.id,
         branchName: b.name,
         supplier: sup.supplier,
@@ -1701,8 +1702,11 @@ function buildRestockDraftPlan() {
     }
   }
 
-  // Prioritize 0-stock first, then lowest avail, then lowest unit cost
+  // Prioritize priced 0-stock first, then lowest avail, then lowest unit cost
   candidates.sort((a, b) => {
+    const ap = a.unitCost > 0 ? 0 : 1;
+    const bp = b.unitCost > 0 ? 0 : 1;
+    if (ap !== bp) return ap - bp;
     if ((a.avail === 0) !== (b.avail === 0)) return a.avail === 0 ? -1 : 1;
     if (a.avail !== b.avail) return a.avail - b.avail;
     return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel);
@@ -1711,7 +1715,10 @@ function buildRestockDraftPlan() {
   if (budgetVal > 0) {
     let spent = 0;
     for (const c of candidates) {
-      if (c.unitCost <= 0) continue;
+      if (c.unitCost <= 0) {
+        c.selected = false;
+        continue;
+      }
       if (spent + c.unitCost > budgetVal) {
         c.selected = false;
         continue;
@@ -1728,11 +1735,45 @@ function buildRestockDraftPlan() {
   return candidates;
 }
 
-function renderRestockDraftTable() {
+function getFilteredRestockRows() {
   const plan = state.restockPlan || [];
-  const tbody = document.querySelector('#reorderTable tbody');
+  const search = (document.getElementById('restockSearchInput')?.value || '').trim().toLowerCase();
+  const brandFilter = document.getElementById('restockBrandFilter')?.value || 'ALL';
+  const showFilter = document.getElementById('restockShowFilter')?.value || 'SELECTED';
+
+  return plan
+    .map((r, idx) => ({ ...r, _idx: idx }))
+    .filter((r) => {
+      if (showFilter === 'SELECTED' && !r.selected) return false;
+      if (showFilter === 'ZERO' && r.avail > 0) return false;
+      if (brandFilter !== 'ALL' && (r.brand || 'Other') !== brandFilter) return false;
+      if (
+        search &&
+        !r.displayModel.toLowerCase().includes(search) &&
+        !r.sku.toLowerCase().includes(search) &&
+        !(r.brand || '').toLowerCase().includes(search)
+      ) {
+        return false;
+      }
+      return true;
+    });
+}
+
+function renderRestockCards() {
+  const plan = state.restockPlan || [];
+  const grid = document.getElementById('reorderCardGrid');
   const sumEl = document.getElementById('restockDraftSummary');
-  if (!tbody) return;
+  const brandSel = document.getElementById('restockBrandFilter');
+  if (!grid) return;
+
+  if (brandSel) {
+    const prevBrand = brandSel.value || 'ALL';
+    const brands = [...new Set(plan.map((r) => r.brand || 'Other'))].sort();
+    brandSel.innerHTML =
+      '<option value="ALL">All Brands</option>' +
+      brands.map((b) => `<option value="${b}">${b}</option>`).join('');
+    if (brands.includes(prevBrand)) brandSel.value = prevBrand;
+  }
 
   const selected = plan.filter((r) => r.selected && r.qty > 0);
   const totalUnits = selected.reduce((s, r) => s + r.qty, 0);
@@ -1741,38 +1782,136 @@ function renderRestockDraftTable() {
     sumEl.innerHTML = `Selected <strong>${fmtNum(selected.length)}</strong> line(s) • <strong>${fmtNum(totalUnits)} pcs</strong> • Est. Total: <strong style="color:var(--gold-bright);">${fmtCurrency(totalCost)}</strong>`;
   }
 
-  tbody.innerHTML = plan.length
-    ? plan
-        .map(
-          (r, idx) => `
-        <tr>
-          <td><input type="checkbox" class="reorder-row-chk" data-idx="${idx}" ${r.selected ? 'checked' : ''} style="width:15px;height:15px;accent-color:var(--gold);" /></td>
-          <td><strong>${r.displayModel}</strong><div class="small muted">${r.sku}</div></td>
-          <td>${r.branchName}</td>
-          <td><span class="badge badge-ok">${r.supplier}</span></td>
-          <td>${fmtNum(r.avail)} / ${fmtNum(r.reorderPoint)}</td>
-          <td><input type="number" class="reorder-qty-inp" data-idx="${idx}" value="${r.qty}" min="1" max="99" style="width:62px;padding:4px 6px;text-align:center;" /></td>
-          <td>${r.unitCost > 0 ? fmtCurrency(r.unitCost) : '<span class="muted">—</span>'}</td>
-          <td><strong>${r.unitCost > 0 ? fmtCurrency(r.qty * r.unitCost) : '—'}</strong></td>
-        </tr>`
-        )
-        .join('')
-    : '<tr><td colspan="8" class="muted">No products match the selected supplier/reorder criteria.</td></tr>';
+  const visible = getFilteredRestockRows();
+  if (!visible.length) {
+    grid.innerHTML = '<div class="muted small" style="padding:10px 0;">No products match. Try switching Show filter to "All Low-Stock" or clearing search.</div>';
+    return;
+  }
 
-  tbody.querySelectorAll('.reorder-row-chk').forEach((chk) => {
-    chk.addEventListener('change', (e) => {
-      const idx = Number(e.target.dataset.idx);
-      if (state.restockPlan?.[idx]) state.restockPlan[idx].selected = e.target.checked;
-      renderRestockDraftTable();
+  if (!state.restockOpenBrands) state.restockOpenBrands = new Set();
+
+  // Group by Brand -> Model
+  const byBrand = new Map();
+  for (const r of visible) {
+    const bName = r.brand || 'Other';
+    if (!byBrand.has(bName)) byBrand.set(bName, new Map());
+    const modelMap = byBrand.get(bName);
+    if (!modelMap.has(r.productId)) {
+      modelMap.set(r.productId, {
+        productId: r.productId,
+        displayModel: r.displayModel,
+        sku: r.sku,
+        imageUrl: r.imageUrl,
+        supplier: r.supplier,
+        unitCost: r.unitCost,
+        rows: [],
+      });
+    }
+    modelMap.get(r.productId).rows.push(r);
+  }
+
+  const searchActive = Boolean((document.getElementById('restockSearchInput')?.value || '').trim());
+  const cardsHtml = [];
+
+  for (const [bName, modelMap] of byBrand.entries()) {
+    const models = [...modelMap.values()];
+    const brandRows = models.flatMap((m) => m.rows);
+    const brandSelectedUnits = brandRows.filter((r) => r.selected).reduce((s, r) => s + r.qty, 0);
+    const brandAllSelected = brandRows.length > 0 && brandRows.every((r) => r.selected);
+    const isOpen = searchActive || byBrand.size <= 3 || state.restockOpenBrands.has(bName);
+    const accent = typeof getBrandMeta === 'function' ? getBrandMeta(bName).color : 'var(--gold)';
+
+    const modelsHtml = models
+      .map((m) => {
+        const thumbHtml = m.imageUrl
+          ? `<img src="${m.imageUrl}" alt="${m.displayModel}" class="model-thumb" loading="lazy" />`
+          : `<div class="model-thumb model-thumb-empty">📱</div>`;
+        const branchRowsHtml = m.rows
+          .map(
+            (r) => `
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px 0;border-top:1px solid rgba(255,255,255,0.06);font-size:12px;">
+              <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer;">
+                <input type="checkbox" class="reorder-row-chk" data-idx="${r._idx}" ${r.selected ? 'checked' : ''} style="width:14px;height:14px;margin:0;accent-color:var(--gold);" />
+                <span>${r.branchName}</span>
+                <span class="muted small">(${fmtNum(r.avail)}/${fmtNum(r.reorderPoint)})</span>
+              </label>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <input type="number" class="reorder-qty-inp" data-idx="${r._idx}" value="${r.qty}" min="1" max="99" style="width:52px;padding:2px 5px;font-size:12px;text-align:center;" />
+                <span class="small muted" style="min-width:22px;">pcs</span>
+              </div>
+            </div>`
+          )
+          .join('');
+        return `
+          <div class="model-card" style="padding:10px;display:flex;flex-direction:column;gap:8px;">
+            <div style="display:flex;gap:10px;align-items:center;">
+              ${thumbHtml}
+              <div style="min-width:0;flex:1;">
+                <div style="font-weight:700;font-size:13px;line-height:1.25;">${m.displayModel}</div>
+                <div class="small muted">${m.sku} • <span style="color:var(--gold-bright);">${m.supplier}</span></div>
+                <div class="small" style="margin-top:2px;">Cost: <strong>${m.unitCost > 0 ? fmtCurrency(m.unitCost) : '—'}</strong></div>
+              </div>
+            </div>
+            <div>${branchRowsHtml}</div>
+          </div>
+        `;
+      })
+      .join('');
+
+    cardsHtml.push(`
+      <div class="brand-card ${isOpen ? 'open' : ''}" style="border-top:3px solid ${accent};grid-column:1 / -1;">
+        <div class="brand-card-head restock-brand-toggle" data-brand="${bName}" style="cursor:pointer;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <input type="checkbox" class="restock-brand-chk" data-brand="${bName}" ${brandAllSelected ? 'checked' : ''} style="width:16px;height:16px;accent-color:var(--gold);" />
+            <strong style="color:${accent};font-size:15px;">${bName}</strong>
+            <span class="muted small">${models.length} model(s) • ${brandSelectedUnits} pcs selected</span>
+          </div>
+          <span class="muted small">${isOpen ? '▲ Hide' : '▼ Show'}</span>
+        </div>
+        ${isOpen ? `<div class="model-grid" style="margin-top:10px;">${modelsHtml}</div>` : ''}
+      </div>
+    `);
+  }
+
+  grid.innerHTML = cardsHtml.join('');
+
+  grid.querySelectorAll('.restock-brand-toggle').forEach((hdr) => {
+    hdr.addEventListener('click', (e) => {
+      if (e.target.closest('.restock-brand-chk')) return;
+      const b = hdr.dataset.brand;
+      if (state.restockOpenBrands.has(b)) state.restockOpenBrands.delete(b);
+      else state.restockOpenBrands.add(b);
+      renderRestockCards();
     });
   });
 
-  tbody.querySelectorAll('.reorder-qty-inp').forEach((inp) => {
+  grid.querySelectorAll('.restock-brand-chk').forEach((chk) => {
+    chk.addEventListener('change', (e) => {
+      const b = e.target.dataset.brand;
+      const checked = e.target.checked;
+      for (const r of visible) {
+        if ((r.brand || 'Other') === b && state.restockPlan?.[r._idx]) {
+          state.restockPlan[r._idx].selected = checked;
+        }
+      }
+      renderRestockCards();
+    });
+  });
+
+  grid.querySelectorAll('.reorder-row-chk').forEach((chk) => {
+    chk.addEventListener('change', (e) => {
+      const idx = Number(e.target.dataset.idx);
+      if (state.restockPlan?.[idx]) state.restockPlan[idx].selected = e.target.checked;
+      renderRestockCards();
+    });
+  });
+
+  grid.querySelectorAll('.reorder-qty-inp').forEach((inp) => {
     inp.addEventListener('change', (e) => {
       const idx = Number(e.target.dataset.idx);
       const val = Math.max(1, parseInt(e.target.value, 10) || 1);
       if (state.restockPlan?.[idx]) state.restockPlan[idx].qty = val;
-      renderRestockDraftTable();
+      renderRestockCards();
     });
   });
 }
@@ -2119,12 +2258,12 @@ function renderPlanning() {
     }
   }
   buildRestockDraftPlan();
-  renderRestockDraftTable();
+  renderRestockCards();
 }
 
 document.getElementById('buildRestockPlanBtn')?.addEventListener('click', () => {
   buildRestockDraftPlan();
-  renderRestockDraftTable();
+  renderRestockCards();
   renderReorderPreviewModal();
   document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
 });
@@ -2137,20 +2276,26 @@ document.getElementById('previewRestockPlanBtn')?.addEventListener('click', () =
 
 document.getElementById('restockTypeFilter')?.addEventListener('change', () => {
   buildRestockDraftPlan();
-  renderRestockDraftTable();
+  renderRestockCards();
 });
 
 document.querySelectorAll('input[name="restockSupplierMode"]').forEach((r) => {
   r.addEventListener('change', () => {
     buildRestockDraftPlan();
-    renderRestockDraftTable();
+    renderRestockCards();
   });
 });
 
+document.getElementById('restockSearchInput')?.addEventListener('input', renderRestockCards);
+document.getElementById('restockBrandFilter')?.addEventListener('change', renderRestockCards);
+document.getElementById('restockShowFilter')?.addEventListener('change', renderRestockCards);
+
 document.getElementById('reorderSelectAllChk')?.addEventListener('change', (e) => {
   const checked = e.target.checked;
-  for (const r of state.restockPlan || []) r.selected = checked;
-  renderRestockDraftTable();
+  for (const r of getFilteredRestockRows()) {
+    if (state.restockPlan?.[r._idx]) state.restockPlan[r._idx].selected = checked;
+  }
+  renderRestockCards();
 });
 
 document.getElementById('reorderShowCostsChk')?.addEventListener('change', renderReorderPreviewModal);
