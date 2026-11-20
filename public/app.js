@@ -25,6 +25,13 @@ const fmtCurrency = (n) =>
 
 const fmtNum = (n) => (Number(n) || 0).toLocaleString('en-PH');
 
+const isFreebieAccessory = (item) => {
+  const pType = item?.product_type || item?.productType || 'Cellphones';
+  if (pType !== 'Accessories') return false;
+  const p = Number(item?.base_price ?? item?.basePrice ?? 0);
+  return p <= 5;
+};
+
 const fmtTime = (iso) => {
   if (!iso) return '—';
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -680,6 +687,7 @@ function renderModelCard(item, visibleBranches) {
     : `<div style="width:52px;height:52px;border-radius:9px;background:#171c23;border:1px solid var(--border-soft);display:grid;place-items:center;color:var(--gold);font-size:20px;flex:0 0 52px;">📱</div>`;
   const isSel = isAdmin && state.selectedProducts.has(item.id);
   const qtyCls = item.scopedAvail === 0 ? 'model-card-qty zero' : 'model-card-qty';
+  const isFreebie = isFreebieAccessory(item);
   return `
     <div class="model-card" ${isCashier ? `data-inv-calc-id="${item.id}" style="cursor:pointer;"` : `style="${isSel ? 'border-color:var(--gold);background:linear-gradient(165deg,#332f20 0%,#1f1d16 100%);' : ''}"`}>
       <div class="model-card-head">
@@ -695,9 +703,11 @@ function renderModelCard(item, visibleBranches) {
       </div>
       <div class="model-branch-pills">${pills}</div>
       <div class="model-price-row" style="padding-top:6px;border-top:1px solid rgba(255,255,255,.06);">
-        <span>SRP: <strong style="color:var(--gold-bright);font-size:12.5px;">${fmtCurrency(item.base_price)}</strong></span>
+        ${isFreebie
+          ? `<span style="color:var(--green);font-weight:800;font-size:12px;">FREEBIE</span>`
+          : `<span>SRP: <strong style="color:var(--gold-bright);font-size:12.5px;">${fmtCurrency(item.base_price)}</strong></span>`}
         ${isAdmin ? `<span>Cost: <strong style="color:var(--green);">${item.cost_price > 0 ? fmtCurrency(item.cost_price) : '—'}</strong></span>` : ''}
-        ${isCashier ? `<span style="color:var(--green);">Cash: <strong>${fmtCurrency(cashPrice)}</strong> <span style="color:var(--gold);margin-left:4px;">Options ›</span></span>` : ''}
+        ${isCashier && !isFreebie ? `<span style="color:var(--green);">Cash: <strong>${fmtCurrency(cashPrice)}</strong> <span style="color:var(--gold);margin-left:4px;">Options ›</span></span>` : ''}
       </div>
       ${lifecycleBadge}
     </div>
@@ -820,13 +830,18 @@ function renderInventory() {
     }
   }
 
-  // Sort models by selling price (lowest to highest, or descending for Cashier toggle), then name
+  // Sort freebies first at the very top, then sort models by selling price
   const sortDir = isCashier && state.invPriceSort === 'desc' ? -1 : 1;
-  filteredScoped.sort(
-    (a, b) =>
+  filteredScoped.sort((a, b) => {
+    const fa = isFreebieAccessory(a) ? 0 : 1;
+    const fb = isFreebieAccessory(b) ? 0 : 1;
+    if (fa !== fb) return fa - fb;
+    if (fa === 0) return String(a.model || a.name).localeCompare(String(b.model || b.name));
+    return (
       sortDir * ((Number(a.base_price) || 0) - (Number(b.base_price) || 0)) ||
       String(a.model || a.name).localeCompare(String(b.model || b.name))
-  );
+    );
+  });
   document.getElementById('inventorySummaryGrid').innerHTML = `
     <div class="mini-kpi">
       <div class="mini-kpi-top">
@@ -882,25 +897,28 @@ function renderInventory() {
       : '';
     const availText = item.scopedAvail > 0 ? `${fmtNum(item.scopedAvail)} avail` : 'Out of stock';
     const availStyle = item.scopedAvail > 0 ? '' : 'color:#f87171;border-color:rgba(248,113,113,.35);';
+    const isFreebie = isFreebieAccessory(item);
     return `
       <div class="shopee-card" data-inv-calc-id="${item.id}">
         <div class="shopee-thumb">
           ${imgHtml}
-          <span class="shopee-badge-brand" style="color:${accent};">${brandLabel}</span>
+          <span class="shopee-badge-brand" style="color:${accent};">${isFreebie ? 'FREEBIE' : brandLabel}</span>
           <span class="shopee-badge-avail" style="${availStyle}">${availText}</span>
           ${installBanner}
         </div>
         <div class="shopee-body">
           <div class="shopee-title"><img src="${LOGO_SQUARE_SRC}" alt="Logo" class="shopee-mall-logo" />${item.model || item.name}</div>
           <div>
-            <div class="shopee-price-row">
-              <span class="shopee-price-main">${fmtCurrency(cashPrice)}</span>
-              <span class="shopee-discount-pill">-${cashPct}% Cash</span>
-            </div>
-            <div class="shopee-srp-sub">
-              <span>SRP ${fmtCurrency(item.base_price)}</span>
-              <span style="color:var(--gold);">Installment ›</span>
-            </div>
+            ${isFreebie
+              ? `<div class="shopee-price-row"><span class="shopee-price-main" style="color:var(--green);">FREEBIE</span></div>`
+              : `<div class="shopee-price-row">
+                  <span class="shopee-price-main">${fmtCurrency(cashPrice)}</span>
+                  <span class="shopee-discount-pill">-${cashPct}% Cash</span>
+                </div>
+                <div class="shopee-srp-sub">
+                  <span>SRP ${fmtCurrency(item.base_price)}</span>
+                  <span style="color:var(--gold);">Installment ›</span>
+                </div>`}
           </div>
         </div>
       </div>
@@ -935,7 +953,7 @@ function renderInventory() {
   } else {
     const groups = new Map();
     for (const item of filteredScoped) {
-      const brand = item.brand || item.category || 'Other';
+      const brand = isFreebieAccessory(item) ? 'FREEBIES' : (item.brand || item.category || 'Other');
       if (!groups.has(brand)) groups.set(brand, []);
       groups.get(brand).push(item);
     }
@@ -966,6 +984,8 @@ function renderInventory() {
     };
     grid.innerHTML = Array.from(groups.entries())
       .sort((a, b) => {
+        if (a[0] === 'FREEBIES') return -1;
+        if (b[0] === 'FREEBIES') return 1;
         const ra = BRAND_ORDER.indexOf(a[0].toLowerCase());
         const rb = BRAND_ORDER.indexOf(b[0].toLowerCase());
         const oa = ra < 0 ? BRAND_ORDER.length : ra;
@@ -2612,7 +2632,8 @@ const PDF_BRAND_ORDER = [
 function groupInventoryForPdf(items) {
   const map = new Map();
   for (const item of items) {
-    const rawBrand = String(item.brand || item.category || 'OTHER').trim() || 'OTHER';
+    const isFreebie = isFreebieAccessory(item);
+    const rawBrand = isFreebie ? 'FREEBIES' : (String(item.brand || item.category || 'OTHER').trim() || 'OTHER');
     const key = rawBrand.toLowerCase();
     if (!map.has(key)) {
       map.set(key, { brand: rawBrand.toUpperCase(), items: [] });
@@ -2622,12 +2643,17 @@ function groupInventoryForPdf(items) {
   const groups = Array.from(map.values());
   groups.forEach((g) => {
     g.items.sort((a, b) => {
+      if (g.brand === 'FREEBIES') {
+        return String(a.model || a.name).localeCompare(String(b.model || b.name));
+      }
       const pDiff = (Number(a.base_price) || 0) - (Number(b.base_price) || 0);
       if (pDiff !== 0) return pDiff;
       return String(a.model || a.name).localeCompare(String(b.model || b.name));
     });
   });
   groups.sort((a, b) => {
+    if (a.brand === 'FREEBIES') return -1;
+    if (b.brand === 'FREEBIES') return 1;
     const ia = PDF_BRAND_ORDER.indexOf(a.brand.toLowerCase());
     const ib = PDF_BRAND_ORDER.indexOf(b.brand.toLowerCase());
     if (ia !== -1 && ib !== -1) return ia - ib;
@@ -2806,7 +2832,9 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
 
       group.items.forEach((item) => {
         const priceNum = Number(item.base_price) || 0;
-        const priceText = 'PHP ' + priceNum.toLocaleString('en-PH', { maximumFractionDigits: 0 });
+        const priceText = isFreebieAccessory(item)
+          ? ''
+          : 'PHP ' + priceNum.toLocaleString('en-PH', { maximumFractionDigits: 0 });
         const dayCells = panelDays.map((d) => {
           if (blankQuantities) return '';
           const val = item.daily ? item.daily[d - 1] : (d <= asOfDay ? item.exportQty : null);
@@ -3000,7 +3028,8 @@ async function downloadInventoryExcel() {
         }
 
         group.items.forEach((item) => {
-          const priceNum = Number(item.base_price) || 0;
+          const isFreebie = isFreebieAccessory(item);
+          const priceNum = isFreebie ? null : (Number(item.base_price) || 0);
           const dayVals = daysHeaders.map((d) => {
             const val = item.daily ? item.daily[d - 1] : null;
             return val !== null && Number(val) > 0 ? Number(val) : null;
@@ -3014,7 +3043,7 @@ async function downloadInventoryExcel() {
               cell.alignment = { vertical: 'middle', horizontal: 'left' };
             } else if (colNumber === 2) {
               cell.alignment = { vertical: 'middle', horizontal: 'right' };
-              cell.numFmt = '"PHP "#,##0';
+              if (priceNum !== null) cell.numFmt = '"PHP "#,##0';
             } else {
               cell.alignment = { vertical: 'middle', horizontal: 'right' };
               if (cell.value !== null && cell.value !== '') cell.numFmt = '#,##0';
