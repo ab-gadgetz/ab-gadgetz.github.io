@@ -24,6 +24,7 @@ const pubState = {
   data: null,
   selectedBrand: 'ALL',
   priceSort: 'asc',
+  compareIds: [],
 };
 
 function fmtCurrency(n) {
@@ -228,6 +229,7 @@ function renderPublicCatalog() {
       const installBanner = mo4 > 0
         ? `<div class="shopee-badge-installment"><span>4-Mo Est</span><span>${fmtCurrency(mo4)}/mo</span></div>`
         : '';
+      const isComp = pubState.compareIds.includes(item.productId);
       return `
         <div class="shopee-card" data-calc-id="${item.productId}">
           <div class="shopee-thumb">
@@ -247,6 +249,9 @@ function renderPublicCatalog() {
                 <span>SRP ${fmtCurrency(item.basePrice)}</span>
                 <span style="color:var(--gold);">Installment ›</span>
               </div>
+              <button type="button" class="shopee-compare-btn ${isComp ? 'selected' : ''}" data-compare-id="${item.productId}">
+                ${isComp ? '✓ In Compare' : '+ Compare'}
+              </button>
             </div>
           </div>
         </div>
@@ -254,13 +259,197 @@ function renderPublicCatalog() {
     })
     .join('');
 
+  grid.querySelectorAll('.shopee-compare-btn[data-compare-id]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleCompareProduct(btn.dataset.compareId);
+    });
+  });
+
   grid.querySelectorAll('.shopee-card[data-calc-id]').forEach((card) => {
     card.addEventListener('click', () => {
       const item = catalog.find((c) => c.productId === card.dataset.calcId);
       if (item) openCustomerCalcModal(item, branch, installmentRates);
     });
   });
+  renderCompareBar();
 }
+
+function parseRamRomScore(modelStr, brandStr) {
+  const s = String(modelStr || '');
+  const slashMatch = s.match(/\b(\d{1,2})\s*\/\s*(\d{2,4})\s*(?:gb)?\b/i);
+  if (slashMatch) {
+    const ram = Number(slashMatch[1]) || 0;
+    const rom = Number(slashMatch[2]) || 0;
+    return { label: `${ram}/${rom}GB`, ram, rom, score: ram * 10000 + rom };
+  }
+  const isApple = /\b(iphone|ipad|apple)\b/i.test(s) || /^apple$/i.test(String(brandStr || '').trim());
+  if (isApple) {
+    const ram = detectAppleRam(s);
+    const romMatch = s.match(/\b(32|64|128|256|512|1024)\s*(?:gb)?\b/i);
+    const rom = romMatch ? Number(romMatch[1]) || 0 : 0;
+    const label = ram && rom ? `${ram}/${rom}GB` : ram ? `${ram}GB RAM` : rom ? `${rom}GB` : '—';
+    return { label, ram, rom, score: ram * 10000 + rom };
+  }
+  const romMatch = s.match(/\b(32|64|128|256|512|1024)\s*gb\b/i);
+  if (romMatch) {
+    const rom = Number(romMatch[1]) || 0;
+    return { label: `${rom}GB`, ram: 0, rom, score: rom };
+  }
+  return { label: '—', ram: 0, rom: 0, score: 0 };
+}
+
+function getLowestMonthlyPlan(srp, rates) {
+  if (!srp || srp <= 0 || !Array.isArray(rates) || !rates.length) return null;
+  const dp = suggestedDownPayment(srp);
+  if (dp >= srp) return null;
+  let best = null;
+  for (const r of rates) {
+    const plan = computeInstallmentPlan(srp, dp, Number(r.months), Number(r.monthly_rate));
+    if (!best || plan.monthlyAmortization < best.monthlyAmortization) {
+      best = plan;
+    }
+  }
+  return best;
+}
+
+function toggleCompareProduct(productId) {
+  const idx = pubState.compareIds.indexOf(productId);
+  if (idx >= 0) {
+    pubState.compareIds.splice(idx, 1);
+  } else {
+    if (pubState.compareIds.length >= 3) {
+      alert('You can compare up to 3 products at a time. Remove one first.');
+      return;
+    }
+    pubState.compareIds.push(productId);
+  }
+  renderPublicCatalog();
+}
+
+function renderCompareBar() {
+  const bar = document.getElementById('pubCompareBar');
+  const itemsWrap = document.getElementById('pubCompareItems');
+  const openBtn = document.getElementById('pubCompareOpenBtn');
+  if (!bar || !itemsWrap || !openBtn) return;
+
+  const catalog = pubState.data?.catalog || [];
+  pubState.compareIds = pubState.compareIds.filter((id) => catalog.some((c) => c.productId === id));
+  const count = pubState.compareIds.length;
+  bar.classList.toggle('hidden', count === 0);
+
+  itemsWrap.innerHTML = pubState.compareIds
+    .map((id) => {
+      const it = catalog.find((c) => c.productId === id);
+      if (!it) return '';
+      return `<span class="pub-compare-chip"><span>${it.model}</span><button type="button" data-remove-compare="${id}" aria-label="Remove">✕</button></span>`;
+    })
+    .join('');
+
+  itemsWrap.querySelectorAll('[data-remove-compare]').forEach((b) => {
+    b.addEventListener('click', () => toggleCompareProduct(b.dataset.removeCompare));
+  });
+
+  openBtn.textContent = `Compare (${count})`;
+  openBtn.disabled = count < 2;
+  openBtn.style.opacity = count < 2 ? '0.55' : '1';
+}
+
+function openCompareModal() {
+  if (pubState.compareIds.length < 2 || !pubState.data) return;
+  const { branch, catalog, installmentRates } = pubState.data;
+  const items = pubState.compareIds
+    .map((id) => catalog.find((c) => c.productId === id))
+    .filter(Boolean);
+  if (items.length < 2) return;
+
+  const enriched = items.map((it) => {
+    const spec = parseRamRomScore(it.model, it.brand);
+    const lowestPlan = getLowestMonthlyPlan(it.basePrice, installmentRates);
+    return {
+      item: it,
+      spec,
+      cashPrice: Number(it.cashPrice) || 0,
+      lowestMonthly: lowestPlan ? lowestPlan.monthlyAmortization : Infinity,
+      lowestMonths: lowestPlan ? lowestPlan.months : 0,
+      minDp: suggestedDownPayment(it.basePrice),
+    };
+  });
+
+  const bestSpecScore = Math.max(...enriched.map((e) => e.spec.score));
+  const bestCashPrice = Math.min(...enriched.map((e) => e.cashPrice));
+  const bestMonthly = Math.min(...enriched.map((e) => e.lowestMonthly));
+
+  const wrap = document.getElementById('pubCompareTableWrap');
+  wrap.innerHTML = `
+    <div class="compare-grid" style="grid-template-columns:repeat(${enriched.length}, minmax(170px, 1fr));">
+      ${enriched
+        .map((e) => {
+          const it = e.item;
+          const winSpec = bestSpecScore > 0 && e.spec.score === bestSpecScore;
+          const winCash = bestCashPrice > 0 && e.cashPrice === bestCashPrice;
+          const winMonthly = Number.isFinite(bestMonthly) && e.lowestMonthly === bestMonthly;
+          const imgHtml = it.imageUrl
+            ? `<img src="${it.imageUrl}" alt="${it.model}" />`
+            : `<span style="font-size:36px;">📱</span>`;
+          return `
+            <div class="compare-col">
+              <div class="compare-photo">${imgHtml}</div>
+              <div>
+                <div style="font-size:10.5px;font-weight:800;color:var(--gold);">${it.brand}</div>
+                <div style="font-size:13px;font-weight:800;color:var(--text);line-height:1.25;">${it.model}</div>
+              </div>
+              <div class="compare-metric">
+                <div class="compare-metric-label">RAM / ROM</div>
+                <div class="compare-metric-val">${e.spec.label}</div>
+                ${winSpec ? `<span class="compare-win-badge">🏆 Best RAM/ROM</span>` : ''}
+              </div>
+              <div class="compare-metric">
+                <div class="compare-metric-label">Cash Price</div>
+                <div class="compare-metric-val" style="color:var(--green);">${fmtCurrency(e.cashPrice)}</div>
+                <div class="small muted">SRP ${fmtCurrency(it.basePrice)}</div>
+                ${winCash ? `<span class="compare-win-badge">🏆 Best Cash Price</span>` : ''}
+              </div>
+              <div class="compare-metric">
+                <div class="compare-metric-label">Lowest Monthly</div>
+                <div class="compare-metric-val" style="color:var(--gold-bright);">
+                  ${Number.isFinite(e.lowestMonthly) ? `${fmtCurrency(e.lowestMonthly)}/mo` : '—'}
+                </div>
+                <div class="small muted">${e.lowestMonths ? `${e.lowestMonths} mos • DP ${fmtCurrency(e.minDp)}` : ''}</div>
+                ${winMonthly ? `<span class="compare-win-badge">🏆 Lowest Monthly</span>` : ''}
+              </div>
+              <button type="button" class="secondary compare-open-terms-btn" data-id="${it.productId}" style="margin-top:auto;padding:7px;font-size:11.5px;border-color:var(--gold);color:var(--gold-bright);">View Installment Terms</button>
+            </div>
+          `;
+        })
+        .join('')}
+    </div>
+  `;
+
+  wrap.querySelectorAll('.compare-open-terms-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.getElementById('pubCompareModal').classList.add('hidden');
+      const it = catalog.find((c) => c.productId === btn.dataset.id);
+      if (it) openCustomerCalcModal(it, branch, installmentRates);
+    });
+  });
+
+  document.getElementById('pubCompareModal').classList.remove('hidden');
+}
+
+document.getElementById('pubCompareClearBtn')?.addEventListener('click', () => {
+  pubState.compareIds = [];
+  renderPublicCatalog();
+});
+document.getElementById('pubCompareOpenBtn')?.addEventListener('click', openCompareModal);
+document.getElementById('closeCompareModalBtn')?.addEventListener('click', () => {
+  document.getElementById('pubCompareModal').classList.add('hidden');
+});
+document.getElementById('pubCompareModal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'pubCompareModal') {
+    document.getElementById('pubCompareModal').classList.add('hidden');
+  }
+});
 
 // Installment & Cash Calculator Modal + Photo Lightbox
 const calcModalState = { item: null, branch: null, rates: [], photos: [], photoIdx: 0, selectedMonths: null };
