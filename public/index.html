@@ -684,6 +684,14 @@
           </div>
         </div>
 
+        <div id="ghTokenWrap" class="sub-panel hidden" style="margin-bottom:12px;">
+          <label for="ghPublishTokenInput">GITHUB PUBLISH TOKEN (FOR NO-PC PHONE UPDATES)</label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:4px;">
+            <input type="password" id="ghPublishTokenInput" placeholder="Paste GitHub Token once to publish PINs from phone without PC" style="flex:1;min-width:220px;" />
+          </div>
+          <p class="muted small" style="margin:4px 0 0;">Saved only on this device. Leave blank if publishing from your PC.</p>
+        </div>
+
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
           <button type="button" id="saveStaffPinsBtn">SAVE STAFF PINS</button>
           <button type="button" class="secondary publish-github-btn" style="border-color:var(--gold);color:var(--gold-bright);">🚀 Publish PINs to Online Staff Portal</button>

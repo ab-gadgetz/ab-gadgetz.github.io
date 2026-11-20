@@ -186,11 +186,61 @@ const DEFAULT_GH_STAFF_PINS = {
   'CI::br-bonifacio': '223333',
 };
 
+async function getGhStaffPinsPayload() {
+  const urls = [
+    `https://raw.githubusercontent.com/ab-gadgetz/ab-gadgetz.github.io/main/public/staff-pins.json?v=${Date.now()}`,
+    `../data/staff-pins.json?v=${Date.now()}`,
+  ];
+  for (const url of urls) {
+    try {
+      const r = await fetch(url, { cache: 'no-store' });
+      if (r.ok) {
+        const j = await r.json();
+        if (j && (j.hashes || j.encryptedPins)) return j;
+      }
+    } catch {}
+  }
+  try {
+    const bundle = await getGhBundle(true);
+    if (bundle?.staffPinHashes) {
+      return { hashes: bundle.staffPinHashes, encryptedPins: null };
+    }
+  } catch {}
+  return null;
+}
+
+async function deriveStaffEncKey() {
+  const ownerHash = 'WoqyJ8xhvUMB3110oE1lkqUeZm53MSMWRkMIh/jkLB4=';
+  const raw = new TextEncoder().encode(`abg-staff-enc:${ownerHash}`);
+  const keyBytes = await crypto.subtle.digest('SHA-256', raw);
+  return crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+}
+
+async function decryptGhStaffPins(encryptedPins) {
+  if (!encryptedPins?.iv || !encryptedPins?.data) return null;
+  const key = await deriveStaffEncKey();
+  const iv = Uint8Array.from(atob(encryptedPins.iv), (c) => c.charCodeAt(0));
+  const data = Uint8Array.from(atob(encryptedPins.data), (c) => c.charCodeAt(0));
+  const plainBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+  return JSON.parse(new TextDecoder().decode(plainBuf));
+}
+
+async function encryptGhStaffPins(pinsObj) {
+  const key = await deriveStaffEncKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plain = new TextEncoder().encode(JSON.stringify(pinsObj));
+  const cipherBuf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plain);
+  return {
+    iv: btoa(String.fromCharCode(...iv)),
+    data: btoa(String.fromCharCode(...new Uint8Array(cipherBuf))),
+  };
+}
+
 async function verifyGhStaffPin(role, branchId, pin) {
   const key = `${role}::${branchId}`;
   try {
-    const bundle = await getGhBundle(true);
-    const hashes = bundle?.staffPinHashes;
+    const payload = await getGhStaffPinsPayload();
+    const hashes = payload?.hashes;
     if (hashes && hashes[key]) {
       const salt = 'abg-staff-pin-salt-v1';
       const bytes = new TextEncoder().encode(`${salt}:${pin}`);
@@ -2993,6 +3043,9 @@ async function bootApp() {
 
 async function loadStaffPins() {
   const msg = document.getElementById('staffPinsMsg');
+  const tokenWrap = document.getElementById('ghTokenWrap');
+  const tokenInput = document.getElementById('ghPublishTokenInput');
+  const saveBtn = document.getElementById('saveStaffPinsBtn');
   const keys = [
     'CASHIER::br-molave',
     'CASHIER::br-tambulig',
@@ -3001,21 +3054,74 @@ async function loadStaffPins() {
     'CI::br-tambulig',
     'CI::br-bonifacio',
   ];
+
+  const fillInputs = (pins) => {
+    for (const key of keys) {
+      const el = document.getElementById(`pin_${key.replace('::', '_')}`);
+      if (el) el.value = pins[key] || DEFAULT_GH_STAFF_PINS[key] || '';
+    }
+  };
+
   if (IS_STATIC_GH) {
-    if (msg) msg.textContent = 'To edit Staff PINs, open your Local Admin Portal (http://localhost:3456), save your new PINs, and click 🚀 Publish PINs to Online Staff Portal.';
+    if (tokenWrap) tokenWrap.classList.remove('hidden');
+    if (tokenInput) tokenInput.value = localStorage.getItem('bs_gh_pub_token') || '';
+    if (saveBtn) saveBtn.textContent = 'SAVE & PUBLISH STAFF PINS';
+    try {
+      const payload = await getGhStaffPinsPayload();
+      const decrypted = await decryptGhStaffPins(payload?.encryptedPins);
+      if (decrypted) {
+        fillInputs(decrypted);
+        if (msg) msg.textContent = 'Synced current Staff PINs. To update from phone without PC, enter your GitHub Token above once and click SAVE & PUBLISH STAFF PINS.';
+        return;
+      }
+    } catch {}
+    fillInputs(DEFAULT_GH_STAFF_PINS);
+    if (msg) msg.textContent = 'Showing default Staff PINs. Publish from localhost or enter your GitHub Token above to save changes without a PC.';
     return;
   }
+
+  if (tokenWrap) tokenWrap.classList.add('hidden');
+  if (saveBtn) saveBtn.textContent = 'SAVE STAFF PINS';
   try {
     const res = await api('/api/staff-pins');
-    const pins = res.pins || {};
-    for (const key of keys) {
-      const inputId = `pin_${key.replace('::', '_')}`;
-      const el = document.getElementById(inputId);
-      if (el && pins[key]) el.value = pins[key];
-    }
+    fillInputs(res.pins || {});
     if (msg) msg.textContent = '';
   } catch (err) {
     if (msg) msg.textContent = err.message;
+  }
+}
+
+async function publishStaffPinsViaGhApi(token, jsonText) {
+  const repo = 'ab-gadgetz/ab-gadgetz.github.io';
+  const paths = ['public/staff-pins.json', 'dist/data/staff-pins.json'];
+  const contentB64 = btoa(unescape(encodeURIComponent(jsonText)));
+  for (const filePath of paths) {
+    const apiUrl = `https://api.github.com/repos/${repo}/contents/${filePath}`;
+    let sha;
+    const getRes = await fetch(apiUrl, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+    });
+    if (getRes.ok) {
+      const info = await getRes.json();
+      sha = info.sha;
+    }
+    const putRes = await fetch(apiUrl, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message: 'Update Staff PINs from Online Admin Portal',
+        content: contentB64,
+        ...(sha ? { sha } : {}),
+      }),
+    });
+    if (!putRes.ok) {
+      const errData = await putRes.json().catch(() => ({}));
+      throw new Error(errData.message || `GitHub API error (${putRes.status})`);
+    }
   }
 }
 
@@ -3039,6 +3145,32 @@ document.getElementById('saveStaffPinsBtn')?.addEventListener('click', async () 
     }
     pins[key] = val;
   }
+
+  if (IS_STATIC_GH) {
+    const token = (document.getElementById('ghPublishTokenInput')?.value || '').trim();
+    if (!token) {
+      if (msg) msg.textContent = 'Paste your GitHub Token in the box above once so you can publish PIN changes from your phone without a PC.';
+      return;
+    }
+    localStorage.setItem('bs_gh_pub_token', token);
+    if (msg) msg.textContent = 'Publishing new Staff PINs to GitHub...';
+    try {
+      const hashes = {};
+      for (const [k, v] of Object.entries(pins)) {
+        const bytes = new TextEncoder().encode(`abg-staff-pin-salt-v1:${v}`);
+        const digest = await crypto.subtle.digest('SHA-256', bytes);
+        hashes[k] = btoa(String.fromCharCode(...new Uint8Array(digest)));
+      }
+      const encryptedPins = await encryptGhStaffPins(pins);
+      const payloadText = JSON.stringify({ updatedAt: new Date().toISOString(), hashes, encryptedPins }, null, 2);
+      await publishStaffPinsViaGhApi(token, payloadText);
+      if (msg) msg.textContent = '✓ Staff PINs published! Your Staff Portal (/staff/) now uses the new PINs immediately—no PC needed.';
+    } catch (err) {
+      if (msg) msg.textContent = `Publish failed: ${err.message}`;
+    }
+    return;
+  }
+
   try {
     await api('/api/staff-pins', { method: 'PUT', body: JSON.stringify({ pins }) });
     if (msg) msg.textContent = 'Staff PINs saved locally! Click "🚀 Publish PINs to Online Staff Portal" to sync to https://ab-gadgetz.github.io/staff/.';

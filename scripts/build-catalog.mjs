@@ -570,6 +570,19 @@ async function main() {
     liveSyncNote,
   };
   fs.writeFileSync(path.join(distDir, 'data', 'admin-bundle.json'), JSON.stringify(adminBundle));
+  const staffPinsJsonPath = path.join(publicDir, 'staff-pins.json');
+  if (fs.existsSync(staffPinsJsonPath)) {
+    fs.copyFileSync(staffPinsJsonPath, path.join(distDir, 'data', 'staff-pins.json'));
+  } else if (seedSnapshot.staff_pin_hashes || seedSnapshot.staff_pins_enc) {
+    fs.writeFileSync(
+      path.join(distDir, 'data', 'staff-pins.json'),
+      JSON.stringify({
+        updatedAt: syncedAtIso,
+        hashes: seedSnapshot.staff_pin_hashes || {},
+        encryptedPins: seedSnapshot.staff_pins_enc || null,
+      })
+    );
+  }
   if (fs.existsSync(path.join(publicDir, 'index.html'))) {
     fs.mkdirSync(path.join(distDir, 'admin'), { recursive: true });
     fs.mkdirSync(path.join(distDir, 'staff'), { recursive: true });
