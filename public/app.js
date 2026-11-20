@@ -1824,8 +1824,8 @@ function renderRestockCards() {
     const modelsHtml = models
       .map((m) => {
         const thumbHtml = m.imageUrl
-          ? `<img src="${m.imageUrl}" alt="${m.displayModel}" class="model-thumb" loading="lazy" />`
-          : `<div class="model-thumb model-thumb-empty">📱</div>`;
+          ? `<img src="${m.imageUrl}" alt="${m.displayModel}" style="width:48px;height:48px;object-fit:contain;border-radius:8px;background:#fff;flex-shrink:0;padding:2px;" loading="lazy" />`
+          : `<div style="width:48px;height:48px;border-radius:8px;background:rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">📱</div>`;
         const branchRowsHtml = m.rows
           .map(
             (r) => `
@@ -1868,7 +1868,7 @@ function renderRestockCards() {
           </div>
           <span class="muted small">${isOpen ? '▲ Hide' : '▼ Show'}</span>
         </div>
-        ${isOpen ? `<div class="model-grid" style="margin-top:10px;">${modelsHtml}</div>` : ''}
+        ${isOpen ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:10px;">${modelsHtml}</div>` : ''}
       </div>
     `);
   }
