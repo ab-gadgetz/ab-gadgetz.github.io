@@ -273,8 +273,48 @@
 
       <!-- Tool Panel: Restock / Supplier Reorder -->
       <div id="tool-restock" class="sub-panel hidden">
-        <h3 style="margin-top:0;">Supplier Reorder &amp; Order Budget</h3>
-        <div class="summary-grid" id="budgetSummaryGrid" style="margin-bottom:12px;"></div>
+        <div class="sub-panel" style="padding:12px;margin-bottom:12px;">
+          <div id="orderFundsToggle" style="display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <strong style="font-size:12px;letter-spacing:0.6px;color:var(--text);">ORDER FUNDS &amp; NET BUDGET</strong>
+              <span id="orderFundsMissingBadge" class="badge badge-danger hidden" style="font-size:10px;">1 due date missing</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <strong id="orderFundsNetHeader" style="color:var(--gold-bright);font-size:13px;">Net ₱0.00</strong>
+              <span id="orderFundsCaret" class="muted" style="font-weight:700;">+</span>
+            </div>
+          </div>
+
+          <div id="orderFundsBody" class="hidden" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-soft);">
+            <div style="font-size:11px;font-weight:800;letter-spacing:0.6px;color:var(--muted);margin-bottom:8px;">AVAILABLE CASH</div>
+            <div class="grid-2" style="gap:10px;margin-bottom:12px;">
+              <div>
+                <label for="fundMetrobank">Cash in Bank — Metrobank</label>
+                <input type="number" id="fundMetrobank" min="0" step="0.01" placeholder="0.00" />
+              </div>
+              <div>
+                <label for="fundMaribank">Cash in Bank — MariBank</label>
+                <input type="number" id="fundMaribank" min="0" step="0.01" placeholder="0.00" />
+              </div>
+              <div>
+                <label for="fundGcash">GCash</label>
+                <input type="number" id="fundGcash" min="0" step="0.01" placeholder="0.00" />
+              </div>
+            </div>
+
+            <div style="font-size:11px;font-weight:800;letter-spacing:0.6px;color:var(--muted);margin-bottom:4px;">UNDEPOSITED BRANCH SALES</div>
+            <p class="muted small" style="margin:0 0 8px;">Record each unbanked day by branch, sales date, and amount. Mark it deposited when banked: it moves into Metrobank and stops counting as undeposited cash.</p>
+            <div id="undepositedSalesList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px;"></div>
+            <button type="button" id="addUndepositedSaleBtn" class="secondary" style="padding:6px 12px;font-size:11.5px;margin-bottom:14px;">+ ADD BRANCH SALES DAY</button>
+
+            <div style="font-size:11px;font-weight:800;letter-spacing:0.6px;color:var(--muted);margin-bottom:8px;">LESS: BILLS &amp; OTHER DEDUCTIONS</div>
+            <div class="grid-3" style="gap:8px;margin-bottom:10px;" id="creditCardsBudgetGrid"></div>
+            <div id="otherDeductionsList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px;"></div>
+            <button type="button" id="addDeductionBtn" class="secondary" style="padding:6px 12px;font-size:11.5px;margin-bottom:12px;">+ ADD BILL / DEDUCTION</button>
+
+            <div class="summary-grid" id="budgetSummaryGrid"></div>
+          </div>
+        </div>
 
         <div class="sub-panel" style="padding:12px;margin-bottom:12px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">

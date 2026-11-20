@@ -2388,37 +2388,284 @@ async function loadPlanning() {
   renderPlanning();
 }
 
-function renderPlanning() {
-  if (state.budget?.summary) {
-    const s = state.budget.summary;
-    const sumGrid = document.getElementById('budgetSummaryGrid');
-    if (sumGrid) {
-      sumGrid.innerHTML = `
-        <div class="summary-box">
-          TOTAL CASH + UNDEPOSITED
-          <strong>${fmtCurrency(s.totalCash)}</strong>
-          <span class="summary-note">Banks: ${fmtCurrency(s.totalBanks)} • Undeposited: ${fmtCurrency(s.totalUndeposited)}</span>
-        </div>
-        <div class="summary-box">
-          CREDIT CARD BILLS
-          <strong style="color:var(--danger);">${fmtCurrency(s.totalCreditCards)}</strong>
-          <span class="summary-note">Deducted before ordering</span>
-        </div>
-        <div class="summary-box">
-          NET ORDER BUDGET
-          <strong>${fmtCurrency(s.netOrderBudget)}</strong>
-          <span class="summary-note">Available for supplier POs</span>
-        </div>
-      `;
+function getDefaultOrderFunds() {
+  const s = state.budget?.summary;
+  return {
+    metrobank: s?.metrobank ? Number(s.metrobank) : 0,
+    maribank: s?.maribank ? Number(s.maribank) : 0,
+    gcash: s?.gcash ? Number(s.gcash) : 0,
+    undeposited: [],
+    creditCards: [
+      { name: 'METROBANK CREDIT CARD', amount: 0, dueDate: '' },
+      { name: 'EASTWEST GOLD CREDIT CARD', amount: 0, dueDate: '' },
+      { name: 'EASTWEST PLATINUM CREDIT CARD', amount: 0, dueDate: '' },
+    ],
+    deductions: [
+      { label: 'Molave Franchise Share', amount: 0 },
+      { label: 'Tambulig Franchise Share', amount: 0 },
+    ],
+  };
+}
+
+function getOrderFundsState() {
+  if (state.orderFunds) return state.orderFunds;
+  try {
+    const raw = localStorage.getItem('abg_order_funds_v1');
+    if (raw) {
+      state.orderFunds = JSON.parse(raw);
+      return state.orderFunds;
     }
-    const budgetInp = document.getElementById('restockBudgetInput');
-    if (budgetInp && !budgetInp.value && s.netOrderBudget > 0) {
-      budgetInp.value = Number(s.netOrderBudget).toFixed(2);
-    }
+  } catch {
+    // ignore
   }
+  state.orderFunds = getDefaultOrderFunds();
+  return state.orderFunds;
+}
+
+function saveOrderFundsState() {
+  try {
+    localStorage.setItem('abg_order_funds_v1', JSON.stringify(getOrderFundsState()));
+  } catch {
+    // ignore
+  }
+}
+
+function computeOrderFundsTotals(f) {
+  const metrobank = Number(f.metrobank) || 0;
+  const maribank = Number(f.maribank) || 0;
+  const gcash = Number(f.gcash) || 0;
+  const undeposited = (f.undeposited || [])
+    .filter((u) => !u.deposited)
+    .reduce((s, u) => s + (Number(u.amount) || 0), 0);
+  const totalCash = metrobank + maribank + gcash + undeposited;
+  const totalCards = (f.creditCards || []).reduce((s, c) => s + (Number(c.amount) || 0), 0);
+  const totalOther = (f.deductions || []).reduce((s, d) => s + (Number(d.amount) || 0), 0);
+  const totalBills = totalCards + totalOther;
+  const netOrderBudget = totalCash - totalBills;
+  const missingDueCount = (f.creditCards || []).filter((c) => !String(c.dueDate || '').trim()).length;
+  return { totalCash, totalBills, netOrderBudget, undeposited, missingDueCount };
+}
+
+function updateOrderFundsSummaryUI(syncToInput = true) {
+  const f = getOrderFundsState();
+  const t = computeOrderFundsTotals(f);
+  const netHeader = document.getElementById('orderFundsNetHeader');
+  if (netHeader) netHeader.textContent = `Net ${fmtCurrency(t.netOrderBudget)}`;
+  const missBadge = document.getElementById('orderFundsMissingBadge');
+  if (missBadge) {
+    missBadge.classList.toggle('hidden', t.missingDueCount === 0);
+    missBadge.textContent = `${t.missingDueCount} due date missing`;
+  }
+  const sumGrid = document.getElementById('budgetSummaryGrid');
+  if (sumGrid) {
+    sumGrid.innerHTML = `
+      <div class="summary-box">
+        TOTAL CASH
+        <strong>${fmtCurrency(t.totalCash)}</strong>
+      </div>
+      <div class="summary-box">
+        TOTAL BILLS
+        <strong style="color:var(--danger);">${fmtCurrency(t.totalBills)}</strong>
+      </div>
+      <div class="summary-box" style="border-color:var(--gold);">
+        NET ORDER BUDGET
+        <strong style="color:var(--gold-bright);">${fmtCurrency(t.netOrderBudget)}</strong>
+      </div>
+    `;
+  }
+  const budgetInp = document.getElementById('restockBudgetInput');
+  if (budgetInp && syncToInput) {
+    budgetInp.value = Math.max(0, t.netOrderBudget).toFixed(2);
+  }
+}
+
+function renderOrderFundsPanel() {
+  const f = getOrderFundsState();
+  const mEl = document.getElementById('fundMetrobank');
+  const mbEl = document.getElementById('fundMaribank');
+  const gEl = document.getElementById('fundGcash');
+  if (mEl) mEl.value = f.metrobank || '';
+  if (mbEl) mbEl.value = f.maribank || '';
+  if (gEl) gEl.value = f.gcash || '';
+
+  const uList = document.getElementById('undepositedSalesList');
+  if (uList) {
+    uList.innerHTML = (f.undeposited || []).length
+      ? f.undeposited
+          .map(
+            (u, idx) => `
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;background:rgba(255,255,255,0.03);padding:6px 8px;border-radius:8px;border:1px solid var(--border-soft);">
+            <select class="fund-undep-branch" data-idx="${idx}" style="width:auto;padding:5px 8px;font-size:12px;">
+              <option value="Molave" ${u.branch === 'Molave' ? 'selected' : ''}>Molave</option>
+              <option value="Tambulig" ${u.branch === 'Tambulig' ? 'selected' : ''}>Tambulig</option>
+              <option value="Bonifacio" ${u.branch === 'Bonifacio' ? 'selected' : ''}>Bonifacio</option>
+            </select>
+            <input type="date" class="fund-undep-date" data-idx="${idx}" value="${u.date || ''}" style="width:auto;padding:5px 8px;font-size:12px;" />
+            <input type="number" class="fund-undep-amt" data-idx="${idx}" value="${u.amount || ''}" min="0" step="0.01" placeholder="Amount" style="flex:1;min-width:100px;padding:5px 8px;font-size:12px;" />
+            <label style="display:flex;align-items:center;gap:5px;margin:0;font-size:11px;font-weight:700;cursor:pointer;">
+              <input type="checkbox" class="fund-undep-dep" data-idx="${idx}" ${u.deposited ? 'checked' : ''} style="width:15px;height:15px;margin:0;accent-color:var(--gold);" />
+              <span>DEPOSITED</span>
+            </label>
+            <button type="button" class="secondary fund-undep-del" data-idx="${idx}" style="padding:4px 8px;font-size:12px;min-height:0;">✕</button>
+          </div>`
+          )
+          .join('')
+      : '<div class="muted small">No undeposited branch sales recorded.</div>';
+
+    uList.querySelectorAll('.fund-undep-branch').forEach((el) => {
+      el.addEventListener('change', (e) => {
+        f.undeposited[Number(e.target.dataset.idx)].branch = e.target.value;
+        saveOrderFundsState();
+      });
+    });
+    uList.querySelectorAll('.fund-undep-date').forEach((el) => {
+      el.addEventListener('change', (e) => {
+        f.undeposited[Number(e.target.dataset.idx)].date = e.target.value;
+        saveOrderFundsState();
+      });
+    });
+    uList.querySelectorAll('.fund-undep-amt').forEach((el) => {
+      el.addEventListener('input', (e) => {
+        f.undeposited[Number(e.target.dataset.idx)].amount = Number(e.target.value) || 0;
+        saveOrderFundsState();
+        updateOrderFundsSummaryUI(true);
+      });
+    });
+    uList.querySelectorAll('.fund-undep-dep').forEach((el) => {
+      el.addEventListener('change', (e) => {
+        const idx = Number(e.target.dataset.idx);
+        const row = f.undeposited[idx];
+        const amt = Number(row.amount) || 0;
+        if (e.target.checked && !row.deposited) {
+          row.deposited = true;
+          f.metrobank = Number(((Number(f.metrobank) || 0) + amt).toFixed(2));
+        } else if (!e.target.checked && row.deposited) {
+          row.deposited = false;
+          f.metrobank = Math.max(0, Number(((Number(f.metrobank) || 0) - amt).toFixed(2)));
+        }
+        saveOrderFundsState();
+        renderOrderFundsPanel();
+      });
+    });
+    uList.querySelectorAll('.fund-undep-del').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        f.undeposited.splice(Number(e.target.dataset.idx), 1);
+        saveOrderFundsState();
+        renderOrderFundsPanel();
+      });
+    });
+  }
+
+  const ccGrid = document.getElementById('creditCardsBudgetGrid');
+  if (ccGrid) {
+    ccGrid.innerHTML = (f.creditCards || [])
+      .map(
+        (c, idx) => `
+        <div class="sub-panel" style="padding:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;margin-bottom:6px;">
+            <strong style="font-size:11px;">${c.name}</strong>
+            ${!String(c.dueDate || '').trim() ? '<span class="badge badge-danger" style="font-size:9px;">DUE DATE MISSING</span>' : ''}
+          </div>
+          <label style="font-size:10px;">BILL AMOUNT</label>
+          <input type="number" class="fund-cc-amt" data-idx="${idx}" value="${c.amount || ''}" min="0" step="0.01" placeholder="₱0" style="padding:5px 8px;font-size:12px;margin-bottom:6px;" />
+          <label style="font-size:10px;">DUE DATE</label>
+          <input type="date" class="fund-cc-due" data-idx="${idx}" value="${c.dueDate || ''}" style="padding:5px 8px;font-size:12px;" />
+        </div>`
+      )
+      .join('');
+
+    ccGrid.querySelectorAll('.fund-cc-amt').forEach((el) => {
+      el.addEventListener('input', (e) => {
+        f.creditCards[Number(e.target.dataset.idx)].amount = Number(e.target.value) || 0;
+        saveOrderFundsState();
+        updateOrderFundsSummaryUI(true);
+      });
+    });
+    ccGrid.querySelectorAll('.fund-cc-due').forEach((el) => {
+      el.addEventListener('change', (e) => {
+        f.creditCards[Number(e.target.dataset.idx)].dueDate = e.target.value;
+        saveOrderFundsState();
+        renderOrderFundsPanel();
+      });
+    });
+  }
+
+  const dList = document.getElementById('otherDeductionsList');
+  if (dList) {
+    dList.innerHTML = (f.deductions || [])
+      .map(
+        (d, idx) => `
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input type="text" class="fund-ded-lbl" data-idx="${idx}" value="${d.label || ''}" placeholder="Bill / Deduction name" style="flex:2;padding:5px 8px;font-size:12px;" />
+          <input type="number" class="fund-ded-amt" data-idx="${idx}" value="${d.amount || ''}" min="0" step="0.01" placeholder="0.00" style="flex:1;padding:5px 8px;font-size:12px;" />
+          <button type="button" class="secondary fund-ded-del" data-idx="${idx}" style="padding:4px 8px;font-size:12px;min-height:0;">✕</button>
+        </div>`
+      )
+      .join('');
+
+    dList.querySelectorAll('.fund-ded-lbl').forEach((el) => {
+      el.addEventListener('input', (e) => {
+        f.deductions[Number(e.target.dataset.idx)].label = e.target.value;
+        saveOrderFundsState();
+      });
+    });
+    dList.querySelectorAll('.fund-ded-amt').forEach((el) => {
+      el.addEventListener('input', (e) => {
+        f.deductions[Number(e.target.dataset.idx)].amount = Number(e.target.value) || 0;
+        saveOrderFundsState();
+        updateOrderFundsSummaryUI(true);
+      });
+    });
+    dList.querySelectorAll('.fund-ded-del').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        f.deductions.splice(Number(e.target.dataset.idx), 1);
+        saveOrderFundsState();
+        renderOrderFundsPanel();
+      });
+    });
+  }
+
+  updateOrderFundsSummaryUI(true);
+}
+
+function renderPlanning() {
+  renderOrderFundsPanel();
   buildRestockDraftPlan();
   renderRestockCards();
 }
+
+document.getElementById('orderFundsToggle')?.addEventListener('click', () => {
+  const body = document.getElementById('orderFundsBody');
+  const caret = document.getElementById('orderFundsCaret');
+  if (!body) return;
+  const hidden = body.classList.toggle('hidden');
+  if (caret) caret.textContent = hidden ? '+' : '−';
+});
+
+['fundMetrobank', 'fundMaribank', 'fundGcash'].forEach((id) => {
+  document.getElementById(id)?.addEventListener('input', (e) => {
+    const f = getOrderFundsState();
+    if (id === 'fundMetrobank') f.metrobank = Number(e.target.value) || 0;
+    if (id === 'fundMaribank') f.maribank = Number(e.target.value) || 0;
+    if (id === 'fundGcash') f.gcash = Number(e.target.value) || 0;
+    saveOrderFundsState();
+    updateOrderFundsSummaryUI(true);
+  });
+});
+
+document.getElementById('addUndepositedSaleBtn')?.addEventListener('click', () => {
+  const f = getOrderFundsState();
+  f.undeposited.push({ branch: 'Molave', date: todayStr, amount: 0, deposited: false });
+  saveOrderFundsState();
+  renderOrderFundsPanel();
+});
+
+document.getElementById('addDeductionBtn')?.addEventListener('click', () => {
+  const f = getOrderFundsState();
+  f.deductions.push({ label: '', amount: 0 });
+  saveOrderFundsState();
+  renderOrderFundsPanel();
+});
 
 document.getElementById('buildRestockPlanBtn')?.addEventListener('click', () => {
   buildRestockDraftPlan();
