@@ -903,6 +903,28 @@
 
       <div id="photoPreviewGrid" style="display:flex;gap:10px;flex-wrap:wrap;"></div>
       <div id="photoMsg" class="status-msg" style="margin-top:10px;"></div>
+
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border-soft);">
+        <div style="font-size:11px;font-weight:800;letter-spacing:0.6px;color:var(--muted);margin-bottom:8px;">SUPPLIER COSTS (₱) — SAVED FOR PAST &amp; FUTURE ORDERS</div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:8px;">
+          <div>
+            <label for="modalCostAb" style="font-size:11px;">AB Main Supplier</label>
+            <input type="number" id="modalCostAb" min="0" step="0.01" placeholder="0" style="padding:6px 8px;font-size:12px;" />
+          </div>
+          <div>
+            <label for="modalCostAk" style="font-size:11px;">A&amp;K</label>
+            <input type="number" id="modalCostAk" min="0" step="0.01" placeholder="0" style="padding:6px 8px;font-size:12px;" />
+          </div>
+          <div>
+            <label for="modalCostOnline" style="font-size:11px;">Online Purchase</label>
+            <input type="number" id="modalCostOnline" min="0" step="0.01" placeholder="0" style="padding:6px 8px;font-size:12px;" />
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <button type="button" id="saveModalCostsBtn" style="padding:6px 14px;font-size:12px;">SAVE COSTS</button>
+          <span id="modalCostsMsg" class="small" style="color:var(--gold-bright);"></span>
+        </div>
+      </div>
     </div>
   </div>
 

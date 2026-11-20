@@ -529,8 +529,83 @@ async function api(url, opts = {}) {
   return data;
 }
 
+function getLocalSupplierCostsMap() {
+  try {
+    return JSON.parse(localStorage.getItem('abg_supplier_costs_v1') || '{}');
+  } catch {
+    return {};
+  }
+}
+
+async function saveProductSupplierCosts(productId, { costAb, costAk, costOnline }) {
+  const prod = state.inventory?.items?.find((i) => i.id === productId);
+  const nextAb = costAb !== '' && costAb !== undefined ? Math.max(0, Number(costAb) || 0) : (Number(prod?.cost_ab) || 0);
+  const nextAk = costAk !== '' && costAk !== undefined ? Math.max(0, Number(costAk) || 0) : (Number(prod?.cost_ak) || 0);
+  const nextOn = costOnline !== '' && costOnline !== undefined ? Math.max(0, Number(costOnline) || 0) : (Number(prod?.cost_online) || 0);
+
+  const valid = [
+    { name: 'AB Main Supplier', val: nextAb },
+    { name: 'A&K', val: nextAk },
+    { name: 'Online Purchase', val: nextOn },
+  ].filter((c) => c.val > 0);
+  valid.sort((a, b) => a.val - b.val);
+  const bestCost = valid.length ? valid[0].val : 0;
+  const bestSupplier = valid.length ? valid[0].name : (prod?.supplier || 'Portal Auto-Import');
+
+  if (prod) {
+    prod.cost_ab = nextAb;
+    prod.cost_ak = nextAk;
+    prod.cost_online = nextOn;
+    if (bestCost > 0) {
+      prod.cost_price = bestCost;
+      prod.supplier = bestSupplier;
+    }
+  }
+
+  const map = getLocalSupplierCostsMap();
+  map[productId] = { cost_ab: nextAb, cost_ak: nextAk, cost_online: nextOn };
+  try {
+    localStorage.setItem('abg_supplier_costs_v1', JSON.stringify(map));
+  } catch {
+    // ignore quota
+  }
+
+  if (!IS_STATIC_GH) {
+    await api('/api/products/costs', {
+      method: 'PATCH',
+      body: JSON.stringify({ productId, costAb: nextAb, costAk: nextAk, costOnline: nextOn }),
+    });
+  }
+
+  // Sync any active restock plan rows for this product
+  if (state.restockPlan?.length && prod) {
+    const mode = document.querySelector('input[name="restockSupplierMode"]:checked')?.value || 'LOWEST';
+    const sup = resolveSupplierForProduct(prod, mode);
+    for (const r of state.restockPlan) {
+      if (r.productId === productId && sup) {
+        r.supplier = sup.supplier;
+        r.unitCost = sup.unitCost;
+      }
+    }
+  }
+  return { nextAb, nextAk, nextOn, bestCost, bestSupplier };
+}
+
 async function loadInventory() {
   state.inventory = await api('/api/inventory');
+  if (IS_STATIC_GH && state.inventory?.items) {
+    const localCosts = getLocalSupplierCostsMap();
+    for (const item of state.inventory.items) {
+      const ov = localCosts[item.id];
+      if (ov) {
+        item.cost_ab = ov.cost_ab;
+        item.cost_ak = ov.cost_ak;
+        item.cost_online = ov.cost_online;
+        const best = [ov.cost_ab, ov.cost_ak, ov.cost_online].filter((v) => Number(v) > 0).sort((a, b) => a - b)[0];
+        if (best) item.cost_price = best;
+      }
+    }
+  }
   populateSelects();
   renderInventory();
   renderHealth();
@@ -601,9 +676,42 @@ function openAdminPhotoModal(productId) {
   document.getElementById('adminPhotoModalTitle').textContent = `${prod.brand || ''} ${prod.model || prod.name}`.trim();
   document.getElementById('adminPhotoModalSub').textContent = `${prod.website_codes || prod.sku} • ${(prod.imageUrls || []).length} photo(s)`;
   document.getElementById('photoMsg').textContent = '';
+  const abEl = document.getElementById('modalCostAb');
+  const akEl = document.getElementById('modalCostAk');
+  const onEl = document.getElementById('modalCostOnline');
+  const costMsgEl = document.getElementById('modalCostsMsg');
+  if (abEl) abEl.value = prod.cost_ab > 0 ? prod.cost_ab : '';
+  if (akEl) akEl.value = prod.cost_ak > 0 ? prod.cost_ak : '';
+  if (onEl) onEl.value = prod.cost_online > 0 ? prod.cost_online : '';
+  if (costMsgEl) costMsgEl.textContent = '';
   renderPhotoEditor();
   document.getElementById('adminPhotoModal').classList.remove('hidden');
 }
+
+document.getElementById('saveModalCostsBtn')?.addEventListener('click', async () => {
+  if (!activeAdminPhotoProductId) return;
+  const msgEl = document.getElementById('modalCostsMsg');
+  try {
+    const res = await saveProductSupplierCosts(activeAdminPhotoProductId, {
+      costAb: document.getElementById('modalCostAb')?.value ?? '',
+      costAk: document.getElementById('modalCostAk')?.value ?? '',
+      costOnline: document.getElementById('modalCostOnline')?.value ?? '',
+    });
+    if (msgEl) {
+      msgEl.style.color = 'var(--gold-bright)';
+      msgEl.textContent = res.bestCost > 0
+        ? `Saved! Best: ${res.bestSupplier} (${fmtCurrency(res.bestCost)})`
+        : 'Saved supplier costs.';
+    }
+    if (state.activeInvTool === 'restock') renderRestockCards();
+    renderInventory();
+  } catch (err) {
+    if (msgEl) {
+      msgEl.style.color = 'var(--danger)';
+      msgEl.textContent = err.message;
+    }
+  }
+});
 
 function renderPhotoEditor() {
   if (!state.inventory) return;
@@ -1842,6 +1950,10 @@ function renderRestockCards() {
             </div>`
           )
           .join('');
+        const prodObj = state.inventory?.items?.find((i) => i.id === m.productId) || {};
+        const cAb = Number(prodObj.cost_ab) > 0 ? prodObj.cost_ab : '';
+        const cAk = Number(prodObj.cost_ak) > 0 ? prodObj.cost_ak : '';
+        const cOn = Number(prodObj.cost_online) > 0 ? prodObj.cost_online : '';
         return `
           <div class="model-card" style="padding:10px;display:flex;flex-direction:column;gap:8px;">
             <div style="display:flex;gap:10px;align-items:center;">
@@ -1849,8 +1961,23 @@ function renderRestockCards() {
               <div style="min-width:0;flex:1;">
                 <div style="font-weight:700;font-size:13px;line-height:1.25;">${m.displayModel}</div>
                 <div class="small muted">${m.sku} • <span style="color:var(--gold-bright);">${m.supplier}</span></div>
-                <div class="small" style="margin-top:2px;">Cost: <strong>${m.unitCost > 0 ? fmtCurrency(m.unitCost) : '—'}</strong></div>
+                <div class="small" style="margin-top:2px;">Active Cost: <strong>${m.unitCost > 0 ? fmtCurrency(m.unitCost) : '—'}</strong></div>
               </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:4px;align-items:end;padding-top:4px;border-top:1px solid rgba(255,255,255,0.06);">
+              <div>
+                <div style="font-size:9.5px;color:var(--muted);">AB ₱</div>
+                <input type="number" class="restock-cost-ab" data-pid="${m.productId}" value="${cAb}" min="0" step="0.01" placeholder="0" style="width:100%;padding:3px 5px;font-size:11px;" />
+              </div>
+              <div>
+                <div style="font-size:9.5px;color:var(--muted);">A&amp;K ₱</div>
+                <input type="number" class="restock-cost-ak" data-pid="${m.productId}" value="${cAk}" min="0" step="0.01" placeholder="0" style="width:100%;padding:3px 5px;font-size:11px;" />
+              </div>
+              <div>
+                <div style="font-size:9.5px;color:var(--muted);">Online ₱</div>
+                <input type="number" class="restock-cost-on" data-pid="${m.productId}" value="${cOn}" min="0" step="0.01" placeholder="0" style="width:100%;padding:3px 5px;font-size:11px;" />
+              </div>
+              <button type="button" class="secondary restock-save-cost-btn" data-pid="${m.productId}" style="padding:4px 7px;font-size:10.5px;min-height:0;" title="Save supplier costs">Save</button>
             </div>
             <div>${branchRowsHtml}</div>
           </div>
@@ -1912,6 +2039,25 @@ function renderRestockCards() {
       const val = Math.max(1, parseInt(e.target.value, 10) || 1);
       if (state.restockPlan?.[idx]) state.restockPlan[idx].qty = val;
       renderRestockCards();
+    });
+  });
+
+  grid.querySelectorAll('.restock-save-cost-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const pid = btn.dataset.pid;
+      const card = btn.closest('.model-card');
+      const costAb = card?.querySelector('.restock-cost-ab')?.value ?? '';
+      const costAk = card?.querySelector('.restock-cost-ak')?.value ?? '';
+      const costOnline = card?.querySelector('.restock-cost-on')?.value ?? '';
+      btn.textContent = '...';
+      try {
+        await saveProductSupplierCosts(pid, { costAb, costAk, costOnline });
+        renderRestockCards();
+        renderInventory();
+      } catch (err) {
+        btn.textContent = 'Err';
+        alert(err.message);
+      }
     });
   });
 }
