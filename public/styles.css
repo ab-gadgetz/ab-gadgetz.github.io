@@ -615,7 +615,6 @@ button.danger { background: #a33a35; color: #fff; }
     padding: 6px 8px;
     font-size: 12px;
   }
-}
   body {
     padding: 8px 8px calc(76px + env(safe-area-inset-bottom));
     -webkit-tap-highlight-color: transparent;
