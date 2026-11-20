@@ -526,7 +526,96 @@ button.danger { background: #a33a35; color: #fff; }
   margin-top: 2px !important;
   white-space: nowrap;
 }
+.act-date-bar {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  align-items: end;
+}
 @media (max-width: 768px) {
+  .owner-bar {
+    padding: 8px 10px !important;
+    gap: 6px !important;
+  }
+  .owner-bar-main {
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .owner-bar-main strong {
+    font-size: 13px;
+  }
+  .sync-controls {
+    gap: 5px !important;
+  }
+  .sync-controls button {
+    padding: 5px 8px !important;
+    font-size: 10.5px !important;
+    min-height: 28px !important;
+  }
+  .sync-pill {
+    padding: 3px 8px !important;
+    font-size: 10px !important;
+  }
+  .nav-toggle-bar {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  #productTypeFilter {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .mini-kpi {
+    padding: 8px 10px !important;
+  }
+  .mini-kpi-val {
+    font-size: 15px !important;
+  }
+  .mini-kpi-sub {
+    font-size: 10px !important;
+    line-height: 1.25;
+  }
+  #invFilterBar {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px !important;
+    align-items: end;
+  }
+  #invFilterBar .inv-tools-wrap {
+    grid-column: 1 / -1;
+  }
+  .inv-group-wrap,
+  .inv-stockview-wrap {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 4px !important;
+    min-width: 0;
+  }
+  .inv-group-wrap select,
+  .inv-stockview-wrap select {
+    width: 100% !important;
+    min-width: 0;
+  }
+  .inv-date-pdf-wrap {
+    grid-column: 1 / -1;
+    margin-left: 0 !important;
+    justify-content: space-between;
+    width: 100%;
+  }
+  .act-date-bar {
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .act-date-nav-wrap {
+    grid-column: 1 / -1;
+  }
+  .act-date-bar input[type="date"] {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+}
   body {
     padding: 8px 8px calc(76px + env(safe-area-inset-bottom));
     -webkit-tap-highlight-color: transparent;
@@ -1243,7 +1332,96 @@ body.role-cashier input[type="date"] {
   margin-top: 2px !important;
   white-space: nowrap;
 }
+.act-date-bar {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  align-items: end;
+}
 @media (max-width: 768px) {
+  .owner-bar {
+    padding: 8px 10px !important;
+    gap: 6px !important;
+  }
+  .owner-bar-main {
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .owner-bar-main strong {
+    font-size: 13px;
+  }
+  .sync-controls {
+    gap: 5px !important;
+  }
+  .sync-controls button {
+    padding: 5px 8px !important;
+    font-size: 10.5px !important;
+    min-height: 28px !important;
+  }
+  .sync-pill {
+    padding: 3px 8px !important;
+    font-size: 10px !important;
+  }
+  .nav-toggle-bar {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  #productTypeFilter {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .mini-kpi {
+    padding: 8px 10px !important;
+  }
+  .mini-kpi-val {
+    font-size: 15px !important;
+  }
+  .mini-kpi-sub {
+    font-size: 10px !important;
+    line-height: 1.25;
+  }
+  #invFilterBar {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px !important;
+    align-items: end;
+  }
+  #invFilterBar .inv-tools-wrap {
+    grid-column: 1 / -1;
+  }
+  .inv-group-wrap,
+  .inv-stockview-wrap {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 4px !important;
+    min-width: 0;
+  }
+  .inv-group-wrap select,
+  .inv-stockview-wrap select {
+    width: 100% !important;
+    min-width: 0;
+  }
+  .inv-date-pdf-wrap {
+    grid-column: 1 / -1;
+    margin-left: 0 !important;
+    justify-content: space-between;
+    width: 100%;
+  }
+  .act-date-bar {
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .act-date-nav-wrap {
+    grid-column: 1 / -1;
+  }
+  .act-date-bar input[type="date"] {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+}
   body.role-cashier .nav-toggle-bar {
     display: flex;
     flex-direction: column;

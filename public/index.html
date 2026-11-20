@@ -619,7 +619,7 @@
     <section id="tab-activity" class="tab-panel card">
       <div class="sub-panel">
         <h3>Sales Summary &amp; Activity Log</h3>
-        <div class="grid-3" style="margin-bottom:10px;">
+        <div class="act-date-bar" style="margin-bottom:10px;">
           <div>
             <label for="actStart">FROM</label>
             <input type="date" id="actStart" />
@@ -628,8 +628,10 @@
             <label for="actEnd">TO</label>
             <input type="date" id="actEnd" />
           </div>
-          <div style="display:flex;align-items:flex-end;">
-            <button type="button" id="refreshActivityBtn" style="width:100%;">APPLY DATES</button>
+          <div class="act-date-nav-wrap" style="display:flex;align-items:flex-end;gap:6px;">
+            <button type="button" id="actPrevDayBtn" class="secondary" title="Previous day (Yesterday)" aria-label="Previous day" style="padding:8px 12px;font-size:15px;font-weight:800;">‹</button>
+            <button type="button" id="refreshActivityBtn" style="flex:1;">APPLY DATES</button>
+            <button type="button" id="actNextDayBtn" class="secondary" title="Next day" aria-label="Next day" style="padding:8px 12px;font-size:15px;font-weight:800;">›</button>
           </div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">

@@ -2595,6 +2595,22 @@ function renderReceivables() {
 document.getElementById('recSearchInput').addEventListener('input', renderReceivables);
 document.getElementById('refreshFinanceBtn').addEventListener('click', loadFinance);
 document.getElementById('refreshActivityBtn').addEventListener('click', loadActivity);
+function shiftActivityDates(deltaDays) {
+  const startEl = document.getElementById('actStart');
+  const endEl = document.getElementById('actEnd');
+  if (!startEl || !endEl) return;
+  const baseStr = endEl.value || startEl.value || todayStr;
+  const dt = new Date(`${baseStr}T12:00:00`);
+  if (Number.isNaN(dt.getTime())) return;
+  dt.setDate(dt.getDate() + deltaDays);
+  const nextStr = dt.toISOString().slice(0, 10);
+  if (nextStr > todayStr) return;
+  startEl.value = nextStr;
+  endEl.value = nextStr;
+  loadActivity();
+}
+document.getElementById('actPrevDayBtn')?.addEventListener('click', () => shiftActivityDates(-1));
+document.getElementById('actNextDayBtn')?.addEventListener('click', () => shiftActivityDates(1));
 document.getElementById('toggleCatalogViewsBtn')?.addEventListener('click', () => {
   const grid = document.getElementById('activityViewsGrid');
   const btn = document.getElementById('toggleCatalogViewsBtn');
