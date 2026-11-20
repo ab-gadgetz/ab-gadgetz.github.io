@@ -573,16 +573,23 @@ async function main() {
   if (fs.existsSync(path.join(publicDir, 'index.html'))) {
     fs.mkdirSync(path.join(distDir, 'admin'), { recursive: true });
     fs.mkdirSync(path.join(distDir, 'staff'), { recursive: true });
+    const cacheBust = Date.now();
     const adminHtml = fs
       .readFileSync(path.join(publicDir, 'index.html'), 'utf8')
       .replace(/href="\/manifest\.webmanifest"/g, 'href="../manifest.webmanifest"')
       .replace(/href="\/ab-logo-square\.png"/g, 'href="../ab-logo-square.png"')
-      .replace(/href="\/styles\.css"/g, 'href="../styles.css"')
+      .replace(/href="\/styles\.css"/g, `href="../styles.css?v=${cacheBust}"`)
       .replace(/src="\/ab-logo-square\.png"/g, 'src="../ab-logo-square.png"')
       .replace(/src="\/ab-logo\.png"/g, 'src="../ab-logo.png"')
-      .replace(/src="\/app\.js"/g, 'src="../app.js"');
+      .replace(/src="\/app\.js"/g, `src="../app.js?v=${cacheBust}"`);
+    const staffHtml = adminHtml
+      .replace('<title>Owner Admin Portal</title>', '<title>Staff Portal — AB Gadgetz</title>')
+      .replace('OWNER ADMIN PORTAL • REALTIME SYNC', 'STAFF PORTAL • VIEW & PDF ONLY')
+      .replace('id="loginRoleSelect" value="ADMIN"', 'id="loginRoleSelect" value="CASHIER"')
+      .replace('id="loginRoleWrap" class="hidden"', 'id="loginRoleWrap"')
+      .replace('id="loginBranchWrap" class="hidden"', 'id="loginBranchWrap"');
     fs.writeFileSync(path.join(distDir, 'admin', 'index.html'), adminHtml);
-    fs.writeFileSync(path.join(distDir, 'staff', 'index.html'), adminHtml);
+    fs.writeFileSync(path.join(distDir, 'staff', 'index.html'), staffHtml);
     console.log(`Built Full Admin & Staff Portals: ${inventoryItems.length} products, ${adminBundle.allPayments.length} payments, ${adminBundle.allInstallments.length} installments`);
   }
 
