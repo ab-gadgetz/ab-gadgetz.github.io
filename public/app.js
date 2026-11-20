@@ -2862,21 +2862,22 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
     ];
     bodyRows.push(totalRow);
 
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(12);
-    doc.setTextColor(27, 25, 19);
-    const title = `AB-Gadgetz-${branchLabel}: Daily Inventory of ${productType}`;
-    doc.text(title, margin, 25 / 72);
+    const drawHeader = () => {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(12);
+      doc.setTextColor(27, 25, 19);
+      doc.text(`AB-Gadgetz-${branchLabel}: Daily Inventory of ${productType}`, margin, 25 / 72);
 
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.setTextColor(79, 73, 58);
-    const subtitle = `Month of ${monthName} ${year}`;
-    doc.text(subtitle, pageWidth / 2, 44 / 72, { align: 'center' });
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(79, 73, 58);
+      doc.text(`Month of ${monthName} ${year}`, pageWidth / 2, 44 / 72, { align: 'center' });
+    };
+    drawHeader();
 
     doc.autoTable({
       startY: topY,
-      margin: { top: margin, left: margin, right: margin, bottom: bottomMargin },
+      margin: { top: topY, left: margin, right: margin, bottom: bottomMargin },
       tableWidth: contentWidth,
       head: [['Model', 'Unit Price (PHP)', ...panelDays.map((d) => String(d))]],
       body: bodyRows,
@@ -2884,6 +2885,7 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
       showHead: 'everyPage',
       pageBreak: isAccessories ? 'auto' : 'avoid',
       rowPageBreak: 'avoid',
+      didDrawPage: drawHeader,
       styles: {
         font: 'helvetica',
         fontSize,
