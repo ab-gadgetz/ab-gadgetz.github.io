@@ -2735,7 +2735,7 @@ function buildDailyInventoryReportData(productType, reportDateStr, movementsList
   return { branchLabel, year, monthIndex, asOfDay, daysInMonth, monthName, activeItems, groups, dailyTotals };
 }
 
-function generateInventoryPdfForType(productType, reportDateStr, movementsList = []) {
+function generateInventoryPdfForType(productType, reportDateStr, movementsList = [], blankQuantities = false) {
   const jspdfNs = window.jspdf;
   if (!jspdfNs || typeof jspdfNs.jsPDF !== 'function') {
     throw new Error('PDF generator library is still loading. Please try again in a second.');
@@ -2808,6 +2808,7 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
         const priceNum = Number(item.base_price) || 0;
         const priceText = 'PHP ' + priceNum.toLocaleString('en-PH', { maximumFractionDigits: 0 });
         const dayCells = panelDays.map((d) => {
+          if (blankQuantities) return '';
           const val = item.daily ? item.daily[d - 1] : (d <= asOfDay ? item.exportQty : null);
           return val !== null && Number(val) > 0 ? Number(val).toLocaleString('en-PH') : '';
         });
@@ -2825,6 +2826,7 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
         },
       },
       ...panelDays.map((d) => {
+        if (blankQuantities) return '';
         const tot = dailyTotals[d - 1] || 0;
         return tot > 0 ? tot.toLocaleString('en-PH') : '';
       }),
@@ -2880,25 +2882,31 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
 
   const branchSlug = branchLabel.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '');
   const dateSlug = reportDateStr || todayStr;
-  const fileName = `AB_Gadgetz_${branchSlug}_${productType}_Daily_Stock_Balances_${dateSlug}.pdf`;
+  const suffix = blankQuantities ? 'Blank_Count_Sheet' : 'Daily_Stock_Balances';
+  const fileName = `AB_Gadgetz_${branchSlug}_${productType}_${suffix}_${dateSlug}.pdf`;
   doc.save(fileName);
   return fileName;
 }
 
-async function downloadInventoryPdf() {
+async function downloadInventoryPdf(blankQuantities = false) {
   try {
-    setInventoryDownloadMsg('Generating PDF with daily stock history...', false);
+    setInventoryDownloadMsg(
+      blankQuantities ? 'Generating blank physical count sheet PDF...' : 'Generating PDF with daily stock history...',
+      false
+    );
     const reportDateStr = document.getElementById('inventoryReportDate')?.value || todayStr;
     const monthStart = `${reportDateStr.slice(0, 7)}-01`;
     const globalBranchId = document.getElementById('globalBranch')?.value || '';
     let movementsList = [];
-    try {
-      const actData = await api(`/api/activity?start=${monthStart}&end=${todayStr}&branchId=${globalBranchId}`);
-      movementsList = actData?.allMovements || actData?.movements || [];
-    } catch {}
+    if (!blankQuantities) {
+      try {
+        const actData = await api(`/api/activity?start=${monthStart}&end=${todayStr}&branchId=${globalBranchId}`);
+        movementsList = actData?.allMovements || actData?.movements || [];
+      } catch {}
+    }
     const selectedTypes = getSelectedProductTypes();
     const typesToExport = selectedTypes.length ? selectedTypes : ['Cellphones'];
-    const files = typesToExport.map((t) => generateInventoryPdfForType(t, reportDateStr, movementsList));
+    const files = typesToExport.map((t) => generateInventoryPdfForType(t, reportDateStr, movementsList, blankQuantities));
     setInventoryDownloadMsg(`Downloaded: ${files.join(', ')}`, false);
   } catch (err) {
     setInventoryDownloadMsg(err.message || 'Unable to generate PDF.', true);
@@ -3153,7 +3161,8 @@ function downloadReceivablesExcel() {
   URL.revokeObjectURL(url);
 }
 
-document.getElementById('inventoryPdfBtn')?.addEventListener('click', downloadInventoryPdf);
+document.getElementById('inventoryPdfBtn')?.addEventListener('click', () => downloadInventoryPdf(false));
+document.getElementById('inventoryBlankPdfBtn')?.addEventListener('click', () => downloadInventoryPdf(true));
 document.getElementById('inventoryExcelBtn')?.addEventListener('click', downloadInventoryExcel);
 document.getElementById('receivablesPdfBtn')?.addEventListener('click', downloadReceivablesPdf);
 document.getElementById('receivablesExcelBtn')?.addEventListener('click', downloadReceivablesExcel);
@@ -3193,9 +3202,12 @@ function applyRolePermissions() {
     if (greetEl) greetEl.textContent = 'Welcome, Maynard';
   }
 
-  // Toggle admin-only elements (Excel buttons, Publish buttons, Pause button, Catalog Edit Mode)
+  // Toggle admin-only & cashier-only elements
   document.querySelectorAll('.admin-only-el, .publish-github-btn').forEach((el) => {
     el.classList.toggle('hidden', !isAdmin);
+  });
+  document.querySelectorAll('.cashier-only-el').forEach((el) => {
+    el.classList.toggle('hidden', role !== 'CASHIER');
   });
   document.getElementById('toggleSyncBtn')?.classList.toggle('hidden', !isAdmin);
   const catEditWrap = document.getElementById('catEditMode')?.closest('label');
