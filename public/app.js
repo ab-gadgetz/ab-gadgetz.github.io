@@ -181,19 +181,27 @@ async function staticGhApi(url, opts = {}) {
   const method = (opts.method || 'GET').toUpperCase();
 
   if (pathname === '/api/auth/status') {
-    const auth = localStorage.getItem('bs_gh_auth') === '1';
+    const isStaffPath = window.location.pathname.includes('/staff');
+    const prefix = isStaffPath ? 'bs_gh_staff_' : 'bs_gh_';
+    const auth = localStorage.getItem(`${prefix}auth`) === '1';
+    const savedRole = localStorage.getItem(`${prefix}role`) || (isStaffPath ? 'CASHIER' : 'ADMIN');
     return {
       pinConfigured: true,
-      authenticated: auth,
-      role: localStorage.getItem('bs_gh_role') || 'ADMIN',
-      branchId: localStorage.getItem('bs_gh_branch') || '',
+      authenticated: auth && (!isStaffPath || savedRole !== 'ADMIN'),
+      role: savedRole,
+      branchId: localStorage.getItem(`${prefix}branch`) || '',
     };
   }
   if (pathname === '/api/auth/login' || pathname === '/api/auth/setup') {
+    const isStaffPath = window.location.pathname.includes('/staff');
+    const prefix = isStaffPath ? 'bs_gh_staff_' : 'bs_gh_';
     const body = JSON.parse(opts.body || '{}');
     const pin = String(body.pin || '').trim();
-    const role = String(body.role || 'ADMIN').toUpperCase();
+    const role = String(body.role || (isStaffPath ? 'CASHIER' : 'ADMIN')).toUpperCase();
     const branchId = String(body.branchId || '');
+    if (isStaffPath && role === 'ADMIN') {
+      throw new Error('Please use the Admin Portal URL for Owner Admin login.');
+    }
     if (role === 'CASHIER') {
       if (pin !== '111111') throw new Error('Incorrect Cashier PIN.');
       if (!['br-molave', 'br-tambulig', 'br-bonifacio'].includes(branchId)) throw new Error('Please select a branch.');
@@ -204,15 +212,17 @@ async function staticGhApi(url, opts = {}) {
       const ok = await verifyGhOwnerPin(pin);
       if (!ok) throw new Error('Incorrect Owner PIN.');
     }
-    localStorage.setItem('bs_gh_auth', '1');
-    localStorage.setItem('bs_gh_role', role);
-    localStorage.setItem('bs_gh_branch', role === 'ADMIN' ? '' : branchId);
+    localStorage.setItem(`${prefix}auth`, '1');
+    localStorage.setItem(`${prefix}role`, role);
+    localStorage.setItem(`${prefix}branch`, role === 'ADMIN' ? '' : branchId);
     return { ok: true, role, branchId: role === 'ADMIN' ? '' : branchId };
   }
   if (pathname === '/api/auth/logout') {
-    localStorage.removeItem('bs_gh_auth');
-    localStorage.removeItem('bs_gh_role');
-    localStorage.removeItem('bs_gh_branch');
+    const isStaffPath = window.location.pathname.includes('/staff');
+    const prefix = isStaffPath ? 'bs_gh_staff_' : 'bs_gh_';
+    localStorage.removeItem(`${prefix}auth`);
+    localStorage.removeItem(`${prefix}role`);
+    localStorage.removeItem(`${prefix}branch`);
     return { ok: true };
   }
   if (pathname === '/api/catalog/views') {
@@ -2913,8 +2923,9 @@ function updateAuthRoleUI() {
 document.getElementById('loginRoleSelect')?.addEventListener('change', updateAuthRoleUI);
 
 async function checkAuth() {
+  const isStaffPath = window.location.pathname.includes('/staff');
   const status = await api('/api/auth/status');
-  if (status.authenticated) {
+  if (status.authenticated && (!isStaffPath || status.role !== 'ADMIN')) {
     state.userRole = status.role || 'ADMIN';
     state.userBranchId = status.branchId || '';
     await bootApp();
@@ -2922,17 +2933,29 @@ async function checkAuth() {
   }
   document.getElementById('appShell').classList.add('hidden');
   document.getElementById('authGate').classList.remove('hidden');
-  const isSetup = !status.pinConfigured;
-  document.getElementById('authTitle').textContent = isSetup ? 'Create Owner PIN (First-Time Setup)' : 'Portal Login';
+  const isSetup = !status.pinConfigured && !isStaffPath;
+  document.getElementById('authTitle').textContent = isSetup
+    ? 'Create Owner PIN (First-Time Setup)'
+    : isStaffPath
+      ? 'Staff Portal Login'
+      : 'Owner & Staff Portal Login';
   document.getElementById('authSubtitle').textContent = isSetup
     ? 'Set a 6–12 digit PIN to protect your portal for online/phone access.'
-    : 'Select your account role and enter your 6-digit PIN to unlock the portal.';
+    : isStaffPath
+      ? 'Select your Staff Role & Branch, then enter your 6-digit PIN (View & PDF Download Only).'
+      : 'Select your account role and enter your 6-digit PIN to unlock the portal.';
   document.getElementById('authSubmitBtn').textContent = isSetup ? 'SAVE PIN & UNLOCK' : 'UNLOCK PORTAL';
   document.getElementById('authGate').dataset.mode = isSetup ? 'setup' : 'login';
 
   const roleSel = document.getElementById('loginRoleSelect');
-  if (roleSel && window.location.pathname.includes('/staff') && roleSel.value === 'ADMIN') {
-    roleSel.value = 'CASHIER';
+  if (roleSel) {
+    const adminOpt = roleSel.querySelector('option[value="ADMIN"]');
+    if (isStaffPath) {
+      if (adminOpt) adminOpt.hidden = true;
+      if (roleSel.value === 'ADMIN') roleSel.value = 'CASHIER';
+    } else if (adminOpt) {
+      adminOpt.hidden = false;
+    }
   }
   updateAuthRoleUI();
 }
