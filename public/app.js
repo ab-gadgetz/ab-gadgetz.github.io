@@ -2789,12 +2789,13 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
   const modelWidth = 125 / 72;
   const priceWidth = 84 / 72;
 
+  const isAccessories = productType === 'Accessories';
   const totalModelRows = groups.reduce((s, g) => s + g.items.length, 0);
   const totalVisualRows = Math.max(1, groups.length + totalModelRows + 2);
   const availableHeightPt = (pageHeight - topY - bottomMargin) * 72;
   const rowSlot = availableHeightPt / totalVisualRows;
-  const fontSize = Math.max(3, Math.min(9, rowSlot - 2.5));
-  const cellPadding = Math.max(0.4, Math.min(1.5, fontSize * 0.15)) / 72;
+  const fontSize = isAccessories ? 7.5 : Math.max(5.5, Math.min(9, rowSlot - 2.5));
+  const cellPadding = isAccessories ? 2 / 72 : Math.max(0.6, Math.min(1.5, fontSize * 0.16)) / 72;
 
   const dayPanels = [
     Array.from({ length: Math.min(15, daysInMonth) }, (_, idx) => idx + 1),
@@ -2875,12 +2876,13 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
 
     doc.autoTable({
       startY: topY,
-      margin: { left: margin, right: margin, bottom: bottomMargin },
+      margin: { top: margin, left: margin, right: margin, bottom: bottomMargin },
       tableWidth: contentWidth,
       head: [['Model', 'Unit Price (PHP)', ...panelDays.map((d) => String(d))]],
       body: bodyRows,
       theme: 'grid',
-      pageBreak: 'avoid',
+      showHead: 'everyPage',
+      pageBreak: isAccessories ? 'auto' : 'avoid',
       rowPageBreak: 'avoid',
       styles: {
         font: 'helvetica',
