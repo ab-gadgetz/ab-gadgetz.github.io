@@ -692,8 +692,10 @@ async function initPublicCatalog() {
     el.textContent = data.branch.name;
   });
   try {
+    const slug = encodeURIComponent(pubState.branchSlug);
     const hitImg = new Image();
-    hitImg.src = `https://hits.sh/maynardrdelossantos.github.io/ab-gadgetz-catalog-views/${encodeURIComponent(pubState.branchSlug)}.svg?t=${Date.now()}`;
+    hitImg.src = `https://hits.sh/maynardrdelossantos.github.io/ab-gadgetz-catalog-views/${slug}.svg?t=${Date.now()}`;
+    fetch(`https://abacus.jasoncameron.dev/hit/ab-gadgetz-views/${slug}`).catch(() => {});
   } catch {}
   renderPublicCatalog();
 }

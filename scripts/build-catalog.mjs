@@ -544,6 +544,30 @@ async function main() {
     };
   });
 
+  const catalogViewsByBranch = {};
+  let viewsTotal = 0;
+  let viewsWeekly = 0;
+  let viewsMonthly = 0;
+  await Promise.all(
+    BRANCHES.map(async (b) => {
+      try {
+        const r = await fetch(`https://hits.sh/api/urns/maynardrdelossantos.github.io/ab-gadgetz-catalog-views/${b.slug}`);
+        if (r.ok) {
+          const j = await r.json();
+          const t = Number(j.total) || 0;
+          const w = Number(j.weekly) || 0;
+          const m = Number(j.monthly) || 0;
+          catalogViewsByBranch[b.id] = { total: t, weekly: w, monthly: m };
+          viewsTotal += t;
+          viewsWeekly += w;
+          viewsMonthly += m;
+          return;
+        }
+      } catch {}
+      catalogViewsByBranch[b.id] = { total: 0, weekly: 0, monthly: 0 };
+    })
+  );
+
   const adminBundle = {
     inventory: {
       branches: BRANCHES.map((b) => ({ id: b.id, name: b.name, code: b.slug.toUpperCase(), cash_discount_pct: b.cash_discount_pct, is_active: 1 })),
@@ -560,6 +584,7 @@ async function main() {
     installmentRates: seedSnapshot.installment_settings || [],
     orderBudgetItems: seedSnapshot.order_budget_items || [],
     staffPinHashes: seedSnapshot.staff_pin_hashes || null,
+    catalogViews: { byBranch: catalogViewsByBranch, total: viewsTotal, weekly: viewsWeekly, monthly: viewsMonthly },
     allMovements: allMovements.slice(0, 3500),
     allInstallments: allInstallments.slice(0, 1200),
     allPayments: allPayments.slice(0, 1500),

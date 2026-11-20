@@ -313,21 +313,29 @@ async function staticGhApi(url, opts = {}) {
   }
   if (pathname === '/api/catalog/views') {
     const slugs = [['br-molave', 'molave'], ['br-tambulig', 'tambulig'], ['br-bonifacio', 'bonifacio']];
+    let bundleViews = null;
+    try {
+      const b = await getGhBundle();
+      bundleViews = b?.catalogViews || null;
+    } catch {}
     const byBranch = {};
     let total = 0, weekly = 0, monthly = 0;
     await Promise.all(
       slugs.map(async ([bid, slug]) => {
+        const base = bundleViews?.byBranch?.[bid] || { total: 0, weekly: 0, monthly: 0 };
+        let liveVal = 0;
         try {
-          const r = await fetch(`https://hits.sh/api/urns/maynardrdelossantos.github.io/ab-gadgetz-catalog-views/${slug}`);
+          const r = await fetch(`https://abacus.jasoncameron.dev/get/ab-gadgetz-views/${slug}?v=${Date.now()}`);
           if (r.ok) {
             const j = await r.json();
-            const t = Number(j.total) || 0, w = Number(j.weekly) || 0, m = Number(j.monthly) || 0;
-            byBranch[bid] = { total: t, weekly: w, monthly: m };
-            total += t; weekly += w; monthly += m;
-            return;
+            liveVal = Number(j.value) > 0 ? Number(j.value) : 0;
           }
         } catch {}
-        byBranch[bid] = { total: 0, weekly: 0, monthly: 0 };
+        const t = Math.max(Number(base.total) || 0, liveVal);
+        const w = Math.max(Number(base.weekly) || 0, liveVal);
+        const m = Math.max(Number(base.monthly) || 0, liveVal);
+        byBranch[bid] = { total: t, weekly: w, monthly: m };
+        total += t; weekly += w; monthly += m;
       })
     );
     return { byBranch, total, weekly, monthly };
