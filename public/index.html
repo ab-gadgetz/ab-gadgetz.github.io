@@ -133,6 +133,7 @@
           </button>
           <div class="inventory-tool-tabs hidden" id="invToolsMenu">
             <button type="button" class="inv-tool-btn" data-tool="filters" aria-expanded="false">FILTERS &amp; SEARCH</button>
+            <button type="button" class="inv-tool-btn" data-tool="stockswap" aria-expanded="false">STOCK SWAP</button>
             <button type="button" class="inv-tool-btn" data-tool="restock" aria-expanded="false">RESTOCK</button>
             <button type="button" class="inv-tool-btn" data-tool="health" aria-expanded="false">HEALTH</button>
             <button type="button" class="inv-tool-btn" data-tool="lifecycle" aria-expanded="false">LIFECYCLE</button>
@@ -220,6 +221,66 @@
             <label for="invCategory">Brand / Category</label>
             <select id="invCategory"><option value="">All Brands / Categories</option></select>
           </div>
+        </div>
+      </div>
+
+      <!-- Tool Panel: Stock Swap Generator (All Branches) -->
+      <div id="tool-stockswap" class="sub-panel hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+          <div>
+            <h3 style="margin:0;">Stock Swap Suggestions (All Branches)</h3>
+            <p class="muted small" style="margin:3px 0 0;">Moves surplus units from well-stocked branches to branches with 0 stock or low stock.</p>
+          </div>
+          <button type="button" id="stockSwapPdfBtn" class="download-icon" title="Download Stock Swap Plan PDF" aria-label="Download Stock Swap Plan PDF">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="#bd3b32" d="M4 2h11l5 5v15H4z"/>
+              <path fill="#fff" d="M14 2v6h6"/>
+              <text x="5.5" y="17" fill="#fff" font-size="6.5" font-family="Arial" font-weight="700">PDF</text>
+            </svg>
+            <span>PDF</span>
+          </button>
+        </div>
+        <div class="grid-3" style="margin-bottom:10px;">
+          <div>
+            <label for="swapTypeFilter">PRODUCT TYPE</label>
+            <select id="swapTypeFilter">
+              <option value="Cellphones">Cellphones</option>
+              <option value="Accessories">Accessories</option>
+              <option value="ALL">All Products</option>
+            </select>
+          </div>
+          <div>
+            <label for="swapBranchFilter">TARGET BRANCH</label>
+            <select id="swapBranchFilter">
+              <option value="ALL">All Branches</option>
+              <option value="br-molave">Into Molave</option>
+              <option value="br-tambulig">Into Tambulig</option>
+              <option value="br-bonifacio">Into Bonifacio</option>
+            </select>
+          </div>
+          <div>
+            <label for="swapModeFilter">SWAP PRIORITY</label>
+            <select id="swapModeFilter">
+              <option value="ZERO_ONLY">0-Stock Fill Only</option>
+              <option value="ALL_BALANCE">Include Low-Stock Balance</option>
+            </select>
+          </div>
+        </div>
+        <div class="summary-grid" id="stockSwapSummaryGrid" style="margin-bottom:10px;"></div>
+        <div class="table-wrap">
+          <table class="data-table" id="stockSwapTable">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>SRP</th>
+                <th>From Branch</th>
+                <th>To Branch</th>
+                <th>Swap Qty</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
         </div>
       </div>
 

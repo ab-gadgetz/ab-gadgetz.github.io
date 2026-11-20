@@ -445,9 +445,24 @@ async function main() {
       if (!isVisible) continue;
       const cell = invMap.get(`${b.id}::${p.id}`);
       const branchAvailable = cell ? Math.max(0, (cell.qty_on_hand || 0) - (cell.qty_reserved || 0)) : 0;
-      if (branchAvailable <= 0) continue;
+      const otherBranches = [];
+      if (branchAvailable <= 0) {
+        for (const ob of BRANCHES) {
+          if (ob.id === b.id) continue;
+          const oCell = invMap.get(`${ob.id}::${p.id}`);
+          const oAvail = oCell ? Math.max(0, (oCell.qty_on_hand || 0) - (oCell.qty_reserved || 0)) : 0;
+          if (oAvail > 0) otherBranches.push(ob.name);
+        }
+        if (otherBranches.length === 0) continue;
+      }
       const imageUrls = String(p.image_urls || '').split(/[|\r\n]+/).map((u) => u.trim()).filter(Boolean);
-      const price = branchPrice.get(`${b.id}::${p.id}`) ?? p.base_price;
+      let price = branchPrice.get(`${b.id}::${p.id}`) ?? p.base_price;
+      if ((!price || price <= 0) && otherBranches.length > 0) {
+        for (const ob of BRANCHES) {
+          const op = branchPrice.get(`${ob.id}::${p.id}`);
+          if (op && op > 0) { price = op; break; }
+        }
+      }
       if (!price || price <= 0) continue; // never show a ₱0 price to customers
       catalog.push({
         productId: p.id,
@@ -460,6 +475,7 @@ async function main() {
         imageUrl: imageUrls[0] || '',
         imageUrls,
         branchAvailable,
+        otherBranches,
       });
     }
 

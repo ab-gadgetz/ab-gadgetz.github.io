@@ -167,11 +167,19 @@ function renderPublicCatalog() {
       return true;
     })
     .sort((a, b) => {
+      const aLocal = (a.branchAvailable || 0) > 0 ? 0 : 1;
+      const bLocal = (b.branchAvailable || 0) > 0 ? 0 : 1;
+      if (aLocal !== bLocal) return aLocal - bLocal;
       const diff = (Number(a.basePrice) || 0) - (Number(b.basePrice) || 0);
       return (asc ? diff : -diff) || a.model.localeCompare(b.model);
     });
 
-  document.getElementById('pubCatalogMeta').textContent = `${branch.name} Branch • ${fmtNum(filtered.length)} available model(s)`;
+  const localAvailCount = filtered.filter((x) => (x.branchAvailable || 0) > 0).length;
+  const otherAvailCount = filtered.length - localAvailCount;
+  document.getElementById('pubCatalogMeta').textContent =
+    otherAvailCount > 0
+      ? `${branch.name} Branch • ${fmtNum(localAvailCount)} in stock • ${fmtNum(otherAvailCount)} at other branches`
+      : `${branch.name} Branch • ${fmtNum(filtered.length)} available model(s)`;
 
   const groups = new Map();
   for (const item of filtered) {
@@ -230,12 +238,17 @@ function renderPublicCatalog() {
         ? `<div class="shopee-badge-installment"><span>4-Mo Est</span><span>${fmtCurrency(mo4)}/mo</span></div>`
         : '';
       const isComp = pubState.compareIds.includes(item.productId);
+      const isLocal = (item.branchAvailable || 0) > 0;
+      const otherList = Array.isArray(item.otherBranches) ? item.otherBranches : [];
+      const availBadgeHtml = isLocal
+        ? `<span class="shopee-badge-avail">Available</span>`
+        : `<span class="shopee-badge-avail" style="background:rgba(245,158,11,0.18);color:#fbbf24;border-color:rgba(245,158,11,0.5);">At ${otherList.join(' / ')}</span>`;
       return `
         <div class="shopee-card" data-calc-id="${item.productId}">
           <div class="shopee-thumb">
             ${imgHtml}
             <span class="shopee-badge-brand" style="color:${theme.accent};">${theme.label}</span>
-            <span class="shopee-badge-avail">Available</span>
+            ${availBadgeHtml}
             ${installBanner}
           </div>
           <div class="shopee-body">
@@ -583,7 +596,15 @@ function openCustomerCalcModal(item, branch, installmentRates) {
   calcModalState.selectedMonths = 4;
 
   document.getElementById('calcModalTitle').textContent = `${item.brand ? item.brand + ' ' : ''}${item.model}`;
-  document.getElementById('calcModalSub').textContent = `${branch.name} • Available`;
+  const subEl = document.getElementById('calcModalSub');
+  const otherList = Array.isArray(item.otherBranches) ? item.otherBranches : [];
+  if ((item.branchAvailable || 0) <= 0 && otherList.length) {
+    subEl.textContent = `Out of stock in ${branch.name} • Available at AB-Gadgetz ${otherList.join(' & ')}`;
+    subEl.style.color = '#fbbf24';
+  } else {
+    subEl.textContent = `${branch.name} • Available`;
+    subEl.style.color = '';
+  }
   document.getElementById('calcSrpText').textContent = fmtCurrency(srp);
   document.getElementById('calcCashText').textContent = `${fmtCurrency(item.cashPrice)} (${cashDiscountPct}% off)`;
   document.getElementById('calcMinDpText').textContent = `Min DP: ${fmtCurrency(minDp)}`;

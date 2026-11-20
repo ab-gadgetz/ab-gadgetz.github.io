@@ -144,11 +144,12 @@ document.querySelectorAll('.inv-tool-btn').forEach((btn) => {
     document.querySelectorAll('.inv-tool-btn').forEach((b) => {
       b.setAttribute('aria-expanded', String(b.dataset.tool === state.activeInvTool));
     });
-    ['filters', 'restock', 'health', 'lifecycle'].forEach((t) => {
-      document.getElementById(`tool-${t}`).classList.toggle('hidden', t !== state.activeInvTool);
+    ['filters', 'stockswap', 'restock', 'health', 'lifecycle'].forEach((t) => {
+      document.getElementById(`tool-${t}`)?.classList.toggle('hidden', t !== state.activeInvTool);
     });
     setInvToolsMenuOpen(false);
     if (state.activeInvTool === 'restock' && !state.planning) loadPlanning();
+    if (state.activeInvTool === 'stockswap') renderStockSwapTool();
   });
 });
 
@@ -1149,6 +1150,172 @@ function renderHealth() {
       </tbody>
     </table>`;
 }
+
+function computeStockSwapSuggestions({ typeFilter = 'Cellphones', targetBranchId = 'ALL', modeFilter = 'ZERO_ONLY' } = {}) {
+  if (!state.inventory) return [];
+  const { branches, items } = state.inventory;
+  const suggestions = [];
+
+  for (const item of items) {
+    if ((item.lifecycle_status || 'Active') !== 'Active') continue;
+    const pType = item.product_type || 'Cellphones';
+    if (typeFilter !== 'ALL' && pType !== typeFilter) continue;
+
+    // Build branch stock list for this product
+    const branchStates = branches.map((b) => {
+      const cell = item.byBranch[b.id] || { qtyAvailable: 0 };
+      return {
+        branchId: b.id,
+        branchName: b.name,
+        avail: Number(cell.qtyAvailable) || 0,
+      };
+    });
+
+    // Donors: branches with surplus >= 2 (keep at least 1 in donor, or 2 if donor is Molave and has >= 3)
+    const donors = branchStates
+      .map((bs) => {
+        const keepMin = bs.branchId === 'br-molave' && bs.avail >= 3 ? 2 : 1;
+        const surplus = Math.max(0, bs.avail - keepMin);
+        return { ...bs, remainingSurplus: surplus };
+      })
+      .filter((d) => d.remainingSurplus >= 1)
+      .sort((a, b) => b.remainingSurplus - a.remainingSurplus || b.avail - a.avail);
+
+    if (!donors.length) continue;
+
+    // Needy branches: 0 stock (priority 1), or 1 stock when donor has >= 3 (priority 2)
+    const needy = branchStates
+      .filter((bs) => {
+        if (targetBranchId !== 'ALL' && bs.branchId !== targetBranchId) return false;
+        if (bs.avail === 0) return true;
+        if (modeFilter === 'ALL_BALANCE' && bs.avail === 1 && donors.some((d) => d.branchId !== bs.branchId && d.avail >= 3)) {
+          return true;
+        }
+        return false;
+      })
+      .sort((a, b) => a.avail - b.avail);
+
+    for (const target of needy) {
+      const donor = donors.find((d) => d.branchId !== target.branchId && d.remainingSurplus >= 1);
+      if (!donor) continue;
+      const desired = target.avail === 0 ? 1 : 1;
+      const swapQty = Math.min(donor.remainingSurplus, desired);
+      if (swapQty <= 0) continue;
+
+      donor.remainingSurplus -= swapQty;
+      suggestions.push({
+        productId: item.id,
+        sku: item.website_codes || item.sku,
+        model: item.model || item.name,
+        brand: item.brand || '',
+        productType: pType,
+        price: Number(item.base_price) || 0,
+        fromBranchId: donor.branchId,
+        fromBranch: donor.branchName,
+        fromBefore: donor.avail,
+        fromAfter: donor.avail - swapQty,
+        toBranchId: target.branchId,
+        toBranch: target.branchName,
+        toBefore: target.avail,
+        toAfter: target.avail + swapQty,
+        swapQty,
+        priority: target.avail === 0 ? '0-STOCK FILL' : 'BALANCE',
+        reason: target.avail === 0
+          ? `0 in ${target.branchName} • ${donor.branchName} has ${donor.avail}`
+          : `Low (${target.avail}) in ${target.branchName} • ${donor.branchName} has ${donor.avail}`,
+      });
+    }
+  }
+
+  // Sort: 0-Stock Fills first, then highest donor stock, then lowest price
+  suggestions.sort((a, b) => {
+    if (a.toBefore !== b.toBefore) return a.toBefore - b.toBefore;
+    if (b.fromBefore !== a.fromBefore) return b.fromBefore - a.fromBefore;
+    return a.price - b.price || a.model.localeCompare(b.model);
+  });
+  return suggestions;
+}
+
+function renderStockSwapTool() {
+  const typeFilter = document.getElementById('swapTypeFilter')?.value || 'Cellphones';
+  const targetBranchId = document.getElementById('swapBranchFilter')?.value || 'ALL';
+  const modeFilter = document.getElementById('swapModeFilter')?.value || 'ZERO_ONLY';
+  const list = computeStockSwapSuggestions({ typeFilter, targetBranchId, modeFilter });
+  state.lastStockSwaps = list;
+
+  const totalUnits = list.reduce((s, x) => s + x.swapQty, 0);
+  const zeroFills = list.filter((x) => x.toBefore === 0).length;
+  const sumEl = document.getElementById('stockSwapSummaryGrid');
+  if (sumEl) {
+    sumEl.innerHTML = `
+      <div class="summary-box">SUGGESTED SWAPS<strong>${fmtNum(list.length)}</strong></div>
+      <div class="summary-box">TOTAL UNITS TO MOVE<strong>${fmtNum(totalUnits)} pcs</strong></div>
+      <div class="summary-box">0-STOCK FILLS<strong style="color:var(--gold-bright);">${fmtNum(zeroFills)}</strong></div>
+    `;
+  }
+
+  const tbody = document.querySelector('#stockSwapTable tbody');
+  if (!tbody) return;
+  tbody.innerHTML = list.length
+    ? list
+        .map(
+          (s) => `
+        <tr>
+          <td><strong>${s.model}</strong><div class="small muted">${s.brand} • ${s.sku}</div></td>
+          <td>${fmtCurrency(s.price)}</td>
+          <td><span class="badge badge-ok">${s.fromBranch}: ${s.fromBefore} → ${s.fromAfter}</span></td>
+          <td><span class="badge ${s.toBefore === 0 ? 'badge-danger' : 'badge-warn'}">${s.toBranch}: ${s.toBefore} → ${s.toAfter}</span></td>
+          <td><strong>${s.swapQty} pc${s.swapQty > 1 ? 's' : ''}</strong></td>
+          <td class="small muted">${s.reason}</td>
+        </tr>`
+        )
+        .join('')
+    : '<tr><td colspan="6" class="muted">All branches are balanced—no stock swaps needed right now.</td></tr>';
+}
+
+function downloadStockSwapPdf() {
+  const jspdfNs = window.jspdf;
+  if (!jspdfNs || typeof jspdfNs.jsPDF !== 'function') {
+    alert('PDF generator library is still loading. Please try again in a second.');
+    return;
+  }
+  const list = state.lastStockSwaps || computeStockSwapSuggestions();
+  if (!list.length) {
+    alert('No stock swap suggestions to download right now.');
+    return;
+  }
+  const doc = new jspdfNs.jsPDF({ orientation: 'portrait', unit: 'in', format: [8.5, 13], compress: true });
+  const margin = 24 / 72;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.setTextColor(27, 25, 19);
+  doc.text('AB-Gadgetz: Inter-Branch Stock Swap Plan', margin, 32 / 72);
+  doc.setFontSize(9);
+  doc.setTextColor(79, 73, 58);
+  doc.text(`Generated ${todayStr} • ${list.length} swap suggestion(s)`, margin, 48 / 72);
+
+  doc.autoTable({
+    startY: 60 / 72,
+    margin: { left: margin, right: margin, bottom: margin },
+    head: [['Model', 'From Branch', 'To Branch', 'Qty', 'Reason']],
+    body: list.map((s) => [
+      s.model,
+      `${s.fromBranch} (${s.fromBefore} -> ${s.fromAfter})`,
+      `${s.toBranch} (${s.toBefore} -> ${s.toAfter})`,
+      String(s.swapQty),
+      s.reason,
+    ]),
+    theme: 'grid',
+    styles: { font: 'helvetica', fontSize: 8, cellPadding: 3 / 72, textColor: [27, 25, 19] },
+    headStyles: { fillColor: [235, 226, 190], textColor: [30, 30, 30], fontStyle: 'bold' },
+  });
+  doc.save(`AB_Gadgetz_Stock_Swap_Plan_${todayStr}.pdf`);
+}
+
+document.getElementById('swapTypeFilter')?.addEventListener('change', renderStockSwapTool);
+document.getElementById('swapBranchFilter')?.addEventListener('change', renderStockSwapTool);
+document.getElementById('swapModeFilter')?.addEventListener('change', renderStockSwapTool);
+document.getElementById('stockSwapPdfBtn')?.addEventListener('click', downloadStockSwapPdf);
 
 async function loadPlanning() {
   const [planning, budget] = await Promise.all([api('/api/planning'), api('/api/budget')]);
