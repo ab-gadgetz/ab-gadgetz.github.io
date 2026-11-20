@@ -3098,26 +3098,24 @@ async function checkAuth() {
     ? 'Create Owner PIN (First-Time Setup)'
     : isStaffPath
       ? 'Staff Portal Login'
-      : 'Owner & Staff Portal Login';
+      : 'Owner Login';
   document.getElementById('authSubtitle').textContent = isSetup
-    ? 'Set a 6–12 digit PIN to protect your portal for online/phone access.'
+    ? 'Set a 6-digit PIN to protect your portal for online/phone access.'
     : isStaffPath
-      ? 'Tap your Role and Branch below, then enter your PIN (View & PDF Download Only).'
-      : 'Tap your Account Role below and enter your PIN to unlock the portal.';
+      ? 'Tap your Role and Branch below, then enter your 6-digit PIN (View & PDF Download Only).'
+      : 'Enter your 6-digit Owner PIN to unlock the portal.';
   document.getElementById('authSubmitBtn').textContent = isSetup ? 'SAVE PIN & UNLOCK' : 'UNLOCK PORTAL';
   document.getElementById('authGate').dataset.mode = isSetup ? 'setup' : 'login';
 
+  const roleWrap = document.getElementById('loginRoleWrap');
   const roleSel = document.getElementById('loginRoleSelect');
-  const roleBoxes = document.getElementById('loginRoleBoxes');
-  const adminBox = document.querySelector('#loginRoleBoxes .login-choice-box[data-role="ADMIN"]');
   if (roleSel) {
     if (isStaffPath) {
-      if (adminBox) adminBox.classList.add('hidden');
-      if (roleBoxes) roleBoxes.classList.add('cols-2');
+      if (roleWrap) roleWrap.classList.remove('hidden');
       if (roleSel.value === 'ADMIN') roleSel.value = 'CASHIER';
     } else {
-      if (adminBox) adminBox.classList.remove('hidden');
-      if (roleBoxes) roleBoxes.classList.remove('cols-2');
+      if (roleWrap) roleWrap.classList.add('hidden');
+      roleSel.value = 'ADMIN';
     }
   }
   updateAuthRoleUI();

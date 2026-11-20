@@ -28,13 +28,10 @@
       <p id="authSubtitle" class="muted small" style="margin:0 0 12px;">Tap your role and enter your 6-digit PIN.</p>
       <input type="hidden" id="loginRoleSelect" value="ADMIN" />
       <input type="hidden" id="loginBranchSelect" value="br-molave" />
-      <div style="margin-bottom:10px;">
+      <div id="loginRoleWrap" class="hidden" style="margin-bottom:10px;">
         <label>ACCOUNT ROLE</label>
-        <div class="login-box-grid" id="loginRoleBoxes">
-          <button type="button" class="login-choice-box active" data-role="ADMIN">
-            <strong>Owner / Admin</strong>
-          </button>
-          <button type="button" class="login-choice-box" data-role="CASHIER">
+        <div class="login-box-grid cols-2" id="loginRoleBoxes">
+          <button type="button" class="login-choice-box active" data-role="CASHIER">
             <strong>Cashier</strong>
           </button>
           <button type="button" class="login-choice-box" data-role="CI">
