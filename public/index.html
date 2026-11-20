@@ -154,6 +154,21 @@
           </select>
         </div>
 
+        <div id="cashierCatalogFilters" class="hidden" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          <select id="invPriceRange" style="width:auto;padding:7px 10px;font-size:12px;">
+            <option value="ALL">All Prices</option>
+            <option value="0-5000">Under ₱5,000</option>
+            <option value="5000-8000">₱5,000 – ₱8,000</option>
+            <option value="8000-12000">₱8,000 – ₱12,000</option>
+            <option value="12000-18000">₱12,000 – ₱18,000</option>
+            <option value="18000-9999999">₱18,000+</option>
+          </select>
+          <select id="invRamRom" style="width:auto;padding:7px 10px;font-size:12px;">
+            <option value="ALL">All RAM/ROM</option>
+          </select>
+          <button type="button" id="invPriceSortBtn" class="secondary" style="padding:7px 10px;font-size:12px;">Price ↑</button>
+        </div>
+
         <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
           <div style="display:flex;align-items:center;gap:6px;">
             <label for="inventoryReportDate" style="margin:0;color:var(--muted);font-size:11px;">INVENTORY AS OF DATE</label>
@@ -575,7 +590,7 @@
         </div>
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
           <p class="muted small" id="catalogBranchMeta" style="margin:0;"></p>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          <div class="admin-only-el" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
             <button type="button" class="publish-github-btn" style="padding:5px 10px;border-radius:7px;font-size:11px;">🚀 Publish to Live Catalogs</button>
             <a href="https://ab-gadgetz.github.io/molave/" target="_blank" class="secondary" style="padding:4px 9px;border-radius:7px;font-size:11px;text-decoration:none;border:1px solid var(--border-soft);color:var(--gold-bright);">Molave Live ↗</a>
             <a href="https://ab-gadgetz.github.io/tambulig/" target="_blank" class="secondary" style="padding:4px 9px;border-radius:7px;font-size:11px;text-decoration:none;border:1px solid var(--border-soft);color:var(--gold-bright);">Tambulig Live ↗</a>

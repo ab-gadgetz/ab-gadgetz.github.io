@@ -647,12 +647,22 @@ function getSelectedProductTypes() {
 
 function updateBulkBar() {
   const bar = document.getElementById('bulkActionBar');
+  if (!bar) return;
+  if (state.userRole !== 'ADMIN') {
+    bar.classList.add('hidden');
+    return;
+  }
   const count = state.selectedProducts.size;
   bar.classList.toggle('hidden', count === 0);
   document.getElementById('bulkSelectedCount').textContent = `${count} model(s) selected`;
 }
 
 function renderModelCard(item, visibleBranches) {
+  const isCashier = state.userRole === 'CASHIER';
+  const isAdmin = state.userRole === 'ADMIN';
+  const branchObj = visibleBranches[0] || { id: 'br-molave', name: 'Molave', cash_discount_pct: 5 };
+  const discountRate = (Number(branchObj.cash_discount_pct) || 5) / 100;
+  const cashPrice = Math.round((Number(item.base_price) || 0) * (1 - discountRate));
   const pills = visibleBranches
     .map((b) => {
       const cell = item.byBranch[b.id];
@@ -667,11 +677,10 @@ function renderModelCard(item, visibleBranches) {
   const thumb = item.imageUrl
     ? `<img src="${item.imageUrl}" alt="${item.name}" style="width:52px;height:52px;object-fit:contain;background:#fff;border-radius:9px;padding:2px;flex:0 0 52px;box-shadow:0 2px 8px rgba(0,0,0,.3);" loading="lazy" />`
     : `<div style="width:52px;height:52px;border-radius:9px;background:#171c23;border:1px solid var(--border-soft);display:grid;place-items:center;color:var(--gold);font-size:20px;flex:0 0 52px;">📱</div>`;
-  const isSel = state.selectedProducts.has(item.id);
+  const isSel = isAdmin && state.selectedProducts.has(item.id);
   const qtyCls = item.scopedAvail === 0 ? 'model-card-qty zero' : 'model-card-qty';
-  const isAdmin = state.userRole === 'ADMIN';
   return `
-    <div class="model-card" style="${isSel ? 'border-color:var(--gold);background:linear-gradient(165deg,#332f20 0%,#1f1d16 100%);' : ''}">
+    <div class="model-card" ${isCashier ? `data-inv-calc-id="${item.id}" style="cursor:pointer;"` : `style="${isSel ? 'border-color:var(--gold);background:linear-gradient(165deg,#332f20 0%,#1f1d16 100%);' : ''}"`}>
       <div class="model-card-head">
         <div style="display:flex;gap:9px;align-items:center;min-width:0;">
           ${isAdmin ? `<input type="checkbox" class="model-select-chk" data-id="${item.id}" ${isSel ? 'checked' : ''} style="width:16px;height:16px;flex:0 0 16px;cursor:pointer;accent-color:var(--gold);" />` : ''}
@@ -687,6 +696,7 @@ function renderModelCard(item, visibleBranches) {
       <div class="model-price-row" style="padding-top:6px;border-top:1px solid rgba(255,255,255,.06);">
         <span>SRP: <strong style="color:var(--gold-bright);font-size:12.5px;">${fmtCurrency(item.base_price)}</strong></span>
         ${isAdmin ? `<span>Cost: <strong style="color:var(--green);">${item.cost_price > 0 ? fmtCurrency(item.cost_price) : '—'}</strong></span>` : ''}
+        ${isCashier ? `<span style="color:var(--green);">Cash: <strong>${fmtCurrency(cashPrice)}</strong> <span style="color:var(--gold);margin-left:4px;">Options ›</span></span>` : ''}
       </div>
       ${lifecycleBadge}
     </div>
@@ -759,14 +769,63 @@ function renderInventory() {
     }
   }
 
-  // Sort models by selling price (lowest to highest), then name
-  scopedItems.sort(
+  const isAdmin = state.userRole === 'ADMIN';
+  const isCashier = state.userRole === 'CASHIER';
+  const isCellphonesView = selectedTypes.includes('Cellphones') && !selectedTypes.includes('Accessories');
+
+  // Cashier integrated catalog filters (Price Range & RAM/ROM only when Cellphones is selected)
+  let filteredScoped = scopedItems;
+  if (isCashier) {
+    const priceRangeEl = document.getElementById('invPriceRange');
+    const ramRomEl = document.getElementById('invRamRom');
+    const sortBtn = document.getElementById('invPriceSortBtn');
+    if (priceRangeEl) priceRangeEl.classList.toggle('hidden', !isCellphonesView);
+    if (ramRomEl) ramRomEl.classList.toggle('hidden', !isCellphonesView);
+    if (sortBtn) sortBtn.textContent = state.invPriceSort === 'desc' ? 'Price ↓' : 'Price ↑';
+
+    if (isCellphonesView && ramRomEl) {
+      const specs = new Set();
+      for (const x of scopedItems) {
+        const rr = extractRamRom(x.model || x.name, x.brand);
+        if (rr) specs.add(rr);
+      }
+      const prevSpec = ramRomEl.value || 'ALL';
+      const sortedSpecs = Array.from(specs).sort((a, b) => {
+        const na = parseInt(a, 10) || 0;
+        const nb = parseInt(b, 10) || 0;
+        return na - nb || a.localeCompare(b);
+      });
+      ramRomEl.innerHTML =
+        '<option value="ALL">All RAM/ROM</option>' +
+        sortedSpecs.map((s) => `<option value="${s}">${s}</option>`).join('');
+      if (sortedSpecs.includes(prevSpec)) ramRomEl.value = prevSpec;
+      else ramRomEl.value = 'ALL';
+    }
+
+    if (isCellphonesView) {
+      const pr = priceRangeEl?.value || 'ALL';
+      const rrFilter = ramRomEl?.value || 'ALL';
+      filteredScoped = scopedItems.filter((x) => {
+        const p = Number(x.base_price) || 0;
+        if (pr !== 'ALL') {
+          const [lo, hi] = pr.split('-').map(Number);
+          if (p < lo || p > hi) return false;
+        }
+        if (rrFilter !== 'ALL') {
+          if (extractRamRom(x.model || x.name, x.brand) !== rrFilter) return false;
+        }
+        return true;
+      });
+    }
+  }
+
+  // Sort models by selling price (lowest to highest, or descending for Cashier toggle), then name
+  const sortDir = isCashier && state.invPriceSort === 'desc' ? -1 : 1;
+  filteredScoped.sort(
     (a, b) =>
-      (Number(a.base_price) || 0) - (Number(b.base_price) || 0) ||
+      sortDir * ((Number(a.base_price) || 0) - (Number(b.base_price) || 0)) ||
       String(a.model || a.name).localeCompare(String(b.model || b.name))
   );
-
-  const isAdmin = state.userRole === 'ADMIN';
   document.getElementById('inventorySummaryGrid').innerHTML = `
     <div class="mini-kpi">
       <div class="mini-kpi-top">
@@ -786,7 +845,7 @@ function renderInventory() {
   `;
 
   const grid = document.getElementById('brandGrid');
-  if (scopedItems.length === 0) {
+  if (filteredScoped.length === 0) {
     grid.innerHTML = '<div class="muted small">No products match the current filters.</div>';
     updateBulkBar();
     return;
@@ -796,25 +855,28 @@ function renderInventory() {
     grid.innerHTML = `
       <div class="brand-group expanded">
         <div class="brand-tile" style="cursor:default;">
-          <span class="brand-tile-name">${productTypeLabel} (${scopedItems.length})</span>
+          <span class="brand-tile-name">${productTypeLabel} (${filteredScoped.length})</span>
+          ${isAdmin ? `
           <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--gold-bright);cursor:pointer;font-size:12px;">
-            <input type="checkbox" id="flatSelectAll" ${scopedItems.every((x) => state.selectedProducts.has(x.id)) ? 'checked' : ''} style="width:16px;height:16px;margin:0;" />
+            <input type="checkbox" id="flatSelectAll" ${filteredScoped.every((x) => state.selectedProducts.has(x.id)) ? 'checked' : ''} style="width:16px;height:16px;margin:0;" />
             Select All Shown
-          </label>
+          </label>` : ''}
         </div>
-        ${scopedItems.map((item) => renderModelCard(item, visibleBranches)).join('')}
+        ${filteredScoped.map((item) => renderModelCard(item, visibleBranches)).join('')}
       </div>
     `;
-    document.getElementById('flatSelectAll')?.addEventListener('change', (e) => {
-      for (const x of scopedItems) {
-        if (e.target.checked) state.selectedProducts.add(x.id);
-        else state.selectedProducts.delete(x.id);
-      }
-      renderInventory();
-    });
+    if (isAdmin) {
+      document.getElementById('flatSelectAll')?.addEventListener('change', (e) => {
+        for (const x of filteredScoped) {
+          if (e.target.checked) state.selectedProducts.add(x.id);
+          else state.selectedProducts.delete(x.id);
+        }
+        renderInventory();
+      });
+    }
   } else {
     const groups = new Map();
-    for (const item of scopedItems) {
+    for (const item of filteredScoped) {
       const brand = item.brand || item.category || 'Other';
       if (!groups.has(brand)) groups.set(brand, []);
       groups.get(brand).push(item);
@@ -858,7 +920,7 @@ function renderInventory() {
         const allSelected = list.length > 0 && list.every((x) => state.selectedProducts.has(x.id));
         const theme = BRAND_THEMES[brand.toLowerCase()] || { label: brand, accent: '#e7c55f', bg: '#252c35', style: '' };
 
-        const selectAllControl = isExpanded
+        const selectAllControl = isAdmin && isExpanded
           ? `<label class="brand-select-all" data-brand="${brand}" style="display:flex;align-items:center;gap:5px;margin:0;color:var(--text);font-size:11px;cursor:pointer;" onclick="event.stopPropagation()">
                <input type="checkbox" class="brand-select-all-chk" data-brand="${brand}" ${allSelected ? 'checked' : ''} style="width:15px;height:15px;margin:0;" />
                Select All
@@ -913,6 +975,43 @@ function renderInventory() {
       renderInventory();
     });
   });
+
+  if (isCashier) {
+    grid.querySelectorAll('.model-card[data-inv-calc-id]').forEach((card) => {
+      card.addEventListener('click', async () => {
+        const item = filteredScoped.find((x) => x.id === card.dataset.invCalcId);
+        if (!item) return;
+        const branchObj = visibleBranches[0] || { id: 'br-molave', name: 'Molave', cash_discount_pct: 5 };
+        if (!state.installmentRates) {
+          try {
+            const catRes = await api(`/api/catalog/branch/${branchObj.id}`);
+            state.installmentRates = catRes?.installmentRates || [];
+          } catch {
+            state.installmentRates = [
+              { months: 4, monthly_rate: 0.09 },
+              { months: 6, monthly_rate: 0.08 },
+              { months: 9, monthly_rate: 0.07 },
+              { months: 12, monthly_rate: 0.06 },
+            ];
+          }
+        }
+        const discountRate = (Number(branchObj.cash_discount_pct) || 5) / 100;
+        const calcItem = {
+          productId: item.id,
+          brand: item.brand,
+          model: item.model || item.name,
+          name: item.name,
+          productType: item.product_type || 'Cellphones',
+          basePrice: item.base_price,
+          cashPrice: Math.round((Number(item.base_price) || 0) * (1 - discountRate)),
+          imageUrl: item.imageUrl || '',
+          imageUrls: item.imageUrls || [],
+          branchAvailable: item.scopedAvail,
+        };
+        openCustomerCalcModal(calcItem, branchObj, state.installmentRates);
+      });
+    });
+  }
 
   updateBulkBar();
 }
@@ -2915,6 +3014,12 @@ document.getElementById('inventoryPdfBtn')?.addEventListener('click', downloadIn
 document.getElementById('inventoryExcelBtn')?.addEventListener('click', downloadInventoryExcel);
 document.getElementById('receivablesPdfBtn')?.addEventListener('click', downloadReceivablesPdf);
 document.getElementById('receivablesExcelBtn')?.addEventListener('click', downloadReceivablesExcel);
+document.getElementById('invPriceRange')?.addEventListener('change', renderInventory);
+document.getElementById('invRamRom')?.addEventListener('change', renderInventory);
+document.getElementById('invPriceSortBtn')?.addEventListener('click', () => {
+  state.invPriceSort = state.invPriceSort === 'desc' ? 'asc' : 'desc';
+  renderInventory();
+});
 
 function applyRolePermissions() {
   const role = state.userRole || 'ADMIN';
@@ -2956,9 +3061,11 @@ function applyRolePermissions() {
 
   // Cashier Inventory lockdown: hide Inventory Tools, bulk Cellphones/Accessories switcher, and limit Stock View to Available / Unavailable
   document.querySelector('.inv-tools-wrap')?.classList.toggle('hidden', !isAdmin);
+  document.getElementById('cashierCatalogFilters')?.classList.toggle('hidden', role !== 'CASHIER');
   if (!isAdmin) {
+    state.selectedProducts.clear();
     document.getElementById('invToolDrawer')?.classList.add('hidden');
-    document.getElementById('bulkGroupBar')?.classList.add('hidden');
+    document.getElementById('bulkActionBar')?.classList.add('hidden');
   }
   const stockViewSel = document.getElementById('stockViewSelect');
   if (stockViewSel) {
@@ -2972,10 +3079,10 @@ function applyRolePermissions() {
     }
   }
 
-  // Restrict available tabs by role
+  // Restrict available tabs by role (Cashier uses integrated Inventory + Catalog view, so no separate Catalogs tab)
   const allowedTabs =
     role === 'CASHIER'
-      ? ['inventory', 'catalogs']
+      ? ['inventory']
       : role === 'CI'
         ? ['receivables', 'catalogs']
         : ['inventory', 'stockChanges', 'activity', 'finance', 'receivables', 'catalogs', 'websiteStock', 'staffPins'];
