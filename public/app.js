@@ -1624,62 +1624,561 @@ document.getElementById('swapBranchFilter')?.addEventListener('change', renderSt
 document.getElementById('swapModeFilter')?.addEventListener('change', renderStockSwapTool);
 document.getElementById('stockSwapPdfBtn')?.addEventListener('click', downloadStockSwapPdf);
 
+const SUPPLIER_ORDER = ['AB Main Supplier', 'A&K', 'Online Purchase'];
+const BRANCH_ORDER = ['Molave', 'Tambulig', 'Bonifacio'];
+
+function resolveSupplierForProduct(item, mode = 'LOWEST') {
+  const ab = Number(item.cost_ab) || 0;
+  const ak = Number(item.cost_ak) || 0;
+  const on = Number(item.cost_online) || 0;
+  const fallbackCost = Number(item.cost_price) || 0;
+
+  if (mode === 'AB') return ab > 0 ? { supplier: 'AB Main Supplier', unitCost: ab } : null;
+  if (mode === 'AK') return ak > 0 ? { supplier: 'A&K', unitCost: ak } : null;
+  if (mode === 'ONLINE') return on > 0 ? { supplier: 'Online Purchase', unitCost: on } : null;
+
+  const candidates = [];
+  if (ab > 0) candidates.push({ supplier: 'AB Main Supplier', unitCost: ab });
+  if (ak > 0) candidates.push({ supplier: 'A&K', unitCost: ak });
+  if (on > 0) candidates.push({ supplier: 'Online Purchase', unitCost: on });
+  if (candidates.length) {
+    candidates.sort((a, b) => a.unitCost - b.unitCost);
+    return candidates[0];
+  }
+  if (fallbackCost > 0) {
+    return { supplier: 'AB Main Supplier', unitCost: fallbackCost };
+  }
+  return { supplier: 'AB Main Supplier', unitCost: 0 };
+}
+
+function buildRestockDraftPlan() {
+  if (!state.inventory) return [];
+  const mode = document.querySelector('input[name="restockSupplierMode"]:checked')?.value || 'LOWEST';
+  const typeFilter = document.getElementById('restockTypeFilter')?.value || 'Cellphones';
+  const budgetVal = Number(document.getElementById('restockBudgetInput')?.value) || 0;
+  const globalBranchId = document.getElementById('globalBranch')?.value || '';
+
+  const { branches, items } = state.inventory;
+  const targetBranches = globalBranchId ? branches.filter((b) => b.id === globalBranchId) : branches;
+
+  const candidates = [];
+  for (const item of items) {
+    if ((item.lifecycle_status || 'Active') !== 'Active') continue;
+    const pType = item.product_type || 'Cellphones';
+    if (typeFilter !== 'ALL' && pType !== typeFilter) continue;
+
+    const sup = resolveSupplierForProduct(item, mode);
+    if (!sup) continue;
+
+    const price = Number(item.base_price) || 0;
+    for (const b of targetBranches) {
+      const cell = item.byBranch[b.id];
+      if (!cell) continue;
+      const avail = Number(cell.qtyAvailable) || 0;
+      const defaultRp = price < 10000 ? (b.id === 'br-molave' ? 2 : 1) : price <= 20000 ? 2 : 1;
+      const reorderPoint = Number(cell.reorderPoint) || defaultRp;
+      if (avail > reorderPoint) continue;
+
+      const targetQty = b.id === 'br-molave' ? Math.max(reorderPoint + 2, 3) : Math.max(reorderPoint + 1, 2);
+      const suggestedQty = Math.max(1, targetQty - avail);
+
+      candidates.push({
+        key: `${item.id}::${b.id}`,
+        productId: item.id,
+        brand: item.brand || '',
+        model: item.model || item.name,
+        displayModel: formatSwapModelName({ brand: item.brand || '', model: item.model || item.name }),
+        sku: item.website_codes || item.sku,
+        branchId: b.id,
+        branchName: b.name,
+        supplier: sup.supplier,
+        unitCost: sup.unitCost,
+        avail,
+        reorderPoint,
+        qty: suggestedQty,
+        selected: true,
+      });
+    }
+  }
+
+  // Prioritize 0-stock first, then lowest avail, then lowest unit cost
+  candidates.sort((a, b) => {
+    if ((a.avail === 0) !== (b.avail === 0)) return a.avail === 0 ? -1 : 1;
+    if (a.avail !== b.avail) return a.avail - b.avail;
+    return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel);
+  });
+
+  if (budgetVal > 0) {
+    let spent = 0;
+    for (const c of candidates) {
+      if (c.unitCost <= 0) continue;
+      if (spent + c.unitCost > budgetVal) {
+        c.selected = false;
+        continue;
+      }
+      const maxAffordable = Math.floor((budgetVal - spent) / c.unitCost);
+      if (maxAffordable < c.qty) {
+        c.qty = Math.max(1, maxAffordable);
+      }
+      spent += c.qty * c.unitCost;
+    }
+  }
+
+  state.restockPlan = candidates;
+  return candidates;
+}
+
+function renderRestockDraftTable() {
+  const plan = state.restockPlan || [];
+  const tbody = document.querySelector('#reorderTable tbody');
+  const sumEl = document.getElementById('restockDraftSummary');
+  if (!tbody) return;
+
+  const selected = plan.filter((r) => r.selected && r.qty > 0);
+  const totalUnits = selected.reduce((s, r) => s + r.qty, 0);
+  const totalCost = selected.reduce((s, r) => s + r.qty * r.unitCost, 0);
+  if (sumEl) {
+    sumEl.innerHTML = `Selected <strong>${fmtNum(selected.length)}</strong> line(s) • <strong>${fmtNum(totalUnits)} pcs</strong> • Est. Total: <strong style="color:var(--gold-bright);">${fmtCurrency(totalCost)}</strong>`;
+  }
+
+  tbody.innerHTML = plan.length
+    ? plan
+        .map(
+          (r, idx) => `
+        <tr>
+          <td><input type="checkbox" class="reorder-row-chk" data-idx="${idx}" ${r.selected ? 'checked' : ''} style="width:15px;height:15px;accent-color:var(--gold);" /></td>
+          <td><strong>${r.displayModel}</strong><div class="small muted">${r.sku}</div></td>
+          <td>${r.branchName}</td>
+          <td><span class="badge badge-ok">${r.supplier}</span></td>
+          <td>${fmtNum(r.avail)} / ${fmtNum(r.reorderPoint)}</td>
+          <td><input type="number" class="reorder-qty-inp" data-idx="${idx}" value="${r.qty}" min="1" max="99" style="width:62px;padding:4px 6px;text-align:center;" /></td>
+          <td>${r.unitCost > 0 ? fmtCurrency(r.unitCost) : '<span class="muted">—</span>'}</td>
+          <td><strong>${r.unitCost > 0 ? fmtCurrency(r.qty * r.unitCost) : '—'}</strong></td>
+        </tr>`
+        )
+        .join('')
+    : '<tr><td colspan="8" class="muted">No products match the selected supplier/reorder criteria.</td></tr>';
+
+  tbody.querySelectorAll('.reorder-row-chk').forEach((chk) => {
+    chk.addEventListener('change', (e) => {
+      const idx = Number(e.target.dataset.idx);
+      if (state.restockPlan?.[idx]) state.restockPlan[idx].selected = e.target.checked;
+      renderRestockDraftTable();
+    });
+  });
+
+  tbody.querySelectorAll('.reorder-qty-inp').forEach((inp) => {
+    inp.addEventListener('change', (e) => {
+      const idx = Number(e.target.dataset.idx);
+      const val = Math.max(1, parseInt(e.target.value, 10) || 1);
+      if (state.restockPlan?.[idx]) state.restockPlan[idx].qty = val;
+      renderRestockDraftTable();
+    });
+  });
+}
+
+function getGroupedReorderPlan() {
+  const selected = (state.restockPlan || []).filter((r) => r.selected && r.qty > 0);
+  const bySupplier = new Map();
+  for (const sup of SUPPLIER_ORDER) bySupplier.set(sup, new Map());
+
+  for (const r of selected) {
+    if (!bySupplier.has(r.supplier)) bySupplier.set(r.supplier, new Map());
+    const branchMap = bySupplier.get(r.supplier);
+    if (!branchMap.has(r.branchName)) branchMap.set(r.branchName, []);
+    branchMap.get(r.branchName).push(r);
+  }
+
+  const ordered = [];
+  for (const [supplier, branchMap] of bySupplier.entries()) {
+    if (!branchMap.size) continue;
+    const branchesOut = [];
+    const sortedBranchNames = [...branchMap.keys()].sort((a, b) => {
+      const ia = BRANCH_ORDER.indexOf(a);
+      const ib = BRANCH_ORDER.indexOf(b);
+      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b);
+    });
+    for (const bName of sortedBranchNames) {
+      branchesOut.push({ branchName: bName, rows: branchMap.get(bName) });
+    }
+    ordered.push({ supplier, branches: branchesOut });
+  }
+  return { selected, grouped: ordered };
+}
+
+function buildReorderCopyText() {
+  const { grouped } = getGroupedReorderPlan();
+  if (!grouped.length) return '';
+  const parts = ['Reorder request'];
+  for (const supGroup of grouped) {
+    parts.push(supGroup.supplier);
+    for (const bGroup of supGroup.branches) {
+      const lines = [bGroup.branchName];
+      for (const r of bGroup.rows) {
+        lines.push(`${r.displayModel} — ${r.qty} ${r.qty === 1 ? 'pc' : 'pcs'}`);
+      }
+      parts.push(lines.join('\n'));
+    }
+  }
+  return parts.join('\n\n');
+}
+
+function renderReorderPreviewModal() {
+  const modal = document.getElementById('reorderPreviewModal');
+  if (!modal) return;
+  const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked);
+  const { selected, grouped } = getGroupedReorderPlan();
+
+  const prepEl = document.getElementById('reorderPreviewPrepared');
+  if (prepEl) {
+    prepEl.textContent = `Prepared ${new Date().toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    })}`;
+  }
+
+  const totalUnits = selected.reduce((s, r) => s + r.qty, 0);
+  const totalCost = selected.reduce((s, r) => s + r.qty * r.unitCost, 0);
+  const branchTotals = new Map(BRANCH_ORDER.map((b) => [b, { qty: 0, cost: 0 }]));
+  for (const r of selected) {
+    if (!branchTotals.has(r.branchName)) branchTotals.set(r.branchName, { qty: 0, cost: 0 });
+    const bt = branchTotals.get(r.branchName);
+    bt.qty += r.qty;
+    bt.cost += r.qty * r.unitCost;
+  }
+
+  const metricsEl = document.getElementById('reorderPreviewMetrics');
+  if (metricsEl) {
+    const branchPills = [...branchTotals.entries()]
+      .filter(([, v]) => v.qty > 0)
+      .map(
+        ([b, v]) =>
+          `<span style="display:inline-block;padding:4px 8px;border-radius:6px;background:#fff;border:1px solid #d5ceb8;font-size:12px;"><strong>${b}:</strong> ${v.qty} pcs${showCosts ? ` (${fmtCurrency(v.cost)})` : ''}</span>`
+      )
+      .join(' ');
+    metricsEl.innerHTML = `
+      <div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:130px;">
+        <div style="font-size:10px;font-weight:700;color:#6b6351;">ORDER UNITS</div>
+        <div style="font-size:18px;font-weight:800;color:#1b1913;">${fmtNum(totalUnits)}</div>
+      </div>
+      ${
+        showCosts
+          ? `<div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:150px;">
+              <div style="font-size:10px;font-weight:700;color:#6b6351;">EST. TOTAL COST</div>
+              <div style="font-size:18px;font-weight:800;color:#1d6f42;">${fmtCurrency(totalCost)}</div>
+            </div>`
+          : ''
+      }
+      <div style="flex:1;min-width:220px;">
+        <div style="font-size:10px;font-weight:700;color:#6b6351;margin-bottom:4px;">BRANCH SUBTOTALS</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">${branchPills || '<span style="font-size:12px;color:#6b6351;">None</span>'}</div>
+      </div>
+    `;
+  }
+
+  const bodyEl = document.getElementById('reorderPreviewBody');
+  if (bodyEl) {
+    if (!grouped.length) {
+      bodyEl.innerHTML = '<div style="padding:16px;text-align:center;color:#6b6351;">No products selected in this reorder plan.</div>';
+    } else {
+      bodyEl.innerHTML = grouped
+        .map(
+          (sup) => `
+          <div style="margin-bottom:12px;">
+            <div style="background:#ebe2be;color:#1b1913;font-weight:700;font-size:12px;padding:6px 10px;border-radius:6px;">
+              ${sup.supplier}
+            </div>
+            ${sup.branches
+              .map(
+                (b) => `
+              <div style="margin-top:8px;padding:0 4px;">
+                <div style="font-weight:700;font-size:12px;color:#1b1913;margin-bottom:4px;">${b.branchName}</div>
+                ${b.rows
+                  .map((r) => {
+                    const nameLabel = r.brand && !r.model.toLowerCase().startsWith(r.brand.toLowerCase())
+                      ? `${r.brand} · ${r.model}`
+                      : r.model;
+                    return `
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid #e6e0ce;font-size:12.5px;">
+                      <span>${nameLabel}</span>
+                      <span style="display:flex;align-items:center;gap:12px;white-space:nowrap;">
+                        ${showCosts ? `<span style="color:#4f493a;font-size:11.5px;">${fmtCurrency(r.unitCost)} × ${r.qty} = <strong>${fmtCurrency(r.unitCost * r.qty)}</strong></span>` : ''}
+                        <strong style="color:#b45309;">${r.qty} ${r.qty === 1 ? 'pc' : 'pcs'}</strong>
+                      </span>
+                    </div>`;
+                  })
+                  .join('')}
+              </div>`
+              )
+              .join('')}
+          </div>`
+        )
+        .join('');
+    }
+  }
+  const stEl = document.getElementById('reorderPreviewStatus');
+  if (stEl) stEl.textContent = '';
+}
+
+function downloadReorderPlanPdf() {
+  const jspdfNs = window.jspdf;
+  if (!jspdfNs || typeof jspdfNs.jsPDF !== 'function') {
+    alert('PDF generator library is still loading. Please try again.');
+    return;
+  }
+  const { selected, grouped } = getGroupedReorderPlan();
+  if (!selected.length) {
+    alert('No products selected to download.');
+    return;
+  }
+  const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked);
+  const doc = new jspdfNs.jsPDF({ orientation: 'portrait', unit: 'in', format: [8.5, 13], compress: true });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const margin = 24 / 72;
+  const nowLabel = new Date().toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.setTextColor(27, 25, 19);
+  doc.text('AB-GADGETZ · REORDER PLAN', pageWidth / 2, 30 / 72, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(79, 73, 58);
+  const totalUnits = selected.reduce((s, r) => s + r.qty, 0);
+  const totalCost = selected.reduce((s, r) => s + r.qty * r.unitCost, 0);
+  doc.text(
+    `Prepared ${nowLabel} · ${totalUnits} pcs${showCosts ? ` · Est. Total PHP ${fmtNum(Math.round(totalCost))}` : ''}`,
+    pageWidth / 2,
+    43 / 72,
+    { align: 'center' }
+  );
+
+  const head = showCosts
+    ? [['Branch', 'Brand / Model', 'Qty', 'Unit Cost', 'Subtotal']]
+    : [['Branch', 'Brand / Model', 'Qty']];
+  const colsCount = showCosts ? 5 : 3;
+  const body = [];
+
+  for (const sup of grouped) {
+    body.push([
+      {
+        content: sup.supplier,
+        colSpan: colsCount,
+        styles: { fillColor: [235, 226, 190], fontStyle: 'bold', textColor: [27, 25, 19] },
+      },
+    ]);
+    for (const b of sup.branches) {
+      for (const r of b.rows) {
+        const row = [
+          b.branchName,
+          r.displayModel,
+          `${r.qty} ${r.qty === 1 ? 'pc' : 'pcs'}`,
+        ];
+        if (showCosts) {
+          row.push(r.unitCost > 0 ? `PHP ${fmtNum(Math.round(r.unitCost))}` : '—');
+          row.push(r.unitCost > 0 ? `PHP ${fmtNum(Math.round(r.unitCost * r.qty))}` : '—');
+        }
+        body.push(row);
+      }
+    }
+  }
+
+  doc.autoTable({
+    startY: 56 / 72,
+    margin: { left: margin, right: margin, bottom: margin },
+    head,
+    body,
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 8.5,
+      cellPadding: 4 / 72,
+      textColor: [27, 25, 19],
+      lineColor: [75, 70, 58],
+      lineWidth: 0.65 / 72,
+    },
+    columnStyles: showCosts
+      ? { 2: { halign: 'center' }, 3: { halign: 'right' }, 4: { halign: 'right' } }
+      : { 2: { halign: 'center' } },
+    headStyles: { fillColor: [235, 226, 190], textColor: [30, 30, 30], fontStyle: 'bold' },
+  });
+
+  doc.save(`AB_Gadgetz_Reorder_Plan_${todayStr}.pdf`);
+}
+
+async function downloadReorderPlanExcel() {
+  if (!window.ExcelJS) {
+    alert('Excel library is still loading. Please try again in a second.');
+    return;
+  }
+  const { selected, grouped } = getGroupedReorderPlan();
+  if (!selected.length) {
+    alert('No products selected to export.');
+    return;
+  }
+  const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked);
+  const wb = new window.ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Reorder Plan');
+
+  ws.mergeCells(1, 1, 1, showCosts ? 5 : 3);
+  const titleCell = ws.getCell(1, 1);
+  titleCell.value = `AB-GADGETZ · REORDER PLAN (${todayStr})`;
+  titleCell.font = { bold: true, size: 13 };
+  titleCell.alignment = { horizontal: 'center' };
+
+  const headers = showCosts
+    ? ['Branch', 'Brand / Model', 'Qty', 'Unit Cost', 'Subtotal']
+    : ['Branch', 'Brand / Model', 'Qty'];
+  const headerRow = ws.addRow(headers);
+  headerRow.eachCell((c) => {
+    c.font = { bold: true, size: 10 };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEBE2BE' } };
+    c.border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+  });
+
+  for (const sup of grouped) {
+    const supRow = ws.addRow([sup.supplier]);
+    ws.mergeCells(supRow.number, 1, supRow.number, showCosts ? 5 : 3);
+    supRow.getCell(1).font = { bold: true, size: 10 };
+    supRow.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F0DC' } };
+    for (const b of sup.branches) {
+      for (const r of b.rows) {
+        const vals = showCosts
+          ? [b.branchName, r.displayModel, r.qty, r.unitCost, r.unitCost * r.qty]
+          : [b.branchName, r.displayModel, r.qty];
+        const row = ws.addRow(vals);
+        if (showCosts) {
+          row.getCell(4).numFmt = '"₱"#,##0';
+          row.getCell(5).numFmt = '"₱"#,##0';
+        }
+        row.eachCell((c) => {
+          c.border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+        });
+      }
+    }
+  }
+
+  ws.columns = showCosts
+    ? [{ width: 16 }, { width: 38 }, { width: 10 }, { width: 14 }, { width: 16 }]
+    : [{ width: 16 }, { width: 42 }, { width: 12 }];
+
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `AB_Gadgetz_Reorder_Plan_${todayStr}.xlsx`;
+  a.click();
+}
+
 async function loadPlanning() {
-  const [planning, budget] = await Promise.all([api('/api/planning'), api('/api/budget')]);
-  state.planning = planning;
-  state.budget = budget;
+  try {
+    const [planning, budget] = await Promise.all([api('/api/planning'), api('/api/budget')]);
+    state.planning = planning;
+    state.budget = budget;
+  } catch {
+    // static GitHub Pages bundle fallback
+  }
   renderPlanning();
 }
 
 function renderPlanning() {
-  if (state.budget) {
+  if (state.budget?.summary) {
     const s = state.budget.summary;
-    document.getElementById('budgetSummaryGrid').innerHTML = `
-      <div class="summary-box">
-        TOTAL CASH + UNDEPOSITED
-        <strong>${fmtCurrency(s.totalCash)}</strong>
-        <span class="summary-note">Banks: ${fmtCurrency(s.totalBanks)} • Undeposited: ${fmtCurrency(s.totalUndeposited)}</span>
-      </div>
-      <div class="summary-box">
-        CREDIT CARD BILLS
-        <strong style="color:var(--danger);">${fmtCurrency(s.totalCreditCards)}</strong>
-        <span class="summary-note">Deducted before ordering</span>
-      </div>
-      <div class="summary-box">
-        NET ORDER BUDGET
-        <strong>${fmtCurrency(s.netOrderBudget)}</strong>
-        <span class="summary-note">Available for supplier POs</span>
-      </div>
-    `;
+    const sumGrid = document.getElementById('budgetSummaryGrid');
+    if (sumGrid) {
+      sumGrid.innerHTML = `
+        <div class="summary-box">
+          TOTAL CASH + UNDEPOSITED
+          <strong>${fmtCurrency(s.totalCash)}</strong>
+          <span class="summary-note">Banks: ${fmtCurrency(s.totalBanks)} • Undeposited: ${fmtCurrency(s.totalUndeposited)}</span>
+        </div>
+        <div class="summary-box">
+          CREDIT CARD BILLS
+          <strong style="color:var(--danger);">${fmtCurrency(s.totalCreditCards)}</strong>
+          <span class="summary-note">Deducted before ordering</span>
+        </div>
+        <div class="summary-box">
+          NET ORDER BUDGET
+          <strong>${fmtCurrency(s.netOrderBudget)}</strong>
+          <span class="summary-note">Available for supplier POs</span>
+        </div>
+      `;
+    }
+    const budgetInp = document.getElementById('restockBudgetInput');
+    if (budgetInp && !budgetInp.value && s.netOrderBudget > 0) {
+      budgetInp.value = Number(s.netOrderBudget).toFixed(2);
+    }
   }
-  const { reorderSuggestions, transferSuggestions } = state.planning;
-  const globalBranchId = document.getElementById('globalBranch').value;
-
-  const filteredReorders = globalBranchId
-    ? reorderSuggestions.filter((r) => r.branchId === globalBranchId)
-    : reorderSuggestions;
-
-  document.querySelector('#reorderTable tbody').innerHTML = filteredReorders.length
-    ? filteredReorders.slice(0, 50).map((r) => `
-        <tr>
-          <td><strong>${r.sku}</strong> — ${r.productName}</td>
-          <td>${r.branchName}</td>
-          <td>${fmtNum(r.qtyAvailable)} / ${fmtNum(r.reorderPoint)}</td>
-          <td><strong>+${fmtNum(r.suggestedOrderQty)}</strong></td>
-          <td>${fmtCurrency(r.estimatedCost)}</td>
-        </tr>`).join('')
-    : '<tr><td colspan="5" class="muted">No reorder suggestions right now.</td></tr>';
-
-  document.querySelector('#transferTable tbody').innerHTML = transferSuggestions.length
-    ? transferSuggestions.map((t) => `
-        <tr>
-          <td><strong>${t.sku}</strong> — ${t.productName}</td>
-          <td>${t.fromBranch} <span class="badge badge-ok">${t.fromAvailable}</span></td>
-          <td>${t.toBranch} <span class="badge badge-warn">${t.toAvailable}</span></td>
-          <td><strong>Transfer ${t.suggestedTransferQty}</strong></td>
-        </tr>`).join('')
-    : '<tr><td colspan="4" class="muted">No inter-branch transfers needed right now.</td></tr>';
+  buildRestockDraftPlan();
+  renderRestockDraftTable();
 }
+
+document.getElementById('buildRestockPlanBtn')?.addEventListener('click', () => {
+  buildRestockDraftPlan();
+  renderRestockDraftTable();
+  renderReorderPreviewModal();
+  document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
+});
+
+document.getElementById('previewRestockPlanBtn')?.addEventListener('click', () => {
+  if (!state.restockPlan) buildRestockDraftPlan();
+  renderReorderPreviewModal();
+  document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
+});
+
+document.getElementById('restockTypeFilter')?.addEventListener('change', () => {
+  buildRestockDraftPlan();
+  renderRestockDraftTable();
+});
+
+document.querySelectorAll('input[name="restockSupplierMode"]').forEach((r) => {
+  r.addEventListener('change', () => {
+    buildRestockDraftPlan();
+    renderRestockDraftTable();
+  });
+});
+
+document.getElementById('reorderSelectAllChk')?.addEventListener('change', (e) => {
+  const checked = e.target.checked;
+  for (const r of state.restockPlan || []) r.selected = checked;
+  renderRestockDraftTable();
+});
+
+document.getElementById('reorderShowCostsChk')?.addEventListener('change', renderReorderPreviewModal);
+document.getElementById('closeReorderPreviewBtn')?.addEventListener('click', () => {
+  document.getElementById('reorderPreviewModal')?.classList.add('hidden');
+});
+document.getElementById('reorderBackToEditBtn')?.addEventListener('click', () => {
+  document.getElementById('reorderPreviewModal')?.classList.add('hidden');
+});
+document.getElementById('reorderPrintBtn')?.addEventListener('click', () => window.print());
+document.getElementById('reorderPdfBtn')?.addEventListener('click', downloadReorderPlanPdf);
+document.getElementById('reorderExcelBtn')?.addEventListener('click', downloadReorderPlanExcel);
+document.getElementById('reorderCopyBtn')?.addEventListener('click', async () => {
+  const text = buildReorderCopyText();
+  const stEl = document.getElementById('reorderPreviewStatus');
+  if (!text) {
+    if (stEl) {
+      stEl.style.color = '#b91c1c';
+      stEl.textContent = 'No products selected to copy.';
+    }
+    return;
+  }
+  const ok = await copyTextToClipboard(text);
+  if (stEl) {
+    stEl.style.color = ok ? '#1d6f42' : '#b91c1c';
+    stEl.textContent = ok ? 'Copied Reorder request to clipboard.' : 'Unable to copy automatically.';
+  }
+});
 
 async function loadCustomers() {
   return loadBranchCatalog();
