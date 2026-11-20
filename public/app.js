@@ -3030,8 +3030,8 @@ document.getElementById('saveStaffPinsBtn')?.addEventListener('click', async () 
   for (const key of keys) {
     const inputId = `pin_${key.replace('::', '_')}`;
     const val = document.getElementById(inputId)?.value.trim() || '';
-    if (!/^\d{4,12}$/.test(val)) {
-      if (msg) msg.textContent = `PIN for ${key.replace('::', ' ')} must be 4 to 12 digits.`;
+    if (!/^\d{6}$/.test(val)) {
+      if (msg) msg.textContent = `PIN for ${key.replace('::', ' ')} must be exactly 6 digits.`;
       return;
     }
     pins[key] = val;
@@ -3108,13 +3108,16 @@ async function checkAuth() {
   document.getElementById('authGate').dataset.mode = isSetup ? 'setup' : 'login';
 
   const roleSel = document.getElementById('loginRoleSelect');
+  const roleBoxes = document.getElementById('loginRoleBoxes');
   const adminBox = document.querySelector('#loginRoleBoxes .login-choice-box[data-role="ADMIN"]');
   if (roleSel) {
     if (isStaffPath) {
       if (adminBox) adminBox.classList.add('hidden');
+      if (roleBoxes) roleBoxes.classList.add('cols-2');
       if (roleSel.value === 'ADMIN') roleSel.value = 'CASHIER';
-    } else if (adminBox) {
-      adminBox.classList.remove('hidden');
+    } else {
+      if (adminBox) adminBox.classList.remove('hidden');
+      if (roleBoxes) roleBoxes.classList.remove('cols-2');
     }
   }
   updateAuthRoleUI();

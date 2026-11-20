@@ -1075,33 +1075,31 @@ button.danger { background: #a33a35; color: #fff; }
 }
 .login-box-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
   margin-top: 6px;
+}
+.login-box-grid.cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .login-choice-box {
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 10px 6px;
-  border-radius: 10px;
+  min-height: 36px;
+  padding: 7px 6px;
+  border-radius: 8px;
   border: 1px solid #48515e;
   background: #171c23;
   color: var(--text);
   cursor: pointer;
-  gap: 3px;
-  transition: border-color .15s, background .15s, transform .12s;
+  transition: border-color .15s, background .15s;
 }
 .login-choice-box strong {
-  font-size: 12px;
+  font-size: 11.5px;
+  font-weight: 700;
   color: var(--text);
-  line-height: 1.2;
-}
-.login-choice-box span {
-  font-size: 10px;
-  color: var(--muted);
   line-height: 1.2;
 }
 .login-choice-box:hover {
@@ -1123,7 +1121,11 @@ button.danger { background: #a33a35; color: #fff; }
   margin-bottom: 4px;
 }
 @media (max-width: 480px) {
-  .login-box-grid {
-    grid-template-columns: 1fr;
+  .login-choice-box {
+    min-height: 38px;
+    padding: 7px 4px;
+  }
+  .login-choice-box strong {
+    font-size: 11px;
   }
 }
