@@ -2835,7 +2835,7 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
         const priceNum = Number(item.base_price) || 0;
         const priceText = isFreebieAccessory(item)
           ? ''
-          : 'PHP ' + priceNum.toLocaleString('en-PH', { maximumFractionDigits: 0 });
+          : 'P ' + priceNum.toLocaleString('en-PH', { maximumFractionDigits: 0 });
         const dayCells = panelDays.map((d) => {
           if (blankQuantities) return '';
           const val = item.daily ? item.daily[d - 1] : (d <= asOfDay ? item.exportQty : null);
@@ -2879,7 +2879,7 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
       startY: topY,
       margin: { top: topY, left: margin, right: margin, bottom: bottomMargin },
       tableWidth: contentWidth,
-      head: [['Model', 'Unit Price (PHP)', ...panelDays.map((d) => String(d))]],
+      head: [['Model', 'Unit Price (P)', ...panelDays.map((d) => String(d))]],
       body: bodyRows,
       theme: 'grid',
       showHead: 'everyPage',
@@ -2907,6 +2907,39 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
         if (hookData.section === 'body' && hookData.row.index === bodyRows.length - 1) {
           hookData.cell.styles.fillColor = [233, 228, 211];
           hookData.cell.styles.fontStyle = 'bold';
+        }
+      },
+      didDrawCell(hookData) {
+        if (hookData.column.index !== 1) return;
+        const txt = String((hookData.cell.text && hookData.cell.text[0]) || '');
+        if (!txt) return;
+        const fs = hookData.cell.styles.fontSize || fontSize;
+        const fIn = fs / 72;
+        doc.setFont('helvetica', hookData.cell.styles.fontStyle || 'normal');
+        doc.setFontSize(fs);
+        doc.setDrawColor(27, 25, 19);
+        doc.setLineWidth(Math.max(0.25, fs * 0.05) / 72);
+
+        const drawCrossbars = (px, pW, midY) => {
+          const x1 = px - 0.35 / 72;
+          const x2 = px + pW + 0.45 / 72;
+          doc.line(x1, midY - 0.16 * fIn, x2, midY - 0.16 * fIn);
+          doc.line(x1, midY - 0.03 * fIn, x2, midY - 0.03 * fIn);
+        };
+
+        const midY = hookData.cell.y + hookData.cell.height / 2;
+        if (hookData.section === 'head' && txt.includes('(P)')) {
+          const totalW = doc.getTextWidth(txt);
+          const beforeW = doc.getTextWidth(txt.slice(0, txt.indexOf('(P)') + 1));
+          const pW = doc.getTextWidth('P');
+          const startX = hookData.cell.x + (hookData.cell.width - totalW) / 2;
+          drawCrossbars(startX + beforeW, pW, midY);
+        } else if (hookData.section === 'body' && txt.startsWith('P ')) {
+          const padR = hookData.cell.padding('right');
+          const totalW = doc.getTextWidth(txt);
+          const pW = doc.getTextWidth('P');
+          const startX = hookData.cell.x + hookData.cell.width - padR - totalW;
+          drawCrossbars(startX, pW, midY);
         }
       },
     });
@@ -3008,7 +3041,7 @@ async function downloadInventoryExcel() {
 
       // Row 3: Table Header
       const daysHeaders = Array.from({ length: daysInMonth }, (_, i) => i + 1);
-      const headerRow = sheet.addRow(['Model', 'Unit Price (PHP)', ...daysHeaders]);
+      const headerRow = sheet.addRow(['Model', 'Unit Price (₱)', ...daysHeaders]);
       headerRow.height = 20;
       headerRow.eachCell((cell, colNumber) => {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEBE2BE' } };
@@ -3047,7 +3080,7 @@ async function downloadInventoryExcel() {
               cell.alignment = { vertical: 'middle', horizontal: 'left' };
             } else if (colNumber === 2) {
               cell.alignment = { vertical: 'middle', horizontal: 'right' };
-              if (priceNum !== null) cell.numFmt = '"PHP "#,##0';
+              if (priceNum !== null) cell.numFmt = '"₱"#,##0';
             } else {
               cell.alignment = { vertical: 'middle', horizontal: 'right' };
               if (cell.value !== null && cell.value !== '') cell.numFmt = '#,##0';
