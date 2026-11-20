@@ -1129,3 +1129,111 @@ button.danger { background: #a33a35; color: #fff; }
     font-size: 11px;
   }
 }
+
+/* Staff / Cashier Compact Header & Integrated Mobile Layout */
+body.role-staff .owner-bar {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+}
+body.role-staff .owner-bar-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+body.role-staff .owner-branch {
+  display: none !important;
+}
+body.role-staff .sync-controls {
+  display: grid;
+  grid-template-columns: auto auto;
+  justify-items: end;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+body.role-staff .sync-pill {
+  grid-column: 1 / -1;
+  justify-self: end;
+  padding: 3px 8px;
+  font-size: 10.5px;
+}
+body.role-staff #syncNowBtn,
+body.role-staff #logoutBtn {
+  padding: 5px 9px;
+  font-size: 11px;
+  min-height: 28px;
+}
+body.role-cashier #mobileBottomNav {
+  display: none !important;
+}
+body.role-cashier #menuHamburgerIcon {
+  display: none !important;
+}
+body.role-cashier #menuToggleBtn {
+  background: transparent !important;
+  border: none !important;
+  color: var(--gold-bright) !important;
+  padding: 2px 0 !important;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  cursor: default;
+  box-shadow: none !important;
+}
+.inv-shopee-grid {
+  margin-top: 10px;
+}
+@media (max-width: 768px) {
+  body.role-cashier .nav-toggle-bar {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  body.role-cashier #productTypeFilter {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  body.role-cashier #invFilterBar {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px !important;
+    align-items: end;
+  }
+  body.role-cashier .inv-group-wrap,
+  body.role-cashier .inv-stockview-wrap {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 4px !important;
+    min-width: 0;
+  }
+  body.role-cashier .inv-group-wrap select,
+  body.role-cashier .inv-stockview-wrap select {
+    width: 100% !important;
+    min-width: 0;
+  }
+  body.role-cashier .inv-cashier-filters:not(.hidden) {
+    grid-column: 1 / -1;
+    display: grid !important;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 6px !important;
+    width: 100%;
+  }
+  body.role-cashier .inv-cashier-filters select {
+    width: 100% !important;
+    min-width: 0;
+  }
+  body.role-cashier .inv-date-pdf-wrap {
+    grid-column: 1 / -1;
+    margin-left: 0 !important;
+    justify-content: space-between;
+    width: 100%;
+  }
+}

@@ -42,6 +42,7 @@ function setMenuOpen(open) {
 
 menuToggleBtn.addEventListener('click', (e) => {
   e.stopPropagation();
+  if (state.userRole === 'CASHIER') return;
   setMenuOpen(mainTabsMenu.classList.contains('hidden'));
 });
 
@@ -851,6 +852,61 @@ function renderInventory() {
     return;
   }
 
+  const branchObj = visibleBranches[0] || { id: 'br-molave', name: 'Molave', cash_discount_pct: 5 };
+  const cashPct = Number(branchObj.cash_discount_pct) || 5;
+  const discountRate = cashPct / 100;
+  const rates = state.installmentRates || [
+    { months: 4, monthly_rate: 0.09 },
+    { months: 6, monthly_rate: 0.08 },
+    { months: 9, monthly_rate: 0.07 },
+    { months: 12, monthly_rate: 0.06 },
+  ];
+
+  const renderCashierShopeeCard = (item) => {
+    const brandKey = String(item.brand || '').toLowerCase();
+    const accMap = {
+      infinix: '#77e82a', tecno: '#3b82f6', realme: '#ffd600', itel: '#ff3355',
+      redmi: '#ff6900', vivo: '#60a5fa', honor: '#38bdf8', samsung: '#3b82f6',
+      nubia: '#ef4444', zte: '#06b6d4', poco: '#facc15', oppo: '#10b981', apple: '#f8fafc',
+    };
+    const accent = accMap[brandKey] || '#e7c55f';
+    const brandLabel = brandKey === 'apple' ? 'Apple' : (item.brand || '');
+    const cashPrice = Math.round((Number(item.base_price) || 0) * (1 - discountRate));
+    const isPhone = (item.product_type || 'Cellphones') === 'Cellphones';
+    const mo4 = isPhone ? calc4MoAmortization(item.base_price, rates) : 0;
+    const imgHtml = item.imageUrl
+      ? `<img src="${item.imageUrl}" alt="${item.name}" loading="lazy" />`
+      : `<div style="font-size:40px;color:var(--gold);">${isPhone ? '📱' : '🎧'}</div>`;
+    const installBanner = mo4 > 0
+      ? `<div class="shopee-badge-installment"><span>4-Mo Est</span><span>${fmtCurrency(mo4)}/mo</span></div>`
+      : '';
+    const availText = item.scopedAvail > 0 ? `${fmtNum(item.scopedAvail)} avail` : 'Out of stock';
+    const availStyle = item.scopedAvail > 0 ? '' : 'color:#f87171;border-color:rgba(248,113,113,.35);';
+    return `
+      <div class="shopee-card" data-inv-calc-id="${item.id}">
+        <div class="shopee-thumb">
+          ${imgHtml}
+          <span class="shopee-badge-brand" style="color:${accent};">${brandLabel}</span>
+          <span class="shopee-badge-avail" style="${availStyle}">${availText}</span>
+          ${installBanner}
+        </div>
+        <div class="shopee-body">
+          <div class="shopee-title"><img src="${LOGO_SQUARE_SRC}" alt="Logo" class="shopee-mall-logo" />${item.model || item.name}</div>
+          <div>
+            <div class="shopee-price-row">
+              <span class="shopee-price-main">${fmtCurrency(cashPrice)}</span>
+              <span class="shopee-discount-pill">-${cashPct}% Cash</span>
+            </div>
+            <div class="shopee-srp-sub">
+              <span>SRP ${fmtCurrency(item.base_price)}</span>
+              <span style="color:var(--gold);">Installment ›</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
   if (groupingMode === 'flat') {
     grid.innerHTML = `
       <div class="brand-group expanded">
@@ -862,7 +918,9 @@ function renderInventory() {
             Select All Shown
           </label>` : ''}
         </div>
-        ${filteredScoped.map((item) => renderModelCard(item, visibleBranches)).join('')}
+        ${isCashier
+          ? `<div class="shopee-grid inv-shopee-grid">${filteredScoped.map(renderCashierShopeeCard).join('')}</div>`
+          : filteredScoped.map((item) => renderModelCard(item, visibleBranches)).join('')}
       </div>
     `;
     if (isAdmin) {
@@ -928,7 +986,9 @@ function renderInventory() {
           : '';
 
         const cardsHtml = isExpanded
-          ? list.map((item) => renderModelCard(item, visibleBranches)).join('')
+          ? isCashier
+            ? `<div class="shopee-grid inv-shopee-grid">${list.map(renderCashierShopeeCard).join('')}</div>`
+            : list.map((item) => renderModelCard(item, visibleBranches)).join('')
           : '';
 
         return `
@@ -977,7 +1037,7 @@ function renderInventory() {
   });
 
   if (isCashier) {
-    grid.querySelectorAll('.model-card[data-inv-calc-id]').forEach((card) => {
+    grid.querySelectorAll('[data-inv-calc-id]').forEach((card) => {
       card.addEventListener('click', async () => {
         const item = filteredScoped.find((x) => x.id === card.dataset.invCalcId);
         if (!item) return;
@@ -2197,9 +2257,15 @@ function updateSyncPill(s) {
   const toggleBtn = document.getElementById('toggleSyncBtn');
 
   dot.className = 'dot' + (s.paused ? ' paused' : s.lastStatus === 'ERROR' ? ' error' : '');
-  if (s.isSyncing) txt.textContent = 'Syncing portal...';
-  else if (s.paused) txt.textContent = `Paused • ${fmtTime(s.lastSyncAt)}`;
-  else txt.textContent = `${s.adapterMode} • Last: ${fmtTime(s.lastSyncAt)}`;
+  if (state.userRole !== 'ADMIN') {
+    if (s.isSyncing) txt.textContent = 'Syncing...';
+    else if (s.paused) txt.textContent = `Paused • ${fmtTime(s.lastSyncAt)}`;
+    else txt.textContent = `LIVE • ${fmtTime(s.lastSyncAt)}`;
+  } else {
+    if (s.isSyncing) txt.textContent = 'Syncing portal...';
+    else if (s.paused) txt.textContent = `Paused • ${fmtTime(s.lastSyncAt)}`;
+    else txt.textContent = `${s.adapterMode} • Last: ${fmtTime(s.lastSyncAt)}`;
+  }
   toggleBtn.textContent = s.paused ? 'Resume' : 'Pause';
 }
 
@@ -3025,6 +3091,10 @@ function applyRolePermissions() {
   const role = state.userRole || 'ADMIN';
   const branchId = state.userBranchId || '';
   const isAdmin = role === 'ADMIN';
+
+  document.body.classList.toggle('role-staff', !isAdmin);
+  document.body.classList.toggle('role-cashier', role === 'CASHIER');
+  document.getElementById('mobileBottomNav')?.classList.toggle('hidden', role === 'CASHIER');
 
   const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
   const branchName = branchNames[branchId] || 'Branch';
