@@ -2873,16 +2873,19 @@ function applyRolePermissions() {
   const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
   const branchName = branchNames[branchId] || 'Branch';
 
-  // Update header subtitle & greeting
-  const subEl = document.querySelector('.brand-sub');
-  const greetEl = document.querySelector('.owner-greeting');
+  // Update header subtitle, page title & greeting
+  const subEl = document.getElementById('portalHeaderSub');
+  const greetEl = document.getElementById('portalGreeting');
   if (role === 'CASHIER') {
+    document.title = `Cashier Portal (${branchName}) — AB Gadgetz`;
     if (subEl) subEl.textContent = `CASHIER PORTAL (${branchName.toUpperCase()}) • VIEW & PDF ONLY`;
     if (greetEl) greetEl.textContent = `Cashier • ${branchName}`;
   } else if (role === 'CI') {
+    document.title = `Credit Investigator (${branchName}) — AB Gadgetz`;
     if (subEl) subEl.textContent = `CREDIT INVESTIGATOR (${branchName.toUpperCase()}) • VIEW & PDF ONLY`;
     if (greetEl) greetEl.textContent = `Credit Investigator • ${branchName}`;
   } else {
+    document.title = 'Owner Admin Portal';
     if (subEl) subEl.textContent = 'OWNER ADMIN PORTAL • REALTIME SYNC';
     if (greetEl) greetEl.textContent = 'Welcome, Maynard';
   }
@@ -3093,6 +3096,14 @@ async function checkAuth() {
   }
   document.getElementById('appShell').classList.add('hidden');
   document.getElementById('authGate').classList.remove('hidden');
+  const subEl = document.getElementById('portalHeaderSub');
+  if (isStaffPath) {
+    document.title = 'Staff Portal — AB Gadgetz';
+    if (subEl) subEl.textContent = 'STAFF PORTAL • VIEW & PDF ONLY';
+  } else {
+    document.title = 'Owner Admin Portal';
+    if (subEl) subEl.textContent = 'OWNER ADMIN PORTAL • REALTIME SYNC';
+  }
   const isSetup = !status.pinConfigured && !isStaffPath;
   document.getElementById('authTitle').textContent = isSetup
     ? 'Create Owner PIN (First-Time Setup)'
