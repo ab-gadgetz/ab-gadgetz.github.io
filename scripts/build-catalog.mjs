@@ -559,6 +559,7 @@ async function main() {
     catalogRules: seedSnapshot.customer_catalog_rules || [],
     installmentRates: seedSnapshot.installment_settings || [],
     orderBudgetItems: seedSnapshot.order_budget_items || [],
+    staffPinHashes: seedSnapshot.staff_pin_hashes || null,
     allMovements: allMovements.slice(0, 3500),
     allInstallments: allInstallments.slice(0, 1200),
     allPayments: allPayments.slice(0, 1500),

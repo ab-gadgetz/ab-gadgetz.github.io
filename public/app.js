@@ -101,6 +101,8 @@ async function refreshActiveTab() {
     await loadBranchCatalog();
   } else if (tab === 'activity') {
     await loadActivity();
+  } else if (tab === 'staffPins') {
+    await loadStaffPins();
   }
 }
 
@@ -175,6 +177,31 @@ async function verifyGhOwnerPin(pin) {
   return b64 === expected;
 }
 
+const DEFAULT_GH_STAFF_PINS = {
+  'CASHIER::br-molave': '111111',
+  'CASHIER::br-tambulig': '112222',
+  'CASHIER::br-bonifacio': '113333',
+  'CI::br-molave': '221111',
+  'CI::br-tambulig': '222222',
+  'CI::br-bonifacio': '223333',
+};
+
+async function verifyGhStaffPin(role, branchId, pin) {
+  const key = `${role}::${branchId}`;
+  try {
+    const bundle = await getGhBundle(true);
+    const hashes = bundle?.staffPinHashes;
+    if (hashes && hashes[key]) {
+      const salt = 'abg-staff-pin-salt-v1';
+      const bytes = new TextEncoder().encode(`${salt}:${pin}`);
+      const digest = await crypto.subtle.digest('SHA-256', bytes);
+      const b64 = btoa(String.fromCharCode(...new Uint8Array(digest)));
+      return b64 === hashes[key];
+    }
+  } catch {}
+  return pin === DEFAULT_GH_STAFF_PINS[key];
+}
+
 async function staticGhApi(url, opts = {}) {
   const u = new URL(url, window.location.origin);
   const pathname = u.pathname;
@@ -202,12 +229,13 @@ async function staticGhApi(url, opts = {}) {
     if (isStaffPath && role === 'ADMIN') {
       throw new Error('Please use the Admin Portal URL for Owner Admin login.');
     }
-    if (role === 'CASHIER') {
-      if (pin !== '111111') throw new Error('Incorrect Cashier PIN.');
+    if (role === 'CASHIER' || role === 'CI') {
       if (!['br-molave', 'br-tambulig', 'br-bonifacio'].includes(branchId)) throw new Error('Please select a branch.');
-    } else if (role === 'CI') {
-      if (pin !== '222222') throw new Error('Incorrect Credit Investigator PIN.');
-      if (!['br-molave', 'br-tambulig', 'br-bonifacio'].includes(branchId)) throw new Error('Please select a branch.');
+      const ok = await verifyGhStaffPin(role, branchId, pin);
+      if (!ok) {
+        const label = role === 'CASHIER' ? 'Cashier' : 'Credit Investigator';
+        throw new Error(`Incorrect ${label} PIN for selected branch.`);
+      }
     } else {
       const ok = await verifyGhOwnerPin(pin);
       if (!ok) throw new Error('Incorrect Owner PIN.');
@@ -2878,7 +2906,7 @@ function applyRolePermissions() {
       ? ['inventory', 'catalogs']
       : role === 'CI'
         ? ['receivables', 'catalogs']
-        : ['inventory', 'stockChanges', 'activity', 'finance', 'receivables', 'catalogs', 'websiteStock'];
+        : ['inventory', 'stockChanges', 'activity', 'finance', 'receivables', 'catalogs', 'websiteStock', 'staffPins'];
 
   document.querySelectorAll('.tab[data-tab], .mnav-btn[data-tab]').forEach((btn) => {
     const t = btn.dataset.tab;
@@ -2960,21 +2988,99 @@ async function bootApp() {
   connectEvents();
 }
 
+async function loadStaffPins() {
+  const msg = document.getElementById('staffPinsMsg');
+  const keys = [
+    'CASHIER::br-molave',
+    'CASHIER::br-tambulig',
+    'CASHIER::br-bonifacio',
+    'CI::br-molave',
+    'CI::br-tambulig',
+    'CI::br-bonifacio',
+  ];
+  if (IS_STATIC_GH) {
+    if (msg) msg.textContent = 'To edit Staff PINs, open your Local Admin Portal (http://localhost:3456), save your new PINs, and click 🚀 Publish PINs to Online Staff Portal.';
+    return;
+  }
+  try {
+    const res = await api('/api/staff-pins');
+    const pins = res.pins || {};
+    for (const key of keys) {
+      const inputId = `pin_${key.replace('::', '_')}`;
+      const el = document.getElementById(inputId);
+      if (el && pins[key]) el.value = pins[key];
+    }
+    if (msg) msg.textContent = '';
+  } catch (err) {
+    if (msg) msg.textContent = err.message;
+  }
+}
+
+document.getElementById('saveStaffPinsBtn')?.addEventListener('click', async () => {
+  const msg = document.getElementById('staffPinsMsg');
+  const keys = [
+    'CASHIER::br-molave',
+    'CASHIER::br-tambulig',
+    'CASHIER::br-bonifacio',
+    'CI::br-molave',
+    'CI::br-tambulig',
+    'CI::br-bonifacio',
+  ];
+  const pins = {};
+  for (const key of keys) {
+    const inputId = `pin_${key.replace('::', '_')}`;
+    const val = document.getElementById(inputId)?.value.trim() || '';
+    if (!/^\d{4,12}$/.test(val)) {
+      if (msg) msg.textContent = `PIN for ${key.replace('::', ' ')} must be 4 to 12 digits.`;
+      return;
+    }
+    pins[key] = val;
+  }
+  try {
+    await api('/api/staff-pins', { method: 'PUT', body: JSON.stringify({ pins }) });
+    if (msg) msg.textContent = 'Staff PINs saved locally! Click "🚀 Publish PINs to Online Staff Portal" to sync to https://ab-gadgetz.github.io/staff/.';
+  } catch (err) {
+    if (msg) msg.textContent = err.message;
+  }
+});
+
 function updateAuthRoleUI() {
   const roleSel = document.getElementById('loginRoleSelect');
+  const branchSel = document.getElementById('loginBranchSelect');
   const branchWrap = document.getElementById('loginBranchWrap');
   const isSetup = document.getElementById('authGate')?.dataset.mode === 'setup';
   if (!roleSel || !branchWrap) return;
   if (isSetup) {
     roleSel.value = 'ADMIN';
-    branchWrap.classList.add('hidden');
-    return;
   }
-  const role = roleSel.value;
-  branchWrap.classList.toggle('hidden', role === 'ADMIN');
+  const role = roleSel.value || 'ADMIN';
+  const branchId = branchSel?.value || 'br-molave';
+
+  document.querySelectorAll('#loginRoleBoxes .login-choice-box').forEach((box) => {
+    box.classList.toggle('active', box.dataset.role === role);
+  });
+  document.querySelectorAll('#loginBranchBoxes .login-choice-box').forEach((box) => {
+    box.classList.toggle('active', box.dataset.branch === branchId);
+  });
+
+  branchWrap.classList.toggle('hidden', isSetup || role === 'ADMIN');
 }
 
-document.getElementById('loginRoleSelect')?.addEventListener('change', updateAuthRoleUI);
+document.querySelectorAll('#loginRoleBoxes .login-choice-box').forEach((box) => {
+  box.addEventListener('click', () => {
+    const roleSel = document.getElementById('loginRoleSelect');
+    if (roleSel) roleSel.value = box.dataset.role;
+    updateAuthRoleUI();
+  });
+});
+
+document.querySelectorAll('#loginBranchBoxes .login-choice-box').forEach((box) => {
+  box.addEventListener('click', () => {
+    const branchSel = document.getElementById('loginBranchSelect');
+    if (branchSel) branchSel.value = box.dataset.branch;
+    updateAuthRoleUI();
+  });
+});
 
 async function checkAuth() {
   const isStaffPath = window.location.pathname.includes('/staff');
@@ -2996,19 +3102,19 @@ async function checkAuth() {
   document.getElementById('authSubtitle').textContent = isSetup
     ? 'Set a 6–12 digit PIN to protect your portal for online/phone access.'
     : isStaffPath
-      ? 'Select your Staff Role & Branch, then enter your 6-digit PIN (View & PDF Download Only).'
-      : 'Select your account role and enter your 6-digit PIN to unlock the portal.';
+      ? 'Tap your Role and Branch below, then enter your PIN (View & PDF Download Only).'
+      : 'Tap your Account Role below and enter your PIN to unlock the portal.';
   document.getElementById('authSubmitBtn').textContent = isSetup ? 'SAVE PIN & UNLOCK' : 'UNLOCK PORTAL';
   document.getElementById('authGate').dataset.mode = isSetup ? 'setup' : 'login';
 
   const roleSel = document.getElementById('loginRoleSelect');
+  const adminBox = document.querySelector('#loginRoleBoxes .login-choice-box[data-role="ADMIN"]');
   if (roleSel) {
-    const adminOpt = roleSel.querySelector('option[value="ADMIN"]');
     if (isStaffPath) {
-      if (adminOpt) adminOpt.hidden = true;
+      if (adminBox) adminBox.classList.add('hidden');
       if (roleSel.value === 'ADMIN') roleSel.value = 'CASHIER';
-    } else if (adminOpt) {
-      adminOpt.hidden = false;
+    } else if (adminBox) {
+      adminBox.classList.remove('hidden');
     }
   }
   updateAuthRoleUI();
