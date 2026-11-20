@@ -134,6 +134,7 @@
             <button type="button" class="inv-tool-btn" data-tool="filters" aria-expanded="false">FILTERS &amp; SEARCH</button>
             <button type="button" class="inv-tool-btn" data-tool="stockswap" aria-expanded="false">STOCK SWAP</button>
             <button type="button" class="inv-tool-btn" data-tool="restock" aria-expanded="false">RESTOCK</button>
+            <button type="button" class="inv-tool-btn" data-tool="costcompare" aria-expanded="false">COST COMPARE</button>
             <button type="button" class="inv-tool-btn" data-tool="health" aria-expanded="false">HEALTH</button>
             <button type="button" class="inv-tool-btn" data-tool="lifecycle" aria-expanded="false">LIFECYCLE</button>
           </div>
@@ -332,6 +333,58 @@
           </div>
         </div>
         <div id="reorderCardGrid" class="brand-grid"></div>
+      </div>
+
+      <!-- Tool Panel: Website vs 3-Supplier Cost Comparison & Restock Impact -->
+      <div id="tool-costcompare" class="sub-panel hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+          <div>
+            <h3 style="margin:0;">Website Cost vs 3-Supplier Cost Analysis</h3>
+            <p class="muted small" style="margin:3px 0 0;">Compares AB Website recorded cost against AB Main Supplier, A&amp;K, and Online Purchase—and highlights which products save money when reordering.</p>
+          </div>
+          <button type="button" id="applyCostPriorityRestockBtn" style="padding:7px 12px;font-size:12px;">OPEN IN RESTOCK PLAN</button>
+        </div>
+
+        <div class="summary-grid" id="costCompareSummaryGrid" style="margin-bottom:12px;"></div>
+        <div id="costCompareInsightBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12.5px;border-left:3px solid var(--gold);"></div>
+
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+          <input type="search" id="costCompareSearch" placeholder="Search model or brand..." style="width:180px;padding:6px 10px;font-size:12px;" />
+          <select id="costCompareType" style="width:auto;padding:6px 10px;font-size:12px;">
+            <option value="Cellphones">Cellphones</option>
+            <option value="Accessories">Accessories</option>
+            <option value="ALL">All Products</option>
+          </select>
+          <select id="costCompareFilter" style="width:auto;padding:6px 10px;font-size:12px;">
+            <option value="ALL">All Products</option>
+            <option value="SAVINGS">Supplier Cheaper than Website</option>
+            <option value="OVERPAY">Website Cheaper than Suppliers</option>
+            <option value="LOW_STOCK_SAVINGS">Low-Stock + Savings (Priority Order)</option>
+            <option value="MISSING">Missing Supplier Cost</option>
+          </select>
+          <select id="costCompareSort" style="width:auto;padding:6px 10px;font-size:12px;">
+            <option value="SAVINGS_DESC">Sort: Biggest Savings First</option>
+            <option value="NEED_SAVINGS">Sort: Restock Priority (Low Stock + Savings)</option>
+            <option value="MODEL_ASC">Sort: Model A–Z</option>
+          </select>
+        </div>
+
+        <div class="table-wrap">
+          <table class="data-table" id="costCompareTable">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>AB Website Cost</th>
+                <th>AB Main</th>
+                <th>A&amp;K</th>
+                <th>Online</th>
+                <th>Best Supplier &amp; Diff</th>
+                <th>Restock Analysis</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </div>
 
       <!-- Tool Panel: Health -->

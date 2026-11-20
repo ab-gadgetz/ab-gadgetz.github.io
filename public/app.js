@@ -144,12 +144,13 @@ document.querySelectorAll('.inv-tool-btn').forEach((btn) => {
     document.querySelectorAll('.inv-tool-btn').forEach((b) => {
       b.setAttribute('aria-expanded', String(b.dataset.tool === state.activeInvTool));
     });
-    ['filters', 'stockswap', 'restock', 'health', 'lifecycle'].forEach((t) => {
+    ['filters', 'stockswap', 'restock', 'costcompare', 'health', 'lifecycle'].forEach((t) => {
       document.getElementById(`tool-${t}`)?.classList.toggle('hidden', t !== state.activeInvTool);
     });
     setInvToolsMenuOpen(false);
     if (state.activeInvTool === 'restock' && !state.planning) loadPlanning();
     if (state.activeInvTool === 'stockswap') renderStockSwapTool();
+    if (state.activeInvTool === 'costcompare') renderCostCompareTool();
   });
 });
 
@@ -1789,6 +1790,8 @@ function buildRestockDraftPlan() {
 
       const targetQty = b.id === 'br-molave' ? Math.max(reorderPoint + 2, 3) : Math.max(reorderPoint + 1, 2);
       const suggestedQty = Math.max(1, targetQty - avail);
+      const websiteCost = Number(item.cost_price) || 0;
+      const savingsVsWebsite = websiteCost > 0 && sup.unitCost > 0 ? websiteCost - sup.unitCost : 0;
 
       candidates.push({
         key: `${item.id}::${b.id}`,
@@ -1802,6 +1805,8 @@ function buildRestockDraftPlan() {
         branchName: b.name,
         supplier: sup.supplier,
         unitCost: sup.unitCost,
+        websiteCost,
+        savingsVsWebsite,
         avail,
         reorderPoint,
         qty: suggestedQty,
@@ -1810,12 +1815,13 @@ function buildRestockDraftPlan() {
     }
   }
 
-  // Prioritize priced 0-stock first, then lowest avail, then lowest unit cost
+  // Prioritize priced 0-stock first, then supplier savings vs website cost, then lowest avail, then lowest unit cost
   candidates.sort((a, b) => {
     const ap = a.unitCost > 0 ? 0 : 1;
     const bp = b.unitCost > 0 ? 0 : 1;
     if (ap !== bp) return ap - bp;
     if ((a.avail === 0) !== (b.avail === 0)) return a.avail === 0 ? -1 : 1;
+    if (a.savingsVsWebsite !== b.savingsVsWebsite) return b.savingsVsWebsite - a.savingsVsWebsite;
     if (a.avail !== b.avail) return a.avail - b.avail;
     return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel);
   });
@@ -1954,6 +1960,13 @@ function renderRestockCards() {
         const cAb = Number(prodObj.cost_ab) > 0 ? prodObj.cost_ab : '';
         const cAk = Number(prodObj.cost_ak) > 0 ? prodObj.cost_ak : '';
         const cOn = Number(prodObj.cost_online) > 0 ? prodObj.cost_online : '';
+        const webCost = Number(prodObj.cost_price) || 0;
+        const diffWeb = webCost > 0 && m.unitCost > 0 ? webCost - m.unitCost : 0;
+        const diffBadge = diffWeb > 0
+          ? `<span style="color:var(--green);font-size:10.5px;font-weight:700;">• Saves ${fmtCurrency(diffWeb)} vs Web</span>`
+          : diffWeb < 0
+            ? `<span style="color:#f59e0b;font-size:10.5px;font-weight:700;">• +${fmtCurrency(Math.abs(diffWeb))} vs Web</span>`
+            : '';
         return `
           <div class="model-card" style="padding:10px;display:flex;flex-direction:column;gap:8px;">
             <div style="display:flex;gap:10px;align-items:center;">
@@ -1961,7 +1974,7 @@ function renderRestockCards() {
               <div style="min-width:0;flex:1;">
                 <div style="font-weight:700;font-size:13px;line-height:1.25;">${m.displayModel}</div>
                 <div class="small muted">${m.sku} • <span style="color:var(--gold-bright);">${m.supplier}</span></div>
-                <div class="small" style="margin-top:2px;">Active Cost: <strong>${m.unitCost > 0 ? fmtCurrency(m.unitCost) : '—'}</strong></div>
+                <div class="small" style="margin-top:2px;">Active Cost: <strong>${m.unitCost > 0 ? fmtCurrency(m.unitCost) : '—'}</strong> ${diffBadge}</div>
               </div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:4px;align-items:end;padding-top:4px;border-top:1px solid rgba(255,255,255,0.06);">
@@ -2469,6 +2482,181 @@ document.getElementById('reorderCopyBtn')?.addEventListener('click', async () =>
     stEl.style.color = ok ? '#1d6f42' : '#b91c1c';
     stEl.textContent = ok ? 'Copied Reorder request to clipboard.' : 'Unable to copy automatically.';
   }
+});
+
+function renderCostCompareTool() {
+  if (!state.inventory) return;
+  const search = (document.getElementById('costCompareSearch')?.value || '').trim().toLowerCase();
+  const typeFilter = document.getElementById('costCompareType')?.value || 'Cellphones';
+  const modeFilter = document.getElementById('costCompareFilter')?.value || 'ALL';
+  const sortMode = document.getElementById('costCompareSort')?.value || 'SAVINGS_DESC';
+
+  const { branches, items } = state.inventory;
+  const rows = [];
+  let comparedCount = 0;
+  let savingsModels = 0;
+  let totalUnitSavings = 0;
+  let lowStockSavingsCount = 0;
+  const supplierWins = { 'AB Main Supplier': 0, 'A&K': 0, 'Online Purchase': 0 };
+
+  for (const item of items) {
+    if ((item.lifecycle_status || 'Active') !== 'Active') continue;
+    const pType = item.product_type || 'Cellphones';
+    if (typeFilter !== 'ALL' && pType !== typeFilter) continue;
+
+    const webCost = Number(item.cost_price) || 0;
+    const cAb = Number(item.cost_ab) || 0;
+    const cAk = Number(item.cost_ak) || 0;
+    const cOn = Number(item.cost_online) || 0;
+
+    const sups = [
+      { name: 'AB Main Supplier', val: cAb },
+      { name: 'A&K', val: cAk },
+      { name: 'Online Purchase', val: cOn },
+    ].filter((s) => s.val > 0);
+    sups.sort((a, b) => a.val - b.val);
+    const best = sups[0] || null;
+
+    if (best) {
+      comparedCount++;
+      supplierWins[best.name] = (supplierWins[best.name] || 0) + 1;
+    }
+
+    const diffVsWeb = best && webCost > 0 ? webCost - best.val : 0; // positive = supplier saves money
+    if (diffVsWeb > 0) {
+      savingsModels++;
+      totalUnitSavings += diffVsWeb;
+    }
+
+    let totalAvail = 0;
+    let needsRestock = false;
+    const price = Number(item.base_price) || 0;
+    for (const b of branches) {
+      const cell = item.byBranch[b.id];
+      const av = Number(cell?.qtyAvailable) || 0;
+      totalAvail += av;
+      const defaultRp = price < 10000 ? (b.id === 'br-molave' ? 2 : 1) : price <= 20000 ? 2 : 1;
+      const rp = Number(cell?.reorderPoint) || defaultRp;
+      if (av <= rp) needsRestock = true;
+    }
+
+    if (needsRestock && diffVsWeb > 0) lowStockSavingsCount++;
+
+    const displayModel = formatSwapModelName({ brand: item.brand || '', model: item.model || item.name });
+    if (
+      search &&
+      !displayModel.toLowerCase().includes(search) &&
+      !(item.brand || '').toLowerCase().includes(search) &&
+      !(item.website_codes || item.sku || '').toLowerCase().includes(search)
+    ) {
+      continue;
+    }
+
+    if (modeFilter === 'SAVINGS' && diffVsWeb <= 0) continue;
+    if (modeFilter === 'OVERPAY' && !(best && webCost > 0 && diffVsWeb < 0)) continue;
+    if (modeFilter === 'LOW_STOCK_SAVINGS' && !(needsRestock && diffVsWeb > 0)) continue;
+    if (modeFilter === 'MISSING' && best) continue;
+
+    rows.push({
+      id: item.id,
+      displayModel,
+      sku: item.website_codes || item.sku,
+      totalAvail,
+      needsRestock,
+      webCost,
+      cAb,
+      cAk,
+      cOn,
+      best,
+      diffVsWeb,
+    });
+  }
+
+  rows.sort((a, b) => {
+    if (sortMode === 'NEED_SAVINGS') {
+      if (a.needsRestock !== b.needsRestock) return a.needsRestock ? -1 : 1;
+      if (a.diffVsWeb !== b.diffVsWeb) return b.diffVsWeb - a.diffVsWeb;
+      return a.totalAvail - b.totalAvail;
+    }
+    if (sortMode === 'MODEL_ASC') return a.displayModel.localeCompare(b.displayModel);
+    if (a.diffVsWeb !== b.diffVsWeb) return b.diffVsWeb - a.diffVsWeb;
+    return (b.best ? 1 : 0) - (a.best ? 1 : 0) || a.displayModel.localeCompare(b.displayModel);
+  });
+
+  const topSupEntry = Object.entries(supplierWins).sort((a, b) => b[1] - a[1])[0];
+  const sumGrid = document.getElementById('costCompareSummaryGrid');
+  if (sumGrid) {
+    sumGrid.innerHTML = `
+      <div class="summary-box">MODELS WITH SUPPLIER COSTS<strong>${fmtNum(comparedCount)}</strong></div>
+      <div class="summary-box">CHEAPER VIA SUPPLIER<strong style="color:var(--green);">${fmtNum(savingsModels)} (${fmtCurrency(totalUnitSavings)}/pc sum)</strong></div>
+      <div class="summary-box">PRIORITY RESTOCK + SAVINGS<strong style="color:var(--gold-bright);">${fmtNum(lowStockSavingsCount)}</strong></div>
+      <div class="summary-box">MOST COMPETITIVE SUPPLIER<strong>${topSupEntry && topSupEntry[1] > 0 ? `${topSupEntry[0]} (${topSupEntry[1]})` : '—'}</strong></div>
+    `;
+  }
+
+  const bannerEl = document.getElementById('costCompareInsightBanner');
+  if (bannerEl) {
+    bannerEl.innerHTML = comparedCount > 0
+      ? `<strong>Restock Strategy Impact:</strong> <strong>${fmtNum(lowStockSavingsCount)}</strong> low-stock model(s) can be ordered cheaper than their AB Website recorded cost. The <strong>RESTOCK</strong> plan automatically prioritizes these high-savings low-stock models first so your Net Order Budget yields higher profit margins.`
+      : `<strong>Tip:</strong> Enter supplier costs (<strong>AB ₱</strong>, <strong>A&amp;K ₱</strong>, <strong>Online ₱</strong>) in <strong>RESTOCK</strong> or by clicking any product card in <strong>INVENTORY</strong> to compare against the AB Website recorded cost.`;
+  }
+
+  const fmtCell = (val, webCost) => {
+    if (!(val > 0)) return '<span class="muted">—</span>';
+    if (!(webCost > 0)) return fmtCurrency(val);
+    const d = webCost - val;
+    const diffHtml = d > 0
+      ? `<div class="small" style="color:var(--green);">-${fmtCurrency(d)}</div>`
+      : d < 0
+        ? `<div class="small" style="color:#f59e0b;">+${fmtCurrency(Math.abs(d))}</div>`
+        : '<div class="small muted">Same</div>';
+    return `${fmtCurrency(val)}${diffHtml}`;
+  };
+
+  const tbody = document.querySelector('#costCompareTable tbody');
+  if (!tbody) return;
+  tbody.innerHTML = rows.length
+    ? rows
+        .slice(0, 150)
+        .map((r) => {
+          const bestHtml = r.best
+            ? r.diffVsWeb > 0
+              ? `<span class="badge badge-ok">${r.best.name}</span><div class="small" style="color:var(--green);margin-top:2px;">Saves ${fmtCurrency(r.diffVsWeb)}/pc</div>`
+              : r.diffVsWeb < 0
+                ? `<span class="badge badge-warn">${r.best.name}</span><div class="small" style="color:#f59e0b;margin-top:2px;">+${fmtCurrency(Math.abs(r.diffVsWeb))}/pc vs Web</div>`
+                : `<span class="badge badge-ok">${r.best.name}</span><div class="small muted" style="margin-top:2px;">Matches Web</div>`
+            : '<span class="muted small">No supplier cost</span>';
+
+          const actionHtml = !r.best
+            ? '<span class="muted small">Add supplier costs to analyze</span>'
+            : r.needsRestock && r.diffVsWeb > 0
+              ? `<strong style="color:var(--gold-bright);">Order Now (${r.best.name})</strong><div class="small muted">${r.totalAvail} avail • Best margin gain</div>`
+              : r.needsRestock
+                ? `<span style="color:var(--text);">Restock Needed (${r.totalAvail} avail)</span><div class="small muted">Use ${r.best.name}</div>`
+                : `<span class="muted small">Stock OK (${r.totalAvail} avail)</span>`;
+
+          return `
+            <tr>
+              <td><strong>${r.displayModel}</strong><div class="small muted">${r.sku} • ${r.totalAvail} avail</div></td>
+              <td><strong>${r.webCost > 0 ? fmtCurrency(r.webCost) : '—'}</strong></td>
+              <td>${fmtCell(r.cAb, r.webCost)}</td>
+              <td>${fmtCell(r.cAk, r.webCost)}</td>
+              <td>${fmtCell(r.cOn, r.webCost)}</td>
+              <td>${bestHtml}</td>
+              <td>${actionHtml}</td>
+            </tr>`;
+        })
+        .join('')
+    : '<tr><td colspan="7" class="muted">No products match the current filter.</td></tr>';
+}
+
+document.getElementById('costCompareSearch')?.addEventListener('input', renderCostCompareTool);
+document.getElementById('costCompareType')?.addEventListener('change', renderCostCompareTool);
+document.getElementById('costCompareFilter')?.addEventListener('change', renderCostCompareTool);
+document.getElementById('costCompareSort')?.addEventListener('change', renderCostCompareTool);
+document.getElementById('applyCostPriorityRestockBtn')?.addEventListener('click', () => {
+  const restockBtn = document.querySelector('.inv-tool-btn[data-tool="restock"]');
+  if (restockBtn) restockBtn.click();
 });
 
 async function loadCustomers() {
