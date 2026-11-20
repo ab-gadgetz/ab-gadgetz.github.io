@@ -2141,6 +2141,10 @@ function renderActivity() {
   const vBon = views['br-bonifacio'] || { total: 0, weekly: 0, monthly: 0 };
   const vTot = state.catalogViews || { total: 0, weekly: 0, monthly: 0 };
   const viewsGrid = document.getElementById('activityViewsGrid');
+  const viewsLbl = document.getElementById('catalogViewsToggleLabel');
+  if (viewsLbl) {
+    viewsLbl.textContent = `Catalog Views (${fmtNum(vTot.total)} views)`;
+  }
   if (viewsGrid) {
     viewsGrid.innerHTML = `
       <div class="summary-box compact-act-box">
@@ -2591,6 +2595,16 @@ function renderReceivables() {
 document.getElementById('recSearchInput').addEventListener('input', renderReceivables);
 document.getElementById('refreshFinanceBtn').addEventListener('click', loadFinance);
 document.getElementById('refreshActivityBtn').addEventListener('click', loadActivity);
+document.getElementById('toggleCatalogViewsBtn')?.addEventListener('click', () => {
+  const grid = document.getElementById('activityViewsGrid');
+  const btn = document.getElementById('toggleCatalogViewsBtn');
+  const arrow = document.getElementById('catalogViewsToggleArrow');
+  if (!grid || !btn) return;
+  const willOpen = grid.classList.contains('hidden');
+  grid.classList.toggle('hidden', !willOpen);
+  btn.setAttribute('aria-expanded', String(willOpen));
+  if (arrow) arrow.textContent = willOpen ? '▲' : '▼';
+});
 document.getElementById('syncNowBtn').addEventListener('click', () => api('/api/sync/now', { method: 'POST' }));
 document.getElementById('toggleSyncBtn').addEventListener('click', async () => {
   const res = await api('/api/sync/toggle', { method: 'POST', body: JSON.stringify({ paused: !state.syncState?.paused }) });

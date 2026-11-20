@@ -645,7 +645,13 @@
           </div>
         </div>
 
-        <div class="summary-grid" id="activityViewsGrid" style="grid-template-columns:repeat(4,1fr);margin-bottom:10px;"></div>
+        <div style="margin-bottom:8px;">
+          <button type="button" id="toggleCatalogViewsBtn" class="secondary" aria-expanded="false" style="width:100%;display:flex;justify-content:space-between;align-items:center;padding:7px 12px;font-size:12px;font-weight:700;border-radius:9px;">
+            <span id="catalogViewsToggleLabel">Catalog Views (0 views)</span>
+            <span id="catalogViewsToggleArrow">▼</span>
+          </button>
+          <div class="summary-grid hidden" id="activityViewsGrid" style="grid-template-columns:repeat(4,1fr);margin-top:6px;"></div>
+        </div>
         <div class="summary-grid" id="activitySalesGrid" style="grid-template-columns:repeat(4,1fr);"></div>
         <div id="installmentDpSummary" class="sub-panel hidden" style="margin-bottom:10px;border-color:var(--gold);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
           <div>
