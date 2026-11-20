@@ -1,0 +1,15 @@
+{
+  "updatedAt": "2026-11-20T04:49:38.132Z",
+  "hashes": {
+    "CASHIER::br-molave": "pQ8bMblOK6QmBriaCqfo0Q+3efgIT4zWTNNhkoxnJ5Y=",
+    "CASHIER::br-tambulig": "Y7qp3vwphC0TZMUsQCgEr/ZdOL2cZAuCckm84tfKjEw=",
+    "CASHIER::br-bonifacio": "tIESThMFXihq5Qt/gFQMF4cl+M6lyN0IByogICPfM6g=",
+    "CI::br-molave": "tKJLODLBJdDFNz+i1zDlrMrHlFurJBkxV8geCfmv/cQ=",
+    "CI::br-tambulig": "Cw14Iwhe5CO/T1bdaqT6KFGrnNeMhR7F6Elz8wyLlxc=",
+    "CI::br-bonifacio": "CdjijSEe9NUAaaD1A6ZOLsKGyXvbZh7VQLlsY6L+BJI="
+  },
+  "encryptedPins": {
+    "iv": "0BbrGLeM7nEnG88Y",
+    "data": "xP6xiFzQ0M1vm7B2Vm/pTzPUk0cmuFDuhVzlDjvr2vcPWxcd5VrXXsAgdy/V2VCFF6/7gDvM9mpvdQa4/LecsliwysFkXJNOjRfs/ipeAOTX0QJa3dw/Zq5NKqOdXyG5XBzBbCvTQ9xkQAGZzSTBF0aORBEfLeGAXPjb6EpbGLDEbPX2IpuSNmwUMS1OkQ29rEe9DHCo2mrPPTXNR5mr1Rp76RNdwtSye3EWPFodo4Rx1y7BoZnJbTrnBNTK1+zj"
+  }
+}
