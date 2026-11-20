@@ -2671,11 +2671,7 @@ function setInventoryDownloadMsg(text, isError) {
   el.classList.toggle('error', Boolean(isError && text));
 }
 
-function generateInventoryPdfForType(productType, reportDateStr, movementsList = []) {
-  const jspdfNs = window.jspdf;
-  if (!jspdfNs || typeof jspdfNs.jsPDF !== 'function') {
-    throw new Error('PDF generator library is still loading. Please try again in a second.');
-  }
+function buildDailyInventoryReportData(productType, reportDateStr, movementsList = []) {
   const { branchLabel, visibleBranches, items } = getScopedInventoryForExport(productType);
   const visibleBranchIds = new Set((visibleBranches || []).map((b) => b.id));
   const dateParts = String(reportDateStr || todayStr).split('-').map(Number);
@@ -2687,7 +2683,6 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
   const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
   const monthName = new Date(year, monthIndex, 1).toLocaleDateString('en-US', { month: 'long' });
 
-  // Build exact day-by-day balance changes from monthStart -> todayStr using synced Stock Card / Sale movements
   const netChangesSinceMonthStart = new Map();
   const monthlyDailyChanges = new Map();
   for (const m of movementsList || []) {
@@ -2709,7 +2704,6 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
     }
   }
 
-  // Reconstruct daily balance per model for days 1..asOfDay
   const itemsWithDaily = items.map((item) => {
     const pid = item.id;
     const changes = monthlyDailyChanges.get(pid) || new Array(daysInMonth + 1).fill(0);
@@ -2729,9 +2723,25 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
     return { ...item, daily, hasPositiveDay };
   });
 
-  // Include any model that had > 0 stock on any day 1..asOfDay in that month
   const activeItems = itemsWithDaily.filter((i) => i.hasPositiveDay);
   const groups = groupInventoryForPdf(activeItems);
+  const dailyTotals = new Array(daysInMonth).fill(0);
+  for (const it of activeItems) {
+    it.daily.forEach((val, idx) => {
+      if (val !== null && val > 0) dailyTotals[idx] += val;
+    });
+  }
+
+  return { branchLabel, year, monthIndex, asOfDay, daysInMonth, monthName, activeItems, groups, dailyTotals };
+}
+
+function generateInventoryPdfForType(productType, reportDateStr, movementsList = []) {
+  const jspdfNs = window.jspdf;
+  if (!jspdfNs || typeof jspdfNs.jsPDF !== 'function') {
+    throw new Error('PDF generator library is still loading. Please try again in a second.');
+  }
+  const { branchLabel, year, asOfDay, daysInMonth, monthName, groups, dailyTotals } =
+    buildDailyInventoryReportData(productType, reportDateStr, movementsList);
 
   const doc = new jspdfNs.jsPDF({
     orientation: 'portrait',
@@ -2752,13 +2762,6 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
   const contentWidth = pageWidth - margin * 2;
   const modelWidth = 125 / 72;
   const priceWidth = 84 / 72;
-
-  const dailyTotals = new Array(daysInMonth).fill(0);
-  for (const it of activeItems) {
-    it.daily.forEach((val, idx) => {
-      if (val !== null && val > 0) dailyTotals[idx] += val;
-    });
-  }
 
   const totalModelRows = groups.reduce((s, g) => s + g.items.length, 0);
   const totalVisualRows = Math.max(1, groups.length + totalModelRows + 2);
@@ -2902,77 +2905,151 @@ async function downloadInventoryPdf() {
   }
 }
 
-function downloadInventoryExcel() {
+async function downloadInventoryExcel() {
   try {
     if (!state.inventory) return;
+    if (!window.ExcelJS) {
+      throw new Error('Excel generator library is still loading. Please try again in a second.');
+    }
+    setInventoryDownloadMsg('Generating formatted Excel workbook...', false);
     const reportDateStr = document.getElementById('inventoryReportDate')?.value || todayStr;
+    const monthStart = `${reportDateStr.slice(0, 7)}-01`;
+    const globalBranchId = document.getElementById('globalBranch')?.value || '';
+    let movementsList = [];
+    try {
+      const actData = await api(`/api/activity?start=${monthStart}&end=${todayStr}&branchId=${globalBranchId}`);
+      movementsList = actData?.allMovements || actData?.movements || [];
+    } catch {}
+
     const selectedTypes = getSelectedProductTypes();
     const typesToExport = selectedTypes.length ? selectedTypes : ['Cellphones'];
-    const { branches } = state.inventory;
-    const globalBranchId = document.getElementById('globalBranch').value;
-    const visibleBranches = globalBranchId
-      ? branches.filter((b) => b.id === globalBranchId)
-      : branches;
-    const branchLabel = visibleBranches.length === 1 ? visibleBranches[0].name : 'All_Branches';
+    const workbook = new window.ExcelJS.Workbook();
+    workbook.creator = 'AB Gadgetz';
+    workbook.created = new Date();
 
-    const headers = [
-      'Product Type',
-      'Brand',
-      'Model',
-      'Website Code / SKU',
-      'Unit Price (PHP)',
-      ...(state.userRole === 'ADMIN' ? ['Cost Price (PHP)'] : []),
-      ...visibleBranches.map((b) => `${b.name} Stock`),
-      'Total Available',
-    ];
-    const rows = [headers];
+    const thinBorder = {
+      top: { style: 'thin', color: { argb: 'FFD7D0BE' } },
+      left: { style: 'thin', color: { argb: 'FFD7D0BE' } },
+      bottom: { style: 'thin', color: { argb: 'FFD7D0BE' } },
+      right: { style: 'thin', color: { argb: 'FFD7D0BE' } },
+    };
 
-    for (const t of typesToExport) {
-      const { items } = getScopedInventoryForExport(t);
-      const groups = groupInventoryForPdf(items);
-      for (const g of groups) {
-        for (const item of g.items) {
-          const branchCells = visibleBranches.map((b) => Number(item.byBranch[b.id]?.qtyAvailable || 0));
-          rows.push([
-            t,
-            g.brand,
-            String(item.model || item.name || ''),
-            String(item.website_codes || item.sku || ''),
-            Number(item.base_price) || 0,
-            ...(state.userRole === 'ADMIN' ? [Number(item.cost_price) || 0] : []),
-            ...branchCells,
-            Number(item.exportQty) || 0,
-          ]);
+    let branchSlug = 'All_Branches';
+    for (const productType of typesToExport) {
+      const { branchLabel, year, daysInMonth, monthName, groups, dailyTotals } =
+        buildDailyInventoryReportData(productType, reportDateStr, movementsList);
+      branchSlug = branchLabel.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '');
+
+      const sheet = workbook.addWorksheet(productType, {
+        views: [{ state: 'frozen', xSplit: 2, ySplit: 3 }],
+        pageSetup: { paperSize: 5, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+      });
+
+      const totalCols = 2 + daysInMonth;
+      sheet.getColumn(1).width = 28;
+      sheet.getColumn(2).width = 16;
+      for (let d = 1; d <= daysInMonth; d++) {
+        sheet.getColumn(2 + d).width = 5.5;
+      }
+
+      // Row 1: Title (Apps Script PDF layout)
+      const titleRow = sheet.addRow([`AB-Gadgetz-${branchLabel}: Daily Inventory of ${productType}`]);
+      sheet.mergeCells(1, 1, 1, totalCols);
+      titleRow.font = { name: 'Arial', size: 12, bold: true, color: { argb: 'FF1B1913' } };
+      titleRow.alignment = { vertical: 'middle', horizontal: 'left' };
+      titleRow.height = 22;
+
+      // Row 2: Subtitle
+      const subRow = sheet.addRow([`Month of ${monthName} ${year}`]);
+      sheet.mergeCells(2, 1, 2, totalCols);
+      subRow.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF4F493A' } };
+      subRow.alignment = { vertical: 'middle', horizontal: 'center' };
+      subRow.height = 18;
+
+      // Row 3: Table Header
+      const daysHeaders = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+      const headerRow = sheet.addRow(['Model', 'Unit Price (PHP)', ...daysHeaders]);
+      headerRow.height = 20;
+      headerRow.eachCell((cell, colNumber) => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1B1913' } };
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFF6D34B' } };
+        cell.alignment = { vertical: 'middle', horizontal: colNumber === 1 ? 'left' : 'center' };
+        cell.border = thinBorder;
+      });
+
+      // Brand groups + Model rows
+      groups.forEach((group) => {
+        const gRow = sheet.addRow([group.brand]);
+        const rIdx = gRow.number;
+        sheet.mergeCells(rIdx, 1, rIdx, totalCols);
+        gRow.height = 17;
+        for (let c = 1; c <= totalCols; c++) {
+          const cell = gRow.getCell(c);
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2EFE0' } };
+          cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF1B1913' } };
+          cell.alignment = { vertical: 'middle', horizontal: 'left' };
+          cell.border = thinBorder;
         }
+
+        group.items.forEach((item) => {
+          const priceNum = Number(item.base_price) || 0;
+          const dayVals = daysHeaders.map((d) => {
+            const val = item.daily ? item.daily[d - 1] : null;
+            return val !== null && Number(val) > 0 ? Number(val) : null;
+          });
+          const mRow = sheet.addRow([String(item.model || item.name || ''), priceNum, ...dayVals]);
+          mRow.height = 16;
+          mRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            cell.font = { name: 'Arial', size: 8.5, color: { argb: 'FF1B1913' } };
+            cell.border = thinBorder;
+            if (colNumber === 1) {
+              cell.alignment = { vertical: 'middle', horizontal: 'left' };
+            } else if (colNumber === 2) {
+              cell.alignment = { vertical: 'middle', horizontal: 'right' };
+              cell.numFmt = '"PHP "#,##0';
+            } else {
+              cell.alignment = { vertical: 'middle', horizontal: 'right' };
+              if (cell.value !== null && cell.value !== '') cell.numFmt = '#,##0';
+            }
+          });
+        });
+      });
+
+      // Footer Row: TOTAL STOCK BALANCE
+      const totalRowVals = [
+        'TOTAL STOCK BALANCE',
+        null,
+        ...daysHeaders.map((d) => (dailyTotals[d - 1] > 0 ? dailyTotals[d - 1] : null)),
+      ];
+      const fRow = sheet.addRow(totalRowVals);
+      sheet.mergeCells(fRow.number, 1, fRow.number, 2);
+      fRow.height = 19;
+      for (let c = 1; c <= totalCols; c++) {
+        const cell = fRow.getCell(c);
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE9E4D3' } };
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF1B1913' } };
+        cell.border = thinBorder;
+        cell.alignment = { vertical: 'middle', horizontal: c <= 2 ? 'left' : 'right' };
+        if (c > 2 && cell.value !== null && cell.value !== '') cell.numFmt = '#,##0';
       }
     }
 
-    const csvContent =
-      '\uFEFF' +
-      rows
-        .map((r) =>
-          r
-            .map((cell) => {
-              const s = String(cell ?? '');
-              return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-            })
-            .join(',')
-        )
-        .join('\r\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    const fileName = `AB_Gadgetz_${branchLabel}_Inventory_${reportDateStr}.csv`;
+    const fileName = `AB_Gadgetz_${branchSlug}_${typesToExport.join('_')}_Daily_Stock_Balances_${reportDateStr}.xlsx`;
     a.href = url;
     a.download = fileName;
     document.body.appendChild(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    setInventoryDownloadMsg(`Downloaded Excel CSV: ${fileName}`, false);
+    setInventoryDownloadMsg(`Downloaded Excel: ${fileName}`, false);
   } catch (err) {
-    setInventoryDownloadMsg(err.message || 'Unable to export Excel CSV.', true);
+    setInventoryDownloadMsg(err.message || 'Unable to export Excel.', true);
   }
 }
 
