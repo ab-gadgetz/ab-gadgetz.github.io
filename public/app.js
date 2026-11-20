@@ -869,14 +869,6 @@ function renderInventory() {
 
   // Cashier integrated catalog filters (Price Range & RAM/ROM only when Cellphones is selected)
   let filteredScoped = scopedItems;
-  if (isAdmin) {
-    grid.querySelectorAll('.model-card[data-admin-photo-id]').forEach((card) => {
-      card.addEventListener('click', (e) => {
-        if (e.target.closest('.model-select-chk')) return;
-        openAdminPhotoModal(card.dataset.adminPhotoId);
-      });
-    });
-  }
 
   if (isCashier) {
     const priceRangeEl = document.getElementById('invPriceRange');
