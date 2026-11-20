@@ -1186,6 +1186,28 @@ body.role-cashier #menuToggleBtn {
   cursor: default;
   box-shadow: none !important;
 }
+body.role-cashier .nav-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+body.role-cashier #cashierHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+body.role-cashier #cashierHeaderActions label[for="inventoryReportDate"] {
+  display: none;
+}
+body.role-cashier select,
+body.role-cashier input[type="date"] {
+  color-scheme: dark;
+  background-color: #171c23 !important;
+  color: #edf1f6 !important;
+  opacity: 1 !important;
+}
 .inv-shopee-grid {
   margin-top: 10px;
 }

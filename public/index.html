@@ -84,10 +84,13 @@
 
     <div class="nav-drawer-wrap">
       <div class="nav-toggle-bar">
-        <button type="button" id="menuToggleBtn" class="hamburger-btn" aria-expanded="false" aria-controls="mainTabsMenu">
-          <span id="menuHamburgerIcon" aria-hidden="true">☰</span>
-          <span id="currentTabLabel">INVENTORY</span>
-        </button>
+        <div class="nav-heading-row">
+          <button type="button" id="menuToggleBtn" class="hamburger-btn" aria-expanded="false" aria-controls="mainTabsMenu">
+            <span id="menuHamburgerIcon" aria-hidden="true">☰</span>
+            <span id="currentTabLabel">INVENTORY</span>
+          </button>
+          <div id="cashierHeaderActions" class="hidden"></div>
+        </div>
         <div class="nav-type-checks" id="productTypeFilter">
           <label class="stock-view-option selected" style="padding:7px 12px;">
             <input type="radio" name="productType" value="Cellphones" checked />

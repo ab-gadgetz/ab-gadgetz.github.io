@@ -587,9 +587,31 @@ async function main() {
     fs.mkdirSync(path.join(distDir, 'admin'), { recursive: true });
     fs.mkdirSync(path.join(distDir, 'staff'), { recursive: true });
     const cacheBust = Date.now();
+    const baseManifest = fs.existsSync(path.join(publicDir, 'manifest.webmanifest'))
+      ? JSON.parse(fs.readFileSync(path.join(publicDir, 'manifest.webmanifest'), 'utf8'))
+      : { name: 'AB Gadgetz', short_name: 'AB Gadgetz', display: 'standalone', background_color: '#15191f', theme_color: '#15191f', icons: [] };
+    const adminManifest = {
+      ...baseManifest,
+      name: 'AB Gadgetz Admin',
+      short_name: 'AB Admin',
+      start_url: '/admin/',
+      scope: '/admin/',
+      icons: (baseManifest.icons || []).map((ic) => ({ ...ic, src: '/ab-logo-square.png' })),
+    };
+    const staffManifest = {
+      ...baseManifest,
+      name: 'AB Gadgetz Staff',
+      short_name: 'AB Staff',
+      start_url: '/staff/',
+      scope: '/staff/',
+      icons: (baseManifest.icons || []).map((ic) => ({ ...ic, src: '/ab-logo-square.png' })),
+    };
+    fs.writeFileSync(path.join(distDir, 'admin', 'manifest.webmanifest'), JSON.stringify(adminManifest, null, 2));
+    fs.writeFileSync(path.join(distDir, 'staff', 'manifest.webmanifest'), JSON.stringify(staffManifest, null, 2));
+
     const adminHtml = fs
       .readFileSync(path.join(publicDir, 'index.html'), 'utf8')
-      .replace(/href="\/manifest\.webmanifest"/g, 'href="../manifest.webmanifest"')
+      .replace(/href="\/manifest\.webmanifest"/g, 'href="./manifest.webmanifest"')
       .replace(/href="\/ab-logo-square\.png"/g, 'href="../ab-logo-square.png"')
       .replace(/href="\/styles\.css"/g, `href="../styles.css?v=${cacheBust}"`)
       .replace(/src="\/ab-logo-square\.png"/g, 'src="../ab-logo-square.png"')

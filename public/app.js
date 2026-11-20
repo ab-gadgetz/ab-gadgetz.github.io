@@ -3139,13 +3139,36 @@ function applyRolePermissions() {
   }
   const stockViewSel = document.getElementById('stockViewSelect');
   if (stockViewSel) {
-    Array.from(stockViewSel.options).forEach((opt) => {
-      const allowed = isAdmin || opt.value === 'available' || opt.value === 'unavailable';
-      opt.hidden = !allowed;
-      opt.disabled = !allowed;
-    });
-    if (!isAdmin && !['available', 'unavailable'].includes(stockViewSel.value)) {
-      stockViewSel.value = 'available';
+    const curVal = stockViewSel.value;
+    if (!isAdmin) {
+      stockViewSel.innerHTML = `
+        <option value="available">Available phones</option>
+        <option value="unavailable">Unavailable</option>
+      `;
+      stockViewSel.value = curVal === 'unavailable' ? 'unavailable' : 'available';
+    } else if (stockViewSel.options.length < 5) {
+      stockViewSel.innerHTML = `
+        <option value="available">Available phones</option>
+        <option value="phaseout">Phaseout products (include 0)</option>
+        <option value="all">All products, incl. unavailable</option>
+        <option value="unavailable">Unavailable</option>
+        <option value="reorder">Reorder suggestions</option>
+      `;
+      if (curVal) stockViewSel.value = curVal;
+    }
+  }
+
+  // For Cashier, place the Date Selector & PDF icon right beside the "INVENTORY" header
+  const datePdfWrap = document.querySelector('.inv-date-pdf-wrap');
+  const cashierHeaderActions = document.getElementById('cashierHeaderActions');
+  const invFilterBar = document.getElementById('invFilterBar');
+  if (datePdfWrap && cashierHeaderActions && invFilterBar) {
+    if (role === 'CASHIER') {
+      cashierHeaderActions.classList.remove('hidden');
+      cashierHeaderActions.appendChild(datePdfWrap);
+    } else {
+      cashierHeaderActions.classList.add('hidden');
+      invFilterBar.appendChild(datePdfWrap);
     }
   }
 
