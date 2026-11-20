@@ -775,13 +775,14 @@ function renderInventory() {
       </div>
       <div class="mini-kpi-sub">${fmtNum(availableModels)} models available${isAdmin ? ` • Cost: ${fmtCurrency(totalCostVal)}` : ''}</div>
     </div>
+    ${isAdmin ? `
     <div class="mini-kpi">
       <div class="mini-kpi-top">
         <span class="mini-kpi-label">POTENTIAL SALES</span>
         <span class="mini-kpi-val">${fmtCurrency(potentialSales)}</span>
       </div>
       <div class="mini-kpi-sub">Net of cash discount (5% / 3%)</div>
-    </div>
+    </div>` : ''}
   `;
 
   const grid = document.getElementById('brandGrid');
@@ -2952,6 +2953,24 @@ function applyRolePermissions() {
   }
   const showHiddenWrap = document.getElementById('showHiddenToggle')?.closest('label');
   if (showHiddenWrap) showHiddenWrap.classList.toggle('hidden', !isAdmin);
+
+  // Cashier Inventory lockdown: hide Inventory Tools, bulk Cellphones/Accessories switcher, and limit Stock View to Available / Unavailable
+  document.querySelector('.inv-tools-wrap')?.classList.toggle('hidden', !isAdmin);
+  if (!isAdmin) {
+    document.getElementById('invToolDrawer')?.classList.add('hidden');
+    document.getElementById('bulkGroupBar')?.classList.add('hidden');
+  }
+  const stockViewSel = document.getElementById('stockViewSelect');
+  if (stockViewSel) {
+    Array.from(stockViewSel.options).forEach((opt) => {
+      const allowed = isAdmin || opt.value === 'available' || opt.value === 'unavailable';
+      opt.hidden = !allowed;
+      opt.disabled = !allowed;
+    });
+    if (!isAdmin && !['available', 'unavailable'].includes(stockViewSel.value)) {
+      stockViewSel.value = 'available';
+    }
+  }
 
   // Restrict available tabs by role
   const allowedTabs =
