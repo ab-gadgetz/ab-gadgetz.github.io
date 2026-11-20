@@ -380,7 +380,7 @@
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
           <div>
             <h3 style="margin:0;">Website Cost vs 3-Supplier Cost Analysis</h3>
-            <p class="muted small" style="margin:3px 0 0;">Compares AB Website recorded cost against AB Main Supplier, A&amp;K, and Online Purchase—and highlights which products save money when reordering.</p>
+            <p class="muted small" style="margin:3px 0 0;">Compares AB Website recorded cost against AB Main Supplier, A&amp;K, and Online Purchase (shared across <strong>all branches</strong>)—and highlights which products save money when reordering.</p>
           </div>
           <button type="button" id="applyCostPriorityRestockBtn" style="padding:7px 12px;font-size:12px;">OPEN IN RESTOCK PLAN</button>
         </div>
@@ -394,6 +394,11 @@
             <option value="Cellphones">Cellphones</option>
             <option value="Accessories">Accessories</option>
             <option value="ALL">All Products</option>
+          </select>
+          <select id="costCompareStockFilter" style="width:auto;padding:6px 10px;font-size:12px;">
+            <option value="IN_STOCK">Available / Has Units Left (&gt; 0)</option>
+            <option value="ALL">All Stock Status</option>
+            <option value="OUT_OF_STOCK">Out of Stock (0)</option>
           </select>
           <select id="costCompareFilter" style="width:auto;padding:6px 10px;font-size:12px;">
             <option value="ALL">All Products</option>
