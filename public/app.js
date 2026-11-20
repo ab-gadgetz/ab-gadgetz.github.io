@@ -1320,6 +1320,55 @@ function computeStockSwapSuggestions({ typeFilter = 'Cellphones', targetBranchId
   return suggestions;
 }
 
+function formatSwapModelName(s) {
+  const brand = String(s.brand || '').trim();
+  const model = String(s.model || '').trim();
+  if (!brand) return model;
+  if (model.toLowerCase().startsWith(brand.toLowerCase())) return model;
+  return `${brand} ${model}`;
+}
+
+function buildBranchSwapCopyText(branchName, swaps) {
+  const outgoing = (swaps || []).filter((s) => s.fromBranch === branchName);
+  if (!outgoing.length) return '';
+  const byDest = new Map();
+  for (const s of outgoing) {
+    if (!byDest.has(s.toBranch)) byDest.set(s.toBranch, []);
+    byDest.get(s.toBranch).push(s);
+  }
+  const blocks = [];
+  for (const [toBranch, rows] of byDest.entries()) {
+    const lines = rows.map((s) => `${formatSwapModelName(s)} - ${s.swapQty} ${s.swapQty === 1 ? 'pc' : 'pcs'}`);
+    blocks.push(`Stockswap to ${toBranch}:\n${lines.join('\n')}`);
+  }
+  return `${branchName} Branch\n\n${blocks.join('\n\n')}`;
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // fallback below
+    }
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch {
+    ok = false;
+  }
+  ta.remove();
+  return ok;
+}
+
 function renderStockSwapTool() {
   const typeFilter = document.getElementById('swapTypeFilter')?.value || 'Cellphones';
   const targetBranchId = document.getElementById('swapBranchFilter')?.value || 'ALL';
@@ -1327,34 +1376,126 @@ function renderStockSwapTool() {
   const list = computeStockSwapSuggestions({ typeFilter, targetBranchId, modeFilter });
   state.lastStockSwaps = list;
 
-  const totalUnits = list.reduce((s, x) => s + x.swapQty, 0);
-  const zeroFills = list.filter((x) => x.toBefore === 0).length;
-  const sumEl = document.getElementById('stockSwapSummaryGrid');
-  if (sumEl) {
-    sumEl.innerHTML = `
-      <div class="summary-box">SUGGESTED SWAPS<strong>${fmtNum(list.length)}</strong></div>
-      <div class="summary-box">TOTAL UNITS TO MOVE<strong>${fmtNum(totalUnits)} pcs</strong></div>
-      <div class="summary-box">0-STOCK FILLS<strong style="color:var(--gold-bright);">${fmtNum(zeroFills)}</strong></div>
-    `;
+  const branches = state.inventory?.branches || [
+    { id: 'br-molave', name: 'Molave' },
+    { id: 'br-tambulig', name: 'Tambulig' },
+    { id: 'br-bonifacio', name: 'Bonifacio' },
+  ];
+
+  const stats = new Map(branches.map((b) => [b.name, { inQty: 0, outQty: 0 }]));
+  for (const s of list) {
+    if (stats.has(s.toBranch)) stats.get(s.toBranch).inQty += s.swapQty;
+    if (stats.has(s.fromBranch)) stats.get(s.fromBranch).outQty += s.swapQty;
   }
 
-  const tbody = document.querySelector('#stockSwapTable tbody');
-  if (!tbody) return;
-  tbody.innerHTML = list.length
-    ? list
-        .map(
-          (s) => `
-        <tr>
-          <td><strong>${s.model}</strong><div class="small muted">${s.brand} • ${s.sku}</div></td>
-          <td>${fmtCurrency(s.price)}</td>
-          <td><span class="badge badge-ok">${s.fromBranch}: ${s.fromBefore} → ${s.fromAfter}</span></td>
-          <td><span class="badge ${s.toBefore === 0 ? 'badge-danger' : 'badge-warn'}">${s.toBranch}: ${s.toBefore} → ${s.toAfter}</span></td>
-          <td><strong>${s.swapQty} pc${s.swapQty > 1 ? 's' : ''}</strong></td>
-          <td class="small muted">${s.reason}</td>
-        </tr>`
-        )
-        .join('')
-    : '<tr><td colspan="6" class="muted">All branches are balanced—no stock swaps needed right now.</td></tr>';
+  const copyIconSvg = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
+
+  const sumEl = document.getElementById('stockSwapSummaryGrid');
+  if (sumEl) {
+    sumEl.innerHTML = branches
+      .map((b) => {
+        const st = stats.get(b.name) || { inQty: 0, outQty: 0 };
+        const net = st.inQty - st.outQty;
+        return `
+          <div class="summary-box" style="display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;">
+            <span class="small muted">${b.name} &middot; IN / OUT / NET</span>
+            <strong style="font-size:15px;">${st.inQty} / ${st.outQty} / ${net} pcs</strong>
+            <button type="button" class="btn btn-secondary btn-compact swap-copy-btn" data-branch="${b.name}" title="Copy ${b.name} Branch stockswap message" ${st.outQty === 0 ? 'disabled style="opacity:0.45;"' : ''}>
+              ${copyIconSvg}
+            </button>
+          </div>
+        `;
+      })
+      .join('');
+
+    sumEl.querySelectorAll('.swap-copy-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const branchName = btn.dataset.branch;
+        const text = buildBranchSwapCopyText(branchName, state.lastStockSwaps || []);
+        const statusEl = document.getElementById('stockSwapCopyStatus');
+        if (!text) {
+          if (statusEl) statusEl.textContent = `No outgoing stockswaps for ${branchName} Branch.`;
+          return;
+        }
+        const ok = await copyTextToClipboard(text);
+        if (statusEl) {
+          statusEl.textContent = ok
+            ? `Copied ${branchName} Branch swaps. Paste the message to the other branch.`
+            : `Unable to copy automatically. Please copy from the list above.`;
+          statusEl.style.color = ok ? 'var(--gold-bright)' : 'var(--danger)';
+        }
+      });
+    });
+  }
+
+  const listEl = document.getElementById('stockSwapGroupedList');
+  if (!listEl) return;
+
+  const statusEl = document.getElementById('stockSwapCopyStatus');
+  if (statusEl) statusEl.textContent = '';
+
+  if (!list.length) {
+    listEl.innerHTML = '<div class="muted small" style="padding:10px 0;">All branches are balanced—no stock swaps needed right now.</div>';
+    return;
+  }
+
+  const byFrom = new Map();
+  for (const b of branches) byFrom.set(b.name, new Map());
+  for (const s of list) {
+    if (!byFrom.has(s.fromBranch)) byFrom.set(s.fromBranch, new Map());
+    const destMap = byFrom.get(s.fromBranch);
+    if (!destMap.has(s.toBranch)) destMap.set(s.toBranch, []);
+    destMap.get(s.toBranch).push(s);
+  }
+
+  const sections = [];
+  for (const [fromBranch, destMap] of byFrom.entries()) {
+    if (!destMap.size) continue;
+    const destHtml = [];
+    for (const [toBranch, rows] of destMap.entries()) {
+      destHtml.push(`
+        <div style="margin-top:8px;">
+          <div style="font-weight:700;font-size:13px;color:var(--text);margin-bottom:4px;">Stockswap to ${toBranch}:</div>
+          ${rows
+            .map(
+              (s) => `
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+              <span style="font-size:13px;">${formatSwapModelName(s)}</span>
+              <strong style="color:var(--gold-bright);white-space:nowrap;">${s.swapQty} ${s.swapQty === 1 ? 'pc' : 'pcs'}</strong>
+            </div>`
+            )
+            .join('')}
+        </div>
+      `);
+    }
+    sections.push(`
+      <div class="sub-panel" style="margin-top:8px;padding:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+          <strong style="color:var(--gold-bright);font-size:14px;">${fromBranch} Branch</strong>
+          <button type="button" class="btn btn-secondary btn-compact swap-copy-btn" data-branch="${fromBranch}" title="Copy ${fromBranch} Branch stockswap">
+            ${copyIconSvg} <span>Copy</span>
+          </button>
+        </div>
+        ${destHtml.join('')}
+      </div>
+    `);
+  }
+  listEl.innerHTML = sections.join('');
+
+  listEl.querySelectorAll('.swap-copy-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const branchName = btn.dataset.branch;
+      const text = buildBranchSwapCopyText(branchName, state.lastStockSwaps || []);
+      if (!text) return;
+      const ok = await copyTextToClipboard(text);
+      if (statusEl) {
+        statusEl.textContent = ok
+          ? `Copied ${branchName} Branch swaps. Paste the message to the other branch.`
+          : `Unable to copy automatically.`;
+        statusEl.style.color = ok ? 'var(--gold-bright)' : 'var(--danger)';
+      }
+    });
+  });
 }
 
 function downloadStockSwapPdf() {
@@ -1369,31 +1510,113 @@ function downloadStockSwapPdf() {
     return;
   }
   const doc = new jspdfNs.jsPDF({ orientation: 'portrait', unit: 'in', format: [8.5, 13], compress: true });
+  const pageWidth = doc.internal.pageSize.getWidth();
   const margin = 24 / 72;
+  const nowLabel = new Date().toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
   doc.setTextColor(27, 25, 19);
-  doc.text('AB-Gadgetz: Inter-Branch Stock Swap Plan', margin, 32 / 72);
-  doc.setFontSize(9);
+  doc.text('AB-GADGETZ · BRANCH STOCK SWAP SUMMARY', pageWidth / 2, 30 / 72, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
   doc.setTextColor(79, 73, 58);
-  doc.text(`Generated ${todayStr} • ${list.length} swap suggestion(s)`, margin, 48 / 72);
+  doc.text(`Prepared ${nowLabel}`, pageWidth / 2, 43 / 72, { align: 'center' });
+  doc.text('Suggested transfers only · Record accepted swaps', pageWidth / 2, 54 / 72, { align: 'center' });
+
+  const branches = state.inventory?.branches || [
+    { id: 'br-molave', name: 'Molave' },
+    { id: 'br-tambulig', name: 'Tambulig' },
+    { id: 'br-bonifacio', name: 'Bonifacio' },
+  ];
+  const stats = new Map(branches.map((b) => [b.name, { inQty: 0, outQty: 0 }]));
+  for (const s of list) {
+    if (stats.has(s.toBranch)) stats.get(s.toBranch).inQty += s.swapQty;
+    if (stats.has(s.fromBranch)) stats.get(s.fromBranch).outQty += s.swapQty;
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(27, 25, 19);
+  doc.text('BRANCH SUMMARY', margin, 72 / 72);
 
   doc.autoTable({
-    startY: 60 / 72,
-    margin: { left: margin, right: margin, bottom: margin },
-    head: [['Model', 'From Branch', 'To Branch', 'Qty', 'Reason']],
-    body: list.map((s) => [
-      s.model,
-      `${s.fromBranch} (${s.fromBefore} -> ${s.fromAfter})`,
-      `${s.toBranch} (${s.toBefore} -> ${s.toAfter})`,
-      String(s.swapQty),
-      s.reason,
-    ]),
+    startY: 78 / 72,
+    margin: { left: margin, right: margin },
+    head: [['Branch', 'Swap In', 'Swap Out', 'Net']],
+    body: branches.map((b) => {
+      const st = stats.get(b.name) || { inQty: 0, outQty: 0 };
+      const net = st.inQty - st.outQty;
+      return [b.name, `${st.inQty} pcs`, `${st.outQty} pcs`, `${net} pcs`];
+    }),
     theme: 'grid',
-    styles: { font: 'helvetica', fontSize: 8, cellPadding: 3 / 72, textColor: [27, 25, 19] },
+    styles: {
+      font: 'helvetica',
+      fontSize: 8.5,
+      cellPadding: 4 / 72,
+      textColor: [27, 25, 19],
+      lineColor: [75, 70, 58],
+      lineWidth: 0.65 / 72,
+      halign: 'center',
+    },
+    columnStyles: { 0: { halign: 'left' } },
     headStyles: { fillColor: [235, 226, 190], textColor: [30, 30, 30], fontStyle: 'bold' },
   });
-  doc.save(`AB_Gadgetz_Stock_Swap_Plan_${todayStr}.pdf`);
+
+  const afterSummaryY = (doc.lastAutoTable?.finalY || 1.8) + 16 / 72;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(27, 25, 19);
+  doc.text('SWAPS BY RECEIVING BRANCH', margin, afterSummaryY);
+
+  const byDest = new Map();
+  for (const s of list) {
+    if (!byDest.has(s.toBranch)) byDest.set(s.toBranch, []);
+    byDest.get(s.toBranch).push(s);
+  }
+  const detailBody = [];
+  for (const [toBranch, rows] of byDest.entries()) {
+    detailBody.push([
+      {
+        content: `${toBranch} RECEIVES`,
+        colSpan: 3,
+        styles: { fillColor: [235, 226, 190], fontStyle: 'bold', textColor: [27, 25, 19] },
+      },
+    ]);
+    for (const s of rows) {
+      detailBody.push([
+        s.fromBranch,
+        formatSwapModelName(s),
+        `${s.swapQty} ${s.swapQty === 1 ? 'pc' : 'pcs'}`,
+      ]);
+    }
+  }
+
+  doc.autoTable({
+    startY: afterSummaryY + 6 / 72,
+    margin: { left: margin, right: margin, bottom: margin },
+    head: [['From Branch', 'Brand / Model', 'Quantity']],
+    body: detailBody,
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 8.5,
+      cellPadding: 4 / 72,
+      textColor: [27, 25, 19],
+      lineColor: [75, 70, 58],
+      lineWidth: 0.65 / 72,
+    },
+    columnStyles: { 2: { halign: 'center' } },
+    headStyles: { fillColor: [235, 226, 190], textColor: [30, 30, 30], fontStyle: 'bold' },
+  });
+
+  doc.save(`AB_Gadgetz_Stock_Swap_Summary_${todayStr}.pdf`);
 }
 
 document.getElementById('swapTypeFilter')?.addEventListener('change', renderStockSwapTool);
