@@ -1828,7 +1828,7 @@ async function markProductsPhaseout(productIds) {
     try {
       await api('/api/products/lifecycle', {
         method: 'PATCH',
-        body: JSON.stringify({ productIds, lifecycleStatus: 'Phaseout / Do Not Reorder' }),
+        body: JSON.stringify({ productIds, status: 'Phaseout / Do Not Reorder' }),
       });
     } catch (err) {
       alert(err.message);
