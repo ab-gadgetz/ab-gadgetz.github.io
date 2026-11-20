@@ -108,7 +108,6 @@
         <button type="button" class="tab active" data-tab="inventory">INVENTORY</button>
         <button type="button" class="tab" data-tab="receivables">RECEIVABLES</button>
         <button type="button" class="tab" data-tab="finance">FINANCE &amp; P&amp;L</button>
-        <button type="button" class="tab" data-tab="stockChanges">STOCK CHANGES</button>
         <button type="button" class="tab" data-tab="websiteStock">WEBSITE STOCK</button>
         <button type="button" class="tab" data-tab="catalogs">CUSTOMER CATALOGS</button>
         <button type="button" class="tab" data-tab="activity">ACTIVITY LOG</button>
@@ -553,31 +552,6 @@
       </div>
     </section>
 
-    <!-- TAB 2: STOCK CHANGES (PHOTOS MANAGER ONLY) -->
-    <section id="tab-stockChanges" class="tab-panel card">
-      <!-- PHOTOS -->
-      <div id="sc-photos" class="sc-panel">
-        <div class="sub-panel">
-          <h3>Product Photos Manager</h3>
-          <p class="muted small">Right-click any product photo online → <strong>Copy image address</strong>, then paste the URL below to add it to your Inventory &amp; Customer Catalog.</p>
-          <div style="margin-bottom:10px;">
-            <label for="photoProduct">Select Product</label>
-            <select id="photoProduct"></select>
-          </div>
-          <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">
-            <div style="flex:1;min-width:240px;">
-              <label for="photoUrlInput">Paste Image Address (URL)</label>
-              <input type="url" id="photoUrlInput" placeholder="https://..." />
-            </div>
-            <button type="button" id="addPhotoBtn">ADD PHOTO</button>
-            <button type="button" class="publish-github-btn secondary" style="border-color:var(--gold);color:var(--gold-bright);">🚀 PUBLISH TO LIVE CATALOGS</button>
-          </div>
-          <div id="photoPreviewGrid" style="display:flex;gap:10px;flex-wrap:wrap;"></div>
-          <div id="photoMsg" class="status-msg"></div>
-        </div>
-      </div>
-    </section>
-
     <!-- TAB 3: WEBSITE STOCK (LIVE PORTAL SYNC) -->
     <section id="tab-websiteStock" class="tab-panel card">
       <div class="grid-2">
@@ -887,6 +861,33 @@
         <img src="/ab-logo-square.png" alt="Logo" class="lightbox-watermark-logo" />
       </div>
       <button type="button" id="lightboxNext" class="lightbox-nav lightbox-next hidden" aria-label="Next photo">›</button>
+    </div>
+  </div>
+
+  <!-- ADMIN PRODUCT PHOTOS MODAL (CLICK CARD / THUMBNAIL IN INVENTORY) -->
+  <div id="adminPhotoModal" class="calc-modal hidden" role="dialog" aria-modal="true">
+    <div class="calc-modal-sheet" style="max-width:640px;">
+      <div class="calc-modal-head">
+        <div style="min-width:0;">
+          <h3 id="adminPhotoModalTitle" style="margin:0;color:var(--gold-bright);">Product Photos</h3>
+          <div id="adminPhotoModalSub" class="small muted"></div>
+        </div>
+        <button type="button" id="closeAdminPhotoModalBtn" class="secondary" style="padding:6px 12px;">✕</button>
+      </div>
+
+      <p class="muted small" style="margin:0 0 10px;">Paste an image address (URL) to add photos, remove unwanted photos, or use <strong>◀ / ▶ / Make 1st</strong> to arrange which photo appears first.</p>
+
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">
+        <div style="flex:1;min-width:220px;">
+          <label for="photoUrlInput">Paste Image Address (URL)</label>
+          <input type="url" id="photoUrlInput" placeholder="https://..." />
+        </div>
+        <button type="button" id="addPhotoBtn">+ ADD PHOTO</button>
+        <button type="button" class="publish-github-btn secondary" style="border-color:var(--gold);color:var(--gold-bright);">🚀 Publish</button>
+      </div>
+
+      <div id="photoPreviewGrid" style="display:flex;gap:10px;flex-wrap:wrap;"></div>
+      <div id="photoMsg" class="status-msg" style="margin-top:10px;"></div>
     </div>
   </div>
 

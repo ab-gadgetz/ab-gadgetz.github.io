@@ -591,51 +591,124 @@ function syncCostInputs() {
   document.getElementById('costOnline').value = prod.cost_online ?? '';
 }
 
+let activeAdminPhotoProductId = '';
+
+function openAdminPhotoModal(productId) {
+  if (state.userRole !== 'ADMIN' || !state.inventory) return;
+  const prod = state.inventory.items.find((i) => i.id === productId);
+  if (!prod) return;
+  activeAdminPhotoProductId = productId;
+  document.getElementById('adminPhotoModalTitle').textContent = `${prod.brand || ''} ${prod.model || prod.name}`.trim();
+  document.getElementById('adminPhotoModalSub').textContent = `${prod.website_codes || prod.sku} • ${(prod.imageUrls || []).length} photo(s)`;
+  document.getElementById('photoMsg').textContent = '';
+  renderPhotoEditor();
+  document.getElementById('adminPhotoModal').classList.remove('hidden');
+}
+
 function renderPhotoEditor() {
   if (!state.inventory) return;
-  const pid = document.getElementById('photoProduct').value;
+  const pid = activeAdminPhotoProductId || document.getElementById('photoProduct')?.value;
   const prod = state.inventory.items.find((i) => i.id === pid);
   const grid = document.getElementById('photoPreviewGrid');
+  if (!grid) return;
   if (!prod) {
     grid.innerHTML = '';
     return;
   }
+  const subEl = document.getElementById('adminPhotoModalSub');
+  if (subEl) subEl.textContent = `${prod.website_codes || prod.sku} • ${(prod.imageUrls || []).length} photo(s)`;
+
   const urls = prod.imageUrls || [];
   if (!urls.length) {
-    grid.innerHTML = '<div class="muted small">No photos added for this product yet.</div>';
+    grid.innerHTML = '<div class="muted small">No photos added for this product yet. Paste an image URL above to add one!</div>';
     return;
   }
-  grid.innerHTML = urls
-    .map(
-      (u, idx) => `
-      <div style="background:#171c23;border:1px solid var(--border-soft);border-radius:8px;padding:6px;display:flex;flex-direction:column;align-items:center;gap:6px;width:96px;">
-        <img src="${u}" alt="${prod.name}" style="width:76px;height:76px;object-fit:contain;background:#fff;border-radius:6px;" />
-        <button type="button" class="danger remove-photo-btn" data-idx="${idx}" style="width:100%;padding:4px;font-size:10px;">Remove</button>
-      </div>`
-    )
-    .join('');
 
-  grid.querySelectorAll('.remove-photo-btn').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const nextUrls = urls.filter((_, i) => i !== Number(btn.dataset.idx));
+  const saveOrderedUrls = async (nextUrls, statusText) => {
+    const msg = document.getElementById('photoMsg');
+    try {
       await api('/api/products/photos', {
         method: 'PATCH',
         body: JSON.stringify({ productId: prod.id, imageUrls: nextUrls }),
       });
-      document.getElementById('photoMsg').textContent = 'Photo removed.';
+      if (msg) msg.textContent = statusText;
       await loadInventory();
       if (state.selectedCustomerId) await loadCustomerCatalog(state.selectedCustomerId);
+      renderPhotoEditor();
+    } catch (err) {
+      if (msg) msg.textContent = err.message;
+    }
+  };
+
+  grid.innerHTML = urls
+    .map(
+      (u, idx) => `
+      <div style="background:#171c23;border:${idx === 0 ? '2px solid var(--gold-bright)' : '1px solid var(--border-soft)'};border-radius:10px;padding:8px;display:flex;flex-direction:column;align-items:center;gap:6px;width:128px;">
+        <div style="width:100%;display:flex;justify-content:space-between;align-items:center;font-size:10px;font-weight:800;color:${idx === 0 ? 'var(--gold-bright)' : 'var(--muted)'};">
+          <span>${idx === 0 ? '★ 1ST COVER' : `#${idx + 1}`}</span>
+          ${idx > 0 ? `<button type="button" class="secondary make-first-photo-btn" data-idx="${idx}" style="padding:2px 6px;font-size:9.5px;min-height:0;" title="Move to 1st">Make 1st</button>` : ''}
+        </div>
+        <img src="${u}" alt="${prod.name}" style="width:96px;height:96px;object-fit:contain;background:#fff;border-radius:6px;padding:2px;" />
+        <div style="display:flex;gap:4px;width:100%;">
+          <button type="button" class="secondary move-left-photo-btn" data-idx="${idx}" ${idx === 0 ? 'disabled' : ''} style="flex:1;padding:3px;font-size:11px;min-height:0;" title="Move left">◀</button>
+          <button type="button" class="secondary move-right-photo-btn" data-idx="${idx}" ${idx === urls.length - 1 ? 'disabled' : ''} style="flex:1;padding:3px;font-size:11px;min-height:0;" title="Move right">▶</button>
+          <button type="button" class="danger remove-photo-btn" data-idx="${idx}" style="flex:1;padding:3px;font-size:11px;min-height:0;" title="Remove photo">✕</button>
+        </div>
+      </div>`
+    )
+    .join('');
+
+  grid.querySelectorAll('.make-first-photo-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const i = Number(btn.dataset.idx);
+      const next = [urls[i], ...urls.filter((_, idx) => idx !== i)];
+      saveOrderedUrls(next, 'Moved photo to 1st position!');
+    });
+  });
+
+  grid.querySelectorAll('.move-left-photo-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const i = Number(btn.dataset.idx);
+      if (i <= 0) return;
+      const next = [...urls];
+      [next[i - 1], next[i]] = [next[i], next[i - 1]];
+      saveOrderedUrls(next, 'Photo order updated.');
+    });
+  });
+
+  grid.querySelectorAll('.move-right-photo-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const i = Number(btn.dataset.idx);
+      if (i >= urls.length - 1) return;
+      const next = [...urls];
+      [next[i], next[i + 1]] = [next[i + 1], next[i]];
+      saveOrderedUrls(next, 'Photo order updated.');
+    });
+  });
+
+  grid.querySelectorAll('.remove-photo-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const nextUrls = urls.filter((_, i) => i !== Number(btn.dataset.idx));
+      saveOrderedUrls(nextUrls, 'Photo removed.');
     });
   });
 }
 
-document.getElementById('photoProduct').addEventListener('change', renderPhotoEditor);
-document.getElementById('addPhotoBtn').addEventListener('click', async () => {
-  const pid = document.getElementById('photoProduct').value;
+document.getElementById('closeAdminPhotoModalBtn')?.addEventListener('click', () => {
+  document.getElementById('adminPhotoModal')?.classList.add('hidden');
+});
+document.getElementById('adminPhotoModal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'adminPhotoModal') {
+    document.getElementById('adminPhotoModal').classList.add('hidden');
+  }
+});
+document.getElementById('photoProduct')?.addEventListener('change', renderPhotoEditor);
+document.getElementById('addPhotoBtn')?.addEventListener('click', async () => {
+  const pid = activeAdminPhotoProductId || document.getElementById('photoProduct')?.value;
   const url = document.getElementById('photoUrlInput').value.trim();
   const msg = document.getElementById('photoMsg');
   if (!pid || !url) {
-    msg.textContent = 'Select a product and paste an image address first.';
+    msg.textContent = 'Paste an image address first.';
     return;
   }
   const prod = state.inventory.items.find((i) => i.id === pid);
@@ -649,6 +722,7 @@ document.getElementById('addPhotoBtn').addEventListener('click', async () => {
     msg.textContent = 'Photo added!';
     await loadInventory();
     if (state.selectedCustomerId) await loadCustomerCatalog(state.selectedCustomerId);
+    renderPhotoEditor();
   } catch (err) {
     msg.textContent = err.message;
   }
@@ -698,7 +772,7 @@ function renderModelCard(item, visibleBranches) {
   const qtyCls = item.scopedAvail === 0 ? 'model-card-qty zero' : 'model-card-qty';
   const isFreebie = isFreebieAccessory(item);
   return `
-    <div class="model-card" ${isCashier ? `data-inv-calc-id="${item.id}" style="cursor:pointer;"` : `style="${isSel ? 'border-color:var(--gold);background:linear-gradient(165deg,#332f20 0%,#1f1d16 100%);' : ''}"`}>
+    <div class="model-card" ${isCashier ? `data-inv-calc-id="${item.id}" style="cursor:pointer;"` : isAdmin ? `data-admin-photo-id="${item.id}" style="cursor:pointer;${isSel ? 'border-color:var(--gold);background:linear-gradient(165deg,#332f20 0%,#1f1d16 100%);' : ''}"` : `style="${isSel ? 'border-color:var(--gold);background:linear-gradient(165deg,#332f20 0%,#1f1d16 100%);' : ''}"`}>
       <div class="model-card-head">
         <div style="display:flex;gap:9px;align-items:center;min-width:0;">
           ${isAdmin ? `<input type="checkbox" class="model-select-chk" data-id="${item.id}" ${isSel ? 'checked' : ''} style="width:16px;height:16px;flex:0 0 16px;cursor:pointer;accent-color:var(--gold);" />` : ''}
@@ -795,6 +869,15 @@ function renderInventory() {
 
   // Cashier integrated catalog filters (Price Range & RAM/ROM only when Cellphones is selected)
   let filteredScoped = scopedItems;
+  if (isAdmin) {
+    grid.querySelectorAll('.model-card[data-admin-photo-id]').forEach((card) => {
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('.model-select-chk')) return;
+        openAdminPhotoModal(card.dataset.adminPhotoId);
+      });
+    });
+  }
+
   if (isCashier) {
     const priceRangeEl = document.getElementById('invPriceRange');
     const ramRomEl = document.getElementById('invRamRom');
@@ -1064,6 +1147,15 @@ function renderInventory() {
       renderInventory();
     });
   });
+
+  if (isAdmin) {
+    grid.querySelectorAll('.model-card[data-admin-photo-id]').forEach((card) => {
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('.model-select-chk')) return;
+        openAdminPhotoModal(card.dataset.adminPhotoId);
+      });
+    });
+  }
 
   if (isCashier) {
     grid.querySelectorAll('[data-inv-calc-id]').forEach((card) => {
@@ -3536,7 +3628,7 @@ function applyRolePermissions() {
       ? ['inventory']
       : role === 'CI'
         ? ['receivables', 'catalogs']
-        : ['inventory', 'stockChanges', 'activity', 'finance', 'receivables', 'catalogs', 'websiteStock', 'staffPins'];
+        : ['inventory', 'activity', 'finance', 'receivables', 'catalogs', 'websiteStock', 'staffPins'];
 
   document.querySelectorAll('.tab[data-tab], .mnav-btn[data-tab]').forEach((btn) => {
     const t = btn.dataset.tab;
