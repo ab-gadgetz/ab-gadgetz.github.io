@@ -1026,3 +1026,9 @@ button.danger { background: #a33a35; color: #fff; }
 #customDpInput::placeholder {
   color: rgba(237, 241, 246, 0.32);
 }
+.act-summary-btn.active,
+.act-summary-btn.active strong {
+  background: var(--gold);
+  color: #15191f !important;
+  border-color: var(--gold-bright);
+}

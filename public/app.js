@@ -309,8 +309,16 @@ async function staticGhApi(url, opts = {}) {
     const start = u.searchParams.get('start') || '';
     const end = u.searchParams.get('end') || '9999-99-99';
     const branchId = u.searchParams.get('branchId') || '';
+    const toManilaDate = (iso) => {
+      if (!iso) return '';
+      try {
+        return new Date(iso).toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+      } catch {
+        return String(iso).slice(0, 10);
+      }
+    };
     const allMovements = (bundle.allMovements || []).filter((m) => {
-      const d = String(m.recorded_at || '').slice(0, 10);
+      const d = toManilaDate(m.recorded_at);
       return (!start || d >= start) && (!end || d <= end);
     });
     const allInstallments = (bundle.allInstallments || []).filter((i) => {

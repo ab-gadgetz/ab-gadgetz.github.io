@@ -195,6 +195,8 @@ function makePortalProduct(row) {
   };
 }
 
+const normCode = (s) => String(s || '').toUpperCase().replace(/\s+/g, '');
+
 async function main() {
   const products = seedSnapshot.products.map((p) => ({ ...p }));
   const branchPrice = new Map(); // `${branchId}::${productId}` -> price from the AB website
@@ -204,8 +206,10 @@ async function main() {
 
   const codeToProduct = new Map();
   for (const p of products) {
-    const codes = String(p.website_codes || p.sku || '').split(',').map((c) => c.trim().toUpperCase()).filter(Boolean);
-    for (const c of codes) codeToProduct.set(c, p);
+    const rawCodes = String(p.website_codes || p.sku || '').split(',').map((c) => c.trim().toUpperCase()).filter(Boolean);
+    for (const c of rawCodes) {
+      codeToProduct.set(c, p);
+    }
   }
 
   const user = process.env.PORTAL_USERNAME;
@@ -218,6 +222,34 @@ async function main() {
   let allExpenses = Array.isArray(seedSnapshot.portal_expenses) ? [...seedSnapshot.portal_expenses] : [];
   let allPastDues = Array.isArray(seedSnapshot.portal_past_dues) ? [...seedSnapshot.portal_past_dues] : [];
   const prevInvMap = new Map(seedSnapshot.branch_inventory.map((r) => [`${r.branch_id}::${r.product_id}`, Number(r.qty_on_hand) || 0]));
+
+  // Load previously deployed live state from GitHub Pages so 30-min syncs only record real new movements
+  try {
+    const prevRes = await fetch(`https://ab-gadgetz.github.io/data/admin-bundle.json?cb=${Date.now()}`);
+    if (prevRes.ok) {
+      const prevBundle = await prevRes.json();
+      if (prevBundle?.liveSynced && Array.isArray(prevBundle.inventory?.items)) {
+        for (const item of prevBundle.inventory.items) {
+          for (const b of BRANCHES) {
+            const cell = item.byBranch?.[b.id];
+            if (cell) prevInvMap.set(`${b.id}::${item.id}`, Number(cell.qtyOnHand) || 0);
+          }
+        }
+        // Explicitly keep prd-bavin-093 baseline at 4 so fixing its code whitespace doesn't log a false +4 restock
+        if (prevInvMap.get('br-bonifacio::prd-bavin-093') === 0) {
+          prevInvMap.set('br-bonifacio::prd-bavin-093', 4);
+        }
+      }
+      if (Array.isArray(prevBundle?.allMovements)) {
+        const cleanPrev = prevBundle.allMovements.filter((m) => m.id !== 'live-br-bonifacio-prd-bavin-093');
+        const seenIds = new Set(cleanPrev.map((m) => String(m.id)));
+        for (const m of allMovements) {
+          if (!seenIds.has(String(m.id))) cleanPrev.push(m);
+        }
+        allMovements = cleanPrev;
+      }
+    }
+  } catch {}
 
   if (user && pass) {
     try {
@@ -250,14 +282,14 @@ async function main() {
         }
         const totals = new Map();
         for (const row of rows) {
-          let prod = codeToProduct.get(row.itemCode.toUpperCase());
+          let prod = codeToProduct.get(row.itemCode.trim().toUpperCase());
 
           // Brand-new item on the AB website that is not in our product list yet:
           // add it automatically (only when it is actually in stock).
           if (!prod && row.available > 0 && row.itemName) {
             prod = makePortalProduct(row);
             products.push(prod);
-            codeToProduct.set(row.itemCode.toUpperCase(), prod);
+            codeToProduct.set(row.itemCode.trim().toUpperCase(), prod);
             newProducts.add(prod.id);
           }
           if (!prod) continue;
@@ -274,8 +306,9 @@ async function main() {
           if (prevQty !== undefined && qty !== prevQty) {
             const pObj = products.find((x) => x.id === pid);
             if (pObj) {
+              console.log(`Recorded movement: ${branchId} ${pid} (${pObj.name}): ${prevQty} -> ${qty}`);
               allMovements.unshift({
-                id: `live-${branchId}-${pid}`,
+                id: `live-${nowIso}-${branchId}-${pid}`,
                 branch_id: branchId,
                 branch_name: bObj ? bObj.name : branchId,
                 product_id: pid,
