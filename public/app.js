@@ -2865,8 +2865,8 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
         valign: 'middle',
       },
       headStyles: {
-        fillColor: [27, 25, 19],
-        textColor: [246, 211, 75],
+        fillColor: [235, 226, 190],
+        textColor: [30, 30, 30],
         fontStyle: 'bold',
         halign: 'center',
       },
@@ -2979,8 +2979,8 @@ async function downloadInventoryExcel() {
       const headerRow = sheet.addRow(['Model', 'Unit Price (PHP)', ...daysHeaders]);
       headerRow.height = 20;
       headerRow.eachCell((cell, colNumber) => {
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1B1913' } };
-        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFF6D34B' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEBE2BE' } };
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF1E1E1E' } };
         cell.alignment = { vertical: 'middle', horizontal: colNumber === 1 ? 'left' : 'center' };
         cell.border = thinBorder;
       });
