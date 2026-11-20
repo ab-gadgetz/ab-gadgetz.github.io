@@ -2143,36 +2143,32 @@ function renderActivity() {
   const viewsGrid = document.getElementById('activityViewsGrid');
   if (viewsGrid) {
     viewsGrid.innerHTML = `
-      <div class="summary-box">
-        Molave CATALOG VIEWS<strong>${fmtNum(vMol.total)} views</strong>
-        <span class="summary-note">7d: ${fmtNum(vMol.weekly)} • 30d: ${fmtNum(vMol.monthly)}</span>
+      <div class="summary-box compact-act-box">
+        Molave<strong>${fmtNum(vMol.total)} views</strong>
       </div>
-      <div class="summary-box">
-        Tambulig CATALOG VIEWS<strong>${fmtNum(vTam.total)} views</strong>
-        <span class="summary-note">7d: ${fmtNum(vTam.weekly)} • 30d: ${fmtNum(vTam.monthly)}</span>
+      <div class="summary-box compact-act-box">
+        Tambulig<strong>${fmtNum(vTam.total)} views</strong>
       </div>
-      <div class="summary-box">
-        Bonifacio CATALOG VIEWS<strong>${fmtNum(vBon.total)} views</strong>
-        <span class="summary-note">7d: ${fmtNum(vBon.weekly)} • 30d: ${fmtNum(vBon.monthly)}</span>
+      <div class="summary-box compact-act-box">
+        Bonifacio<strong>${fmtNum(vBon.total)} views</strong>
       </div>
-      <div class="summary-box">
-        ALL CATALOG VIEWS<strong>${fmtNum(vTot.total)} views</strong>
-        <span class="summary-note">7d: ${fmtNum(vTot.weekly)} • 30d: ${fmtNum(vTot.monthly)}</span>
+      <div class="summary-box compact-act-box">
+        ALL<strong>${fmtNum(vTot.total)} views</strong>
       </div>
     `;
   }
   document.getElementById('activitySalesGrid').innerHTML = `
-    <button type="button" class="summary-box act-summary-btn ${branchFilter === 'br-molave' ? 'active' : ''}" data-branch="br-molave">
-      Molave SOLD<strong>${fmtNum(soldByBranch['br-molave'] || 0)} pcs</strong>
+    <button type="button" class="summary-box compact-act-box act-summary-btn ${branchFilter === 'br-molave' ? 'active' : ''}" data-branch="br-molave">
+      Molave<strong>${fmtNum(soldByBranch['br-molave'] || 0)} pcs</strong>
     </button>
-    <button type="button" class="summary-box act-summary-btn ${branchFilter === 'br-tambulig' ? 'active' : ''}" data-branch="br-tambulig">
-      Tambulig SOLD<strong>${fmtNum(soldByBranch['br-tambulig'] || 0)} pcs</strong>
+    <button type="button" class="summary-box compact-act-box act-summary-btn ${branchFilter === 'br-tambulig' ? 'active' : ''}" data-branch="br-tambulig">
+      Tambulig<strong>${fmtNum(soldByBranch['br-tambulig'] || 0)} pcs</strong>
     </button>
-    <button type="button" class="summary-box act-summary-btn ${branchFilter === 'br-bonifacio' ? 'active' : ''}" data-branch="br-bonifacio">
-      Bonifacio SOLD<strong>${fmtNum(soldByBranch['br-bonifacio'] || 0)} pcs</strong>
+    <button type="button" class="summary-box compact-act-box act-summary-btn ${branchFilter === 'br-bonifacio' ? 'active' : ''}" data-branch="br-bonifacio">
+      Bonifacio<strong>${fmtNum(soldByBranch['br-bonifacio'] || 0)} pcs</strong>
     </button>
-    <button type="button" class="summary-box act-summary-btn ${branchFilter === '' ? 'active' : ''}" data-branch="">
-      ALL BRANCHES<strong>${fmtNum(totalSold)} pcs</strong>
+    <button type="button" class="summary-box compact-act-box act-summary-btn ${branchFilter === '' ? 'active' : ''}" data-branch="">
+      ALL<strong>${fmtNum(totalSold)} pcs</strong>
     </button>
   `;
 
