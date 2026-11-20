@@ -12,19 +12,37 @@
   <link rel="apple-touch-icon" href="/ab-logo-square.png" />
   <title>Owner Admin Portal</title>
   <link rel="stylesheet" href="/styles.css" />
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
 </head>
 <body>
   <div class="wrap">
     <div class="brand-head">
       <img src="/ab-logo-square.png" alt="Logo" class="portal-logo-img" />
-      <div>OWNER ADMIN PORTAL • REALTIME SYNC</div>
+      <div id="portalHeaderSub">OWNER ADMIN PORTAL • REALTIME SYNC</div>
     </div>
 
-    <!-- OWNER PIN LOGIN / SETUP GATE -->
+    <!-- OWNER & STAFF PIN LOGIN / SETUP GATE -->
     <div id="authGate" class="card hidden" style="max-width:420px;margin:24px auto;">
-      <h3 id="authTitle" style="margin:0 0 6px;color:var(--gold-bright);">Owner Login</h3>
-      <p id="authSubtitle" class="muted small" style="margin:0 0 12px;">Enter your 6–12 digit Owner PIN to unlock the portal.</p>
-      <label for="ownerPinInput">OWNER PIN</label>
+      <h3 id="authTitle" style="margin:0 0 6px;color:var(--gold-bright);">Portal Login</h3>
+      <p id="authSubtitle" class="muted small" style="margin:0 0 12px;">Select your account role and enter your PIN to unlock the portal.</p>
+      <div style="margin-bottom:10px;">
+        <label for="loginRoleSelect">ACCOUNT ROLE</label>
+        <select id="loginRoleSelect">
+          <option value="ADMIN">Owner (Admin Portal)</option>
+          <option value="CASHIER">Cashier (Inventory &amp; Branch Catalog)</option>
+          <option value="CI">Credit Investigator (Receivables &amp; Branch Catalog)</option>
+        </select>
+      </div>
+      <div id="loginBranchWrap" class="hidden" style="margin-bottom:10px;">
+        <label for="loginBranchSelect">ASSIGNED BRANCH</label>
+        <select id="loginBranchSelect">
+          <option value="br-molave">Molave</option>
+          <option value="br-tambulig">Tambulig</option>
+          <option value="br-bonifacio">Bonifacio</option>
+        </select>
+      </div>
+      <label for="ownerPinInput" id="pinInputLabel">PIN</label>
       <input type="password" id="ownerPinInput" inputmode="numeric" maxlength="12" placeholder="Enter 6–12 digit PIN" />
       <button type="button" id="authSubmitBtn" style="width:100%;margin-top:12px;">UNLOCK PORTAL</button>
       <div id="authErrorMsg" class="error-msg"></div>
@@ -123,7 +141,33 @@
             <option value="reorder">Reorder suggestions</option>
           </select>
         </div>
+
+        <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <label for="inventoryReportDate" style="margin:0;color:var(--muted);font-size:11px;">INVENTORY AS OF DATE</label>
+            <input type="date" id="inventoryReportDate" aria-label="Inventory as of date" style="width:auto;padding:6px 10px;font-size:12px;" />
+          </div>
+          <div class="download-actions" aria-label="Download inventory report">
+            <button type="button" id="inventoryPdfBtn" class="download-icon" title="Download inventory PDF" aria-label="Download inventory PDF">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="#bd3b32" d="M4 2h11l5 5v15H4z"/>
+                <path fill="#fff" d="M14 2v6h6"/>
+                <text x="5.5" y="17" fill="#fff" font-size="6.5" font-family="Arial" font-weight="700">PDF</text>
+              </svg>
+              <span>PDF</span>
+            </button>
+            <button type="button" id="inventoryExcelBtn" class="download-icon admin-only-el" title="Download inventory Excel" aria-label="Download inventory Excel">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="#1f7244" d="M4 2h11l5 5v15H4z"/>
+                <path fill="#fff" d="M14 2v6h6"/>
+                <text x="5" y="17" fill="#fff" font-size="6" font-family="Arial" font-weight="700">XLS</text>
+              </svg>
+              <span>EXCEL</span>
+            </button>
+          </div>
+        </div>
       </div>
+      <div id="inventoryDownloadMsg" class="pdf-message" aria-live="polite"></div>
 
       <!-- Tool Panel: Filters & Search -->
       <div id="tool-filters" class="sub-panel hidden">
@@ -227,7 +271,27 @@
             <h3 style="margin:0;">Receivables, Installment Portfolio &amp; Past Dues</h3>
             <p class="muted small" style="margin:3px 0 0;">Synced live from <code>app.abgadgetz.com.ph</code> Installments &amp; Past Dues across Molave, Tambulig, and Bonifacio.</p>
           </div>
-          <input type="text" id="recSearchInput" placeholder="Search customer, account #, barangay, unit..." style="width:280px;" />
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <input type="text" id="recSearchInput" placeholder="Search customer, account #, barangay, unit..." style="width:260px;" />
+            <div class="download-actions" aria-label="Download receivables report">
+              <button type="button" id="receivablesPdfBtn" class="download-icon" title="Download receivables PDF" aria-label="Download receivables PDF">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path fill="#bd3b32" d="M4 2h11l5 5v15H4z"/>
+                  <path fill="#fff" d="M14 2v6h6"/>
+                  <text x="5.5" y="17" fill="#fff" font-size="6.5" font-family="Arial" font-weight="700">PDF</text>
+                </svg>
+                <span>PDF</span>
+              </button>
+              <button type="button" id="receivablesExcelBtn" class="download-icon admin-only-el" title="Download receivables Excel" aria-label="Download receivables Excel">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path fill="#1f7244" d="M4 2h11l5 5v15H4z"/>
+                  <path fill="#fff" d="M14 2v6h6"/>
+                  <text x="5" y="17" fill="#fff" font-size="6" font-family="Arial" font-weight="700">XLS</text>
+                </svg>
+                <span>EXCEL</span>
+              </button>
+            </div>
+          </div>
         </div>
         <div class="summary-grid" id="receivablesKpiGrid" style="grid-template-columns:repeat(4,minmax(0,1fr));"></div>
       </div>
@@ -389,136 +453,10 @@
       </div>
     </section>
 
-    <!-- TAB 2: STOCK CHANGES -->
+    <!-- TAB 2: STOCK CHANGES (PHOTOS MANAGER ONLY) -->
     <section id="tab-stockChanges" class="tab-panel card">
-      <div class="stock-change-tabs">
-        <button type="button" class="sc-tab active" data-sc="record">RECORD</button>
-        <button type="button" class="sc-tab" data-sc="price">PRICE</button>
-        <button type="button" class="sc-tab" data-sc="add">ADD</button>
-        <button type="button" class="sc-tab" data-sc="cost">COST</button>
-        <button type="button" class="sc-tab" data-sc="photos">PHOTOS</button>
-      </div>
-
-      <!-- RECORD -->
-      <div id="sc-record" class="sc-panel">
-        <div class="sub-panel">
-          <h3>Record Stock Change</h3>
-          <div class="grid-2">
-            <div>
-              <label for="recBranch">Branch</label>
-              <select id="recBranch"></select>
-            </div>
-            <div>
-              <label for="recProduct">Product</label>
-              <select id="recProduct"></select>
-            </div>
-            <div>
-              <label for="recAction">Action</label>
-              <select id="recAction">
-                <option value="Sold">Sold</option>
-                <option value="Received">Received</option>
-                <option value="Stock swap">Stock swap</option>
-                <option value="Stock correction">Stock correction (Admin only)</option>
-              </select>
-            </div>
-            <div>
-              <label for="recQty">Number of Phones / Physical Count</label>
-              <input type="number" id="recQty" min="0" step="1" placeholder="Enter quantity" />
-            </div>
-            <div id="recDestWrap" class="hidden">
-              <label for="recDestBranch">Receiving Branch (For Stock Swap)</label>
-              <select id="recDestBranch"></select>
-            </div>
-          </div>
-          <button type="button" id="saveMovementBtn" style="margin-top:12px;">SAVE STOCK CHANGE</button>
-          <div id="recMsg" class="status-msg"></div>
-        </div>
-      </div>
-
-      <!-- PRICE -->
-      <div id="sc-price" class="sc-panel hidden">
-        <div class="sub-panel">
-          <h3>Price Change</h3>
-          <div class="grid-2">
-            <div>
-              <label for="priceProduct">Product</label>
-              <select id="priceProduct"></select>
-            </div>
-            <div>
-              <label for="priceNewVal">New Selling Price (₱)</label>
-              <input type="number" id="priceNewVal" min="1" step="0.01" placeholder="Enter new price" />
-            </div>
-          </div>
-          <button type="button" id="savePriceBtn" style="margin-top:12px;">SAVE PRICE</button>
-          <div id="priceMsg" class="status-msg"></div>
-        </div>
-      </div>
-
-      <!-- ADD -->
-      <div id="sc-add" class="sc-panel hidden">
-        <div class="sub-panel">
-          <h3>Add New Product</h3>
-          <div class="grid-2">
-            <div>
-              <label for="addBranch">Initial Branch</label>
-              <select id="addBranch"></select>
-            </div>
-            <div>
-              <label for="addBrand">Brand</label>
-              <input type="text" id="addBrand" placeholder="e.g. Infinix" />
-            </div>
-            <div>
-              <label for="addModel">Model</label>
-              <input type="text" id="addModel" placeholder="e.g. Hot 70 4/128gb" />
-            </div>
-            <div>
-              <label for="addCode">Website Code (Optional)</label>
-              <input type="text" id="addCode" placeholder="e.g. INFINIX-018" />
-            </div>
-            <div>
-              <label for="addPrice">Selling Price (₱)</label>
-              <input type="number" id="addPrice" min="1" step="0.01" />
-            </div>
-            <div>
-              <label for="addQty">Opening Quantity</label>
-              <input type="number" id="addQty" min="0" step="1" value="0" />
-            </div>
-          </div>
-          <button type="button" id="saveAddProductBtn" style="margin-top:12px;">SAVE PRODUCT</button>
-          <div id="addMsg" class="status-msg"></div>
-        </div>
-      </div>
-
-      <!-- COST (3 Suppliers) -->
-      <div id="sc-cost" class="sc-panel hidden">
-        <div class="sub-panel">
-          <h3>Supplier Cost (DP) Manager</h3>
-          <p class="muted small">Update costs from your 3 suppliers. The lowest cost automatically powers your Inventory Cost Valuation.</p>
-          <div style="margin-bottom:8px;">
-            <label for="costProduct">Product</label>
-            <select id="costProduct"></select>
-          </div>
-          <div class="grid-3">
-            <div>
-              <label for="costAb">AB Main Supplier DP (₱)</label>
-              <input type="number" id="costAb" min="0" step="0.01" placeholder="Optional" />
-            </div>
-            <div>
-              <label for="costAk">A&amp;K DP (₱)</label>
-              <input type="number" id="costAk" min="0" step="0.01" placeholder="Optional" />
-            </div>
-            <div>
-              <label for="costOnline">Online Purchase DP (₱)</label>
-              <input type="number" id="costOnline" min="0" step="0.01" placeholder="Optional" />
-            </div>
-          </div>
-          <button type="button" id="saveCostBtn" style="margin-top:12px;">SAVE COST CHANGES</button>
-          <div id="costMsg" class="status-msg"></div>
-        </div>
-      </div>
-
       <!-- PHOTOS -->
-      <div id="sc-photos" class="sc-panel hidden">
+      <div id="sc-photos" class="sc-panel">
         <div class="sub-panel">
           <h3>Product Photos Manager</h3>
           <p class="muted small">Right-click any product photo online → <strong>Copy image address</strong>, then paste the URL below to add it to your Inventory &amp; Customer Catalog.</p>

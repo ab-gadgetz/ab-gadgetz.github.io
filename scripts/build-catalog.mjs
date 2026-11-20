@@ -483,6 +483,7 @@ async function main() {
   fs.writeFileSync(path.join(distDir, 'data', 'admin-bundle.json'), JSON.stringify(adminBundle));
   if (fs.existsSync(path.join(publicDir, 'index.html'))) {
     fs.mkdirSync(path.join(distDir, 'admin'), { recursive: true });
+    fs.mkdirSync(path.join(distDir, 'staff'), { recursive: true });
     const adminHtml = fs
       .readFileSync(path.join(publicDir, 'index.html'), 'utf8')
       .replace(/href="\/manifest\.webmanifest"/g, 'href="../manifest.webmanifest"')
@@ -492,7 +493,8 @@ async function main() {
       .replace(/src="\/ab-logo\.png"/g, 'src="../ab-logo.png"')
       .replace(/src="\/app\.js"/g, 'src="../app.js"');
     fs.writeFileSync(path.join(distDir, 'admin', 'index.html'), adminHtml);
-    console.log(`Built Full Admin Portal: ${inventoryItems.length} products, ${adminBundle.allPayments.length} payments, ${adminBundle.allInstallments.length} installments`);
+    fs.writeFileSync(path.join(distDir, 'staff', 'index.html'), adminHtml);
+    console.log(`Built Full Admin & Staff Portals: ${inventoryItems.length} products, ${adminBundle.allPayments.length} payments, ${adminBundle.allInstallments.length} installments`);
   }
 
   const landingHtml = `<!DOCTYPE html>

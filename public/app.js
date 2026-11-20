@@ -16,6 +16,8 @@ const state = {
   catalogBranchId: 'ALL',
   catalogData: null,
   expandedCatalogBrands: new Set(),
+  userRole: 'ADMIN',
+  userBranchId: '',
 };
 
 const fmtCurrency = (n) =>
@@ -179,17 +181,38 @@ async function staticGhApi(url, opts = {}) {
   const method = (opts.method || 'GET').toUpperCase();
 
   if (pathname === '/api/auth/status') {
-    return { pinConfigured: true, authenticated: localStorage.getItem('bs_gh_auth') === '1' };
+    const auth = localStorage.getItem('bs_gh_auth') === '1';
+    return {
+      pinConfigured: true,
+      authenticated: auth,
+      role: localStorage.getItem('bs_gh_role') || 'ADMIN',
+      branchId: localStorage.getItem('bs_gh_branch') || '',
+    };
   }
   if (pathname === '/api/auth/login' || pathname === '/api/auth/setup') {
     const body = JSON.parse(opts.body || '{}');
-    const ok = await verifyGhOwnerPin(String(body.pin || '').trim());
-    if (!ok) throw new Error('Incorrect Owner PIN.');
+    const pin = String(body.pin || '').trim();
+    const role = String(body.role || 'ADMIN').toUpperCase();
+    const branchId = String(body.branchId || '');
+    if (role === 'CASHIER') {
+      if (pin !== '111111') throw new Error('Incorrect Cashier PIN.');
+      if (!['br-molave', 'br-tambulig', 'br-bonifacio'].includes(branchId)) throw new Error('Please select a branch.');
+    } else if (role === 'CI') {
+      if (pin !== '222222') throw new Error('Incorrect Credit Investigator PIN.');
+      if (!['br-molave', 'br-tambulig', 'br-bonifacio'].includes(branchId)) throw new Error('Please select a branch.');
+    } else {
+      const ok = await verifyGhOwnerPin(pin);
+      if (!ok) throw new Error('Incorrect Owner PIN.');
+    }
     localStorage.setItem('bs_gh_auth', '1');
-    return { ok: true };
+    localStorage.setItem('bs_gh_role', role);
+    localStorage.setItem('bs_gh_branch', role === 'ADMIN' ? '' : branchId);
+    return { ok: true, role, branchId: role === 'ADMIN' ? '' : branchId };
   }
   if (pathname === '/api/auth/logout') {
     localStorage.removeItem('bs_gh_auth');
+    localStorage.removeItem('bs_gh_role');
+    localStorage.removeItem('bs_gh_branch');
     return { ok: true };
   }
   if (pathname === '/api/catalog/views') {
@@ -413,6 +436,7 @@ function populateSelects() {
 
   const populateBranchSelect = (id, includeAll) => {
     const sel = document.getElementById(id);
+    if (!sel) return;
     const cur = sel.value;
     sel.innerHTML =
       (includeAll ? '<option value="">All Branches</option>' : '') +
@@ -420,10 +444,14 @@ function populateSelects() {
     if (cur) sel.value = cur;
   };
 
-  populateBranchSelect('globalBranch', true);
+  populateBranchSelect('globalBranch', state.userRole === 'ADMIN');
   populateBranchSelect('recBranch', false);
   populateBranchSelect('recDestBranch', false);
   populateBranchSelect('addBranch', false);
+  if (state.userRole !== 'ADMIN' && state.userBranchId) {
+    const gb = document.getElementById('globalBranch');
+    if (gb) gb.value = state.userBranchId;
+  }
 
   const cats = [...new Set(items.map((i) => i.brand || i.category))].sort();
   const catSel = document.getElementById('invCategory');
@@ -437,6 +465,7 @@ function populateSelects() {
     .join('');
   ['lifecycleProduct', 'recProduct', 'priceProduct', 'costProduct', 'photoProduct'].forEach((id) => {
     const sel = document.getElementById(id);
+    if (!sel) return;
     const cur = sel.value;
     sel.innerHTML = prodOptions;
     if (cur) sel.value = cur;
@@ -447,7 +476,9 @@ function populateSelects() {
 
 function syncCostInputs() {
   if (!state.inventory) return;
-  const pid = document.getElementById('costProduct').value;
+  const costSel = document.getElementById('costProduct');
+  if (!costSel) return;
+  const pid = costSel.value;
   const prod = state.inventory.items.find((i) => i.id === pid);
   if (!prod) return;
   document.getElementById('costAb').value = prod.cost_ab ?? '';
@@ -550,11 +581,12 @@ function renderModelCard(item, visibleBranches) {
     : `<div style="width:52px;height:52px;border-radius:9px;background:#171c23;border:1px solid var(--border-soft);display:grid;place-items:center;color:var(--gold);font-size:20px;flex:0 0 52px;">📱</div>`;
   const isSel = state.selectedProducts.has(item.id);
   const qtyCls = item.scopedAvail === 0 ? 'model-card-qty zero' : 'model-card-qty';
+  const isAdmin = state.userRole === 'ADMIN';
   return `
     <div class="model-card" style="${isSel ? 'border-color:var(--gold);background:linear-gradient(165deg,#332f20 0%,#1f1d16 100%);' : ''}">
       <div class="model-card-head">
         <div style="display:flex;gap:9px;align-items:center;min-width:0;">
-          <input type="checkbox" class="model-select-chk" data-id="${item.id}" ${isSel ? 'checked' : ''} style="width:16px;height:16px;flex:0 0 16px;cursor:pointer;accent-color:var(--gold);" />
+          ${isAdmin ? `<input type="checkbox" class="model-select-chk" data-id="${item.id}" ${isSel ? 'checked' : ''} style="width:16px;height:16px;flex:0 0 16px;cursor:pointer;accent-color:var(--gold);" />` : ''}
           ${thumb}
           <div style="min-width:0;">
             <div class="model-card-name">${item.model || item.name}</div>
@@ -566,7 +598,7 @@ function renderModelCard(item, visibleBranches) {
       <div class="model-branch-pills">${pills}</div>
       <div class="model-price-row" style="padding-top:6px;border-top:1px solid rgba(255,255,255,.06);">
         <span>SRP: <strong style="color:var(--gold-bright);font-size:12.5px;">${fmtCurrency(item.base_price)}</strong></span>
-        <span>Cost: <strong style="color:var(--green);">${item.cost_price > 0 ? fmtCurrency(item.cost_price) : '—'}</strong></span>
+        ${isAdmin ? `<span>Cost: <strong style="color:var(--green);">${item.cost_price > 0 ? fmtCurrency(item.cost_price) : '—'}</strong></span>` : ''}
       </div>
       ${lifecycleBadge}
     </div>
@@ -646,13 +678,14 @@ function renderInventory() {
       String(a.model || a.name).localeCompare(String(b.model || b.name))
   );
 
+  const isAdmin = state.userRole === 'ADMIN';
   document.getElementById('inventorySummaryGrid').innerHTML = `
     <div class="mini-kpi">
       <div class="mini-kpi-top">
         <span class="mini-kpi-label">TOTAL</span>
         <span class="mini-kpi-val">${totalUnits.toLocaleString()} units</span>
       </div>
-      <div class="mini-kpi-sub">${fmtNum(availableModels)} models available • Cost: ${fmtCurrency(totalCostVal)}</div>
+      <div class="mini-kpi-sub">${fmtNum(availableModels)} models available${isAdmin ? ` • Cost: ${fmtCurrency(totalCostVal)}` : ''}</div>
     </div>
     <div class="mini-kpi">
       <div class="mini-kpi-top">
@@ -2029,9 +2062,9 @@ document.getElementById('bulkClearBtn').addEventListener('click', () => {
 });
 
 document.getElementById('showHiddenToggle').addEventListener('change', renderBranchCatalog);
-document.getElementById('costProduct').addEventListener('change', syncCostInputs);
-document.getElementById('recAction').addEventListener('change', (e) => {
-  document.getElementById('recDestWrap').classList.toggle('hidden', e.target.value !== 'Stock swap');
+document.getElementById('costProduct')?.addEventListener('change', syncCostInputs);
+document.getElementById('recAction')?.addEventListener('change', (e) => {
+  document.getElementById('recDestWrap')?.classList.toggle('hidden', e.target.value !== 'Stock swap');
 });
 
 document.getElementById('saveLifecycleBtn').addEventListener('click', async () => {
@@ -2045,7 +2078,7 @@ document.getElementById('saveLifecycleBtn').addEventListener('click', async () =
   } catch (err) { msg.textContent = err.message; }
 });
 
-document.getElementById('saveMovementBtn').addEventListener('click', async () => {
+document.getElementById('saveMovementBtn')?.addEventListener('click', async () => {
   const msg = document.getElementById('recMsg');
   try {
     await api('/api/movements', {
@@ -2064,7 +2097,7 @@ document.getElementById('saveMovementBtn').addEventListener('click', async () =>
   } catch (err) { msg.textContent = err.message; }
 });
 
-document.getElementById('savePriceBtn').addEventListener('click', async () => {
+document.getElementById('savePriceBtn')?.addEventListener('click', async () => {
   const msg = document.getElementById('priceMsg');
   try {
     await api('/api/products/price', {
@@ -2079,7 +2112,7 @@ document.getElementById('savePriceBtn').addEventListener('click', async () => {
   } catch (err) { msg.textContent = err.message; }
 });
 
-document.getElementById('saveAddProductBtn').addEventListener('click', async () => {
+document.getElementById('saveAddProductBtn')?.addEventListener('click', async () => {
   const msg = document.getElementById('addMsg');
   try {
     await api('/api/products', {
@@ -2098,7 +2131,7 @@ document.getElementById('saveAddProductBtn').addEventListener('click', async () 
   } catch (err) { msg.textContent = err.message; }
 });
 
-document.getElementById('saveCostBtn').addEventListener('click', async () => {
+document.getElementById('saveCostBtn')?.addEventListener('click', async () => {
   const msg = document.getElementById('costMsg');
   try {
     const res = await api('/api/products/costs', {
@@ -2303,13 +2336,520 @@ document.getElementById('connectPortalBtn').addEventListener('click', async () =
   }
 });
 
-// Default dates for Activity Log & Finance
-const todayStr = new Date().toISOString().slice(0, 10);
+// Default dates for Activity Log, Finance & Inventory Report Date
+const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date());
 const monthStartStr = todayStr.slice(0, 7) + '-01';
 document.getElementById('actStart').value = todayStr;
 document.getElementById('actEnd').value = todayStr;
 document.getElementById('finStart').value = monthStartStr;
 document.getElementById('finEnd').value = todayStr;
+if (document.getElementById('inventoryReportDate')) {
+  document.getElementById('inventoryReportDate').value = todayStr;
+}
+
+const PDF_BRAND_ORDER = [
+  'infinix', 'tecno', 'realme', 'itel', 'redmi',
+  'vivo', 'honor', 'samsung', 'nubia', 'zte',
+  'poco', 'oppo', 'apple',
+];
+
+function groupInventoryForPdf(items) {
+  const map = new Map();
+  for (const item of items) {
+    const rawBrand = String(item.brand || item.category || 'OTHER').trim() || 'OTHER';
+    const key = rawBrand.toLowerCase();
+    if (!map.has(key)) {
+      map.set(key, { brand: rawBrand.toUpperCase(), items: [] });
+    }
+    map.get(key).items.push(item);
+  }
+  const groups = Array.from(map.values());
+  groups.forEach((g) => {
+    g.items.sort((a, b) => {
+      const pDiff = (Number(a.base_price) || 0) - (Number(b.base_price) || 0);
+      if (pDiff !== 0) return pDiff;
+      return String(a.model || a.name).localeCompare(String(b.model || b.name));
+    });
+  });
+  groups.sort((a, b) => {
+    const ia = PDF_BRAND_ORDER.indexOf(a.brand.toLowerCase());
+    const ib = PDF_BRAND_ORDER.indexOf(b.brand.toLowerCase());
+    if (ia !== -1 && ib !== -1) return ia - ib;
+    if (ia !== -1) return -1;
+    if (ib !== -1) return 1;
+    return a.brand.localeCompare(b.brand);
+  });
+  return groups;
+}
+
+function getScopedInventoryForExport(productType) {
+  if (!state.inventory) return { branchLabel: 'All Branches', items: [] };
+  const { branches, items } = state.inventory;
+  const globalBranchId = document.getElementById('globalBranch').value;
+  const visibleBranches = globalBranchId
+    ? branches.filter((b) => b.id === globalBranchId)
+    : branches;
+  const branchLabel = visibleBranches.length === 1 ? visibleBranches[0].name : 'All Branches';
+
+  const result = [];
+  for (const item of items) {
+    const itemType = item.product_type || 'Cellphones';
+    if (itemType !== productType) continue;
+    let qty = 0;
+    for (const b of visibleBranches) {
+      const cell = item.byBranch[b.id];
+      if (cell) qty += Number(cell.qtyAvailable) || 0;
+    }
+    result.push({
+      ...item,
+      exportQty: qty,
+    });
+  }
+  return { branchLabel, visibleBranches, items: result };
+}
+
+function setInventoryDownloadMsg(text, isError) {
+  const el = document.getElementById('inventoryDownloadMsg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.classList.toggle('error', Boolean(isError && text));
+}
+
+function generateInventoryPdfForType(productType, reportDateStr) {
+  const jspdfNs = window.jspdf;
+  if (!jspdfNs || typeof jspdfNs.jsPDF !== 'function') {
+    throw new Error('PDF generator library is still loading. Please try again in a second.');
+  }
+  const { branchLabel, items } = getScopedInventoryForExport(productType);
+  const parsedDate = reportDateStr ? new Date(`${reportDateStr}T00:00:00`) : new Date();
+  const validDate = Number.isNaN(parsedDate.getTime()) ? new Date() : parsedDate;
+  const year = validDate.getFullYear();
+  const monthIndex = validDate.getMonth();
+  const asOfDay = validDate.getDate();
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const monthName = validDate.toLocaleDateString('en-US', { month: 'long' });
+
+  // Available models (> 0 stock) matching Apps Script daily balance sheet
+  const activeItems = items.filter((i) => i.exportQty > 0);
+  const groups = groupInventoryForPdf(activeItems);
+
+  const doc = new jspdfNs.jsPDF({
+    orientation: 'portrait',
+    unit: 'in',
+    format: [8.5, 13],
+    compress: true,
+  });
+
+  if (typeof doc.autoTable !== 'function') {
+    throw new Error('PDF table plugin is unavailable.');
+  }
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 16 / 72;
+  const topY = 60 / 72;
+  const bottomMargin = 24 / 72;
+  const contentWidth = pageWidth - margin * 2;
+  const modelWidth = 125 / 72;
+  const priceWidth = 84 / 72;
+
+  const dailyTotals = Array.from({ length: daysInMonth }, (_, idx) => {
+    const day = idx + 1;
+    if (day > asOfDay) return 0;
+    return activeItems.reduce((sum, it) => sum + (Number(it.exportQty) || 0), 0);
+  });
+
+  const totalModelRows = groups.reduce((s, g) => s + g.items.length, 0);
+  const totalVisualRows = Math.max(1, groups.length + totalModelRows + 2);
+  const availableHeightPt = (pageHeight - topY - bottomMargin) * 72;
+  const rowSlot = availableHeightPt / totalVisualRows;
+  const fontSize = Math.max(3, Math.min(9, rowSlot - 2.5));
+  const cellPadding = Math.max(0.4, Math.min(1.5, fontSize * 0.15)) / 72;
+
+  const dayPanels = [
+    Array.from({ length: Math.min(15, daysInMonth) }, (_, idx) => idx + 1),
+    Array.from({ length: Math.max(0, daysInMonth - 15) }, (_, idx) => idx + 16),
+  ].filter((panel) => panel.length > 0);
+
+  dayPanels.forEach((panelDays, panelIndex) => {
+    if (panelIndex > 0) {
+      doc.addPage([8.5, 13], 'portrait');
+    }
+
+    const totalColumns = 2 + panelDays.length;
+    const dayWidth = (contentWidth - modelWidth - priceWidth) / Math.max(1, panelDays.length);
+    const columnStyles = {
+      0: { cellWidth: modelWidth, halign: 'left' },
+      1: { cellWidth: priceWidth, halign: 'right' },
+    };
+    panelDays.forEach((_, idx) => {
+      columnStyles[idx + 2] = { cellWidth: dayWidth, halign: 'right' };
+    });
+
+    const bodyRows = [];
+    groups.forEach((group) => {
+      bodyRows.push([
+        {
+          content: group.brand,
+          colSpan: totalColumns,
+          styles: {
+            fontStyle: 'bold',
+            halign: 'left',
+            fillColor: [242, 239, 224],
+          },
+        },
+      ]);
+
+      group.items.forEach((item) => {
+        const priceNum = Number(item.base_price) || 0;
+        const priceText = 'PHP ' + priceNum.toLocaleString('en-PH', { maximumFractionDigits: 0 });
+        const dayCells = panelDays.map((d) => {
+          if (d > asOfDay) return '';
+          return item.exportQty > 0 ? item.exportQty.toLocaleString('en-PH') : '';
+        });
+        bodyRows.push([String(item.model || item.name || ''), priceText, ...dayCells]);
+      });
+    });
+
+    const totalRow = [
+      {
+        content: 'TOTAL STOCK BALANCE',
+        colSpan: 2,
+        styles: {
+          fontStyle: 'bold',
+          halign: 'left',
+        },
+      },
+      ...panelDays.map((d) => {
+        const tot = dailyTotals[d - 1] || 0;
+        return tot > 0 ? tot.toLocaleString('en-PH') : '';
+      }),
+    ];
+    bodyRows.push(totalRow);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(27, 25, 19);
+    const title = `AB-Gadgetz-${branchLabel}: Daily Inventory of ${productType}`;
+    doc.text(title, margin, 25 / 72);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(79, 73, 58);
+    const subtitle = `Month of ${monthName} ${year}`;
+    doc.text(subtitle, pageWidth / 2, 44 / 72, { align: 'center' });
+
+    doc.autoTable({
+      startY: topY,
+      margin: { left: margin, right: margin, bottom: bottomMargin },
+      tableWidth: contentWidth,
+      head: [['Model', 'Unit Price (PHP)', ...panelDays.map((d) => String(d))]],
+      body: bodyRows,
+      theme: 'grid',
+      pageBreak: 'avoid',
+      rowPageBreak: 'avoid',
+      styles: {
+        font: 'helvetica',
+        fontSize,
+        cellPadding,
+        lineColor: [215, 208, 190],
+        lineWidth: 0.25 / 72,
+        textColor: [27, 25, 19],
+        overflow: 'ellipsize',
+        valign: 'middle',
+      },
+      headStyles: {
+        fillColor: [27, 25, 19],
+        textColor: [246, 211, 75],
+        fontStyle: 'bold',
+        halign: 'center',
+      },
+      columnStyles,
+      didParseCell(hookData) {
+        if (hookData.section === 'body' && hookData.row.index === bodyRows.length - 1) {
+          hookData.cell.styles.fillColor = [233, 228, 211];
+          hookData.cell.styles.fontStyle = 'bold';
+        }
+      },
+    });
+  });
+
+  const branchSlug = branchLabel.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '');
+  const dateSlug = reportDateStr || todayStr;
+  const fileName = `AB_Gadgetz_${branchSlug}_${productType}_Daily_Stock_Balances_${dateSlug}.pdf`;
+  doc.save(fileName);
+  return fileName;
+}
+
+function downloadInventoryPdf() {
+  try {
+    setInventoryDownloadMsg('Generating PDF...', false);
+    const reportDateStr = document.getElementById('inventoryReportDate')?.value || todayStr;
+    const selectedTypes = getSelectedProductTypes();
+    const typesToExport = selectedTypes.length ? selectedTypes : ['Cellphones'];
+    const files = typesToExport.map((t) => generateInventoryPdfForType(t, reportDateStr));
+    setInventoryDownloadMsg(`Downloaded: ${files.join(', ')}`, false);
+  } catch (err) {
+    setInventoryDownloadMsg(err.message || 'Unable to generate PDF.', true);
+  }
+}
+
+function downloadInventoryExcel() {
+  try {
+    if (!state.inventory) return;
+    const reportDateStr = document.getElementById('inventoryReportDate')?.value || todayStr;
+    const selectedTypes = getSelectedProductTypes();
+    const typesToExport = selectedTypes.length ? selectedTypes : ['Cellphones'];
+    const { branches } = state.inventory;
+    const globalBranchId = document.getElementById('globalBranch').value;
+    const visibleBranches = globalBranchId
+      ? branches.filter((b) => b.id === globalBranchId)
+      : branches;
+    const branchLabel = visibleBranches.length === 1 ? visibleBranches[0].name : 'All_Branches';
+
+    const headers = [
+      'Product Type',
+      'Brand',
+      'Model',
+      'Website Code / SKU',
+      'Unit Price (PHP)',
+      ...(state.userRole === 'ADMIN' ? ['Cost Price (PHP)'] : []),
+      ...visibleBranches.map((b) => `${b.name} Stock`),
+      'Total Available',
+    ];
+    const rows = [headers];
+
+    for (const t of typesToExport) {
+      const { items } = getScopedInventoryForExport(t);
+      const groups = groupInventoryForPdf(items);
+      for (const g of groups) {
+        for (const item of g.items) {
+          const branchCells = visibleBranches.map((b) => Number(item.byBranch[b.id]?.qtyAvailable || 0));
+          rows.push([
+            t,
+            g.brand,
+            String(item.model || item.name || ''),
+            String(item.website_codes || item.sku || ''),
+            Number(item.base_price) || 0,
+            ...(state.userRole === 'ADMIN' ? [Number(item.cost_price) || 0] : []),
+            ...branchCells,
+            Number(item.exportQty) || 0,
+          ]);
+        }
+      }
+    }
+
+    const csvContent =
+      '\uFEFF' +
+      rows
+        .map((r) =>
+          r
+            .map((cell) => {
+              const s = String(cell ?? '');
+              return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+            })
+            .join(',')
+        )
+        .join('\r\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const fileName = `AB_Gadgetz_${branchLabel}_Inventory_${reportDateStr}.csv`;
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    setInventoryDownloadMsg(`Downloaded Excel CSV: ${fileName}`, false);
+  } catch (err) {
+    setInventoryDownloadMsg(err.message || 'Unable to export Excel CSV.', true);
+  }
+}
+
+function downloadReceivablesPdf() {
+  try {
+    const jspdfNs = window.jspdf;
+    if (!jspdfNs || typeof jspdfNs.jsPDF !== 'function' || !state.receivables) return;
+    const data = state.receivables;
+    const globalBranchId = document.getElementById('globalBranch').value;
+    const branchObj = (state.inventory?.branches || []).find((b) => b.id === globalBranchId);
+    const branchLabel = branchObj ? branchObj.name : 'All Branches';
+    const q = document.getElementById('recSearchInput').value.trim().toLowerCase();
+
+    const filteredDues = (data.pastDues || []).filter(
+      (d) =>
+        !q ||
+        d.customer_name.toLowerCase().includes(q) ||
+        d.account_no.toLowerCase().includes(q) ||
+        (d.barangay || '').toLowerCase().includes(q) ||
+        d.unit.toLowerCase().includes(q)
+    );
+
+    const doc = new jspdfNs.jsPDF({ orientation: 'portrait', unit: 'in', format: [8.5, 13], compress: true });
+    const margin = 24 / 72;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.setTextColor(27, 25, 19);
+    doc.text(`AB-Gadgetz-${branchLabel}: Receivables & Past-Due Accounts`, margin, 32 / 72);
+    doc.setFontSize(9);
+    doc.setTextColor(79, 73, 58);
+    doc.text(`As of ${todayStr} • Past-Due Accounts: ${fmtNum(filteredDues.length)}`, margin, 48 / 72);
+
+    doc.autoTable({
+      startY: 60 / 72,
+      margin: { left: margin, right: margin, bottom: margin },
+      head: [['Release Date', 'Branch', 'Account No.', 'Customer', 'Contact / Barangay', 'Unit']],
+      body: filteredDues.map((d) => [
+        d.release_date || '',
+        d.branch_name || '',
+        d.account_no || '',
+        d.customer_name || '',
+        `${d.contact_no || '—'} ${d.barangay ? `(${d.barangay})` : ''}`.trim(),
+        d.unit || '',
+      ]),
+      theme: 'grid',
+      styles: { font: 'helvetica', fontSize: 8, cellPadding: 3 / 72, textColor: [27, 25, 19] },
+      headStyles: { fillColor: [27, 25, 19], textColor: [246, 211, 75], fontStyle: 'bold' },
+    });
+
+    const slug = branchLabel.replace(/[^a-z0-9]+/gi, '_');
+    doc.save(`AB_Gadgetz_${slug}_Receivables_${todayStr}.pdf`);
+  } catch (err) {
+    alert(err.message || 'Unable to generate Receivables PDF.');
+  }
+}
+
+function downloadReceivablesExcel() {
+  if (!state.receivables) return;
+  const data = state.receivables;
+  const q = document.getElementById('recSearchInput').value.trim().toLowerCase();
+  const filteredDues = (data.pastDues || []).filter(
+    (d) =>
+      !q ||
+      d.customer_name.toLowerCase().includes(q) ||
+      d.account_no.toLowerCase().includes(q) ||
+      (d.barangay || '').toLowerCase().includes(q) ||
+      d.unit.toLowerCase().includes(q)
+  );
+  const rows = [
+    ['Release Date', 'Branch', 'Account No', 'Customer Name', 'Contact No', 'Barangay', 'Unit'],
+    ...filteredDues.map((d) => [
+      d.release_date || '',
+      d.branch_name || '',
+      d.account_no || '',
+      d.customer_name || '',
+      d.contact_no || '',
+      d.barangay || '',
+      d.unit || '',
+    ]),
+  ];
+  const csvContent =
+    '\uFEFF' +
+    rows
+      .map((r) =>
+        r
+          .map((c) => {
+            const s = String(c ?? '');
+            return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+          })
+          .join(',')
+      )
+      .join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `AB_Gadgetz_Receivables_${todayStr}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+document.getElementById('inventoryPdfBtn')?.addEventListener('click', downloadInventoryPdf);
+document.getElementById('inventoryExcelBtn')?.addEventListener('click', downloadInventoryExcel);
+document.getElementById('receivablesPdfBtn')?.addEventListener('click', downloadReceivablesPdf);
+document.getElementById('receivablesExcelBtn')?.addEventListener('click', downloadReceivablesExcel);
+
+function applyRolePermissions() {
+  const role = state.userRole || 'ADMIN';
+  const branchId = state.userBranchId || '';
+  const isAdmin = role === 'ADMIN';
+
+  const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
+  const branchName = branchNames[branchId] || 'Branch';
+
+  // Update header subtitle & greeting
+  const subEl = document.querySelector('.brand-sub');
+  const greetEl = document.querySelector('.owner-greeting');
+  if (role === 'CASHIER') {
+    if (subEl) subEl.textContent = `CASHIER PORTAL (${branchName.toUpperCase()}) • VIEW & PDF ONLY`;
+    if (greetEl) greetEl.textContent = `Cashier • ${branchName}`;
+  } else if (role === 'CI') {
+    if (subEl) subEl.textContent = `CREDIT INVESTIGATOR (${branchName.toUpperCase()}) • VIEW & PDF ONLY`;
+    if (greetEl) greetEl.textContent = `Credit Investigator • ${branchName}`;
+  } else {
+    if (subEl) subEl.textContent = 'OWNER ADMIN PORTAL • REALTIME SYNC';
+    if (greetEl) greetEl.textContent = 'Welcome, Maynard';
+  }
+
+  // Toggle admin-only elements (Excel buttons, Publish buttons, Pause button, Catalog Edit Mode)
+  document.querySelectorAll('.admin-only-el, .publish-github-btn').forEach((el) => {
+    el.classList.toggle('hidden', !isAdmin);
+  });
+  document.getElementById('toggleSyncBtn')?.classList.toggle('hidden', !isAdmin);
+  const catEditWrap = document.getElementById('catEditMode')?.closest('label');
+  if (catEditWrap) catEditWrap.classList.toggle('hidden', !isAdmin);
+  if (!isAdmin && document.getElementById('catEditMode')) {
+    document.getElementById('catEditMode').checked = false;
+  }
+  const showHiddenWrap = document.getElementById('showHiddenToggle')?.closest('label');
+  if (showHiddenWrap) showHiddenWrap.classList.toggle('hidden', !isAdmin);
+
+  // Restrict available tabs by role
+  const allowedTabs =
+    role === 'CASHIER'
+      ? ['inventory', 'catalogs']
+      : role === 'CI'
+        ? ['receivables', 'catalogs']
+        : ['inventory', 'stockChanges', 'activity', 'finance', 'receivables', 'catalogs', 'websiteStock'];
+
+  document.querySelectorAll('.tab[data-tab], .mnav-btn[data-tab]').forEach((btn) => {
+    const t = btn.dataset.tab;
+    btn.classList.toggle('hidden', !allowedTabs.includes(t));
+  });
+
+  // Lock branch selector & catalog branch tabs for staff roles
+  const globalBranchSel = document.getElementById('globalBranch');
+  if (globalBranchSel) {
+    if (!isAdmin && branchId) {
+      globalBranchSel.value = branchId;
+      globalBranchSel.disabled = true;
+    } else {
+      globalBranchSel.disabled = false;
+    }
+  }
+
+  if (!isAdmin && branchId) {
+    state.catalogBranchId = branchId;
+    document.querySelectorAll('.cat-branch-btn').forEach((btn) => {
+      const match = btn.dataset.branch === branchId;
+      btn.classList.toggle('hidden', !match);
+      btn.classList.toggle('active', match);
+    });
+  } else {
+    document.querySelectorAll('.cat-branch-btn').forEach((btn) => {
+      btn.classList.remove('hidden');
+      btn.classList.toggle('active', btn.dataset.branch === state.catalogBranchId);
+    });
+  }
+
+  if (!allowedTabs.includes(state.activeTab)) {
+    switchTab(allowedTabs[0]);
+  }
+}
 
 let eventSource = null;
 
@@ -2349,37 +2889,68 @@ async function bootApp() {
   document.getElementById('authGate').classList.add('hidden');
   document.getElementById('appShell').classList.remove('hidden');
   document.getElementById('mobileBottomNav')?.classList.remove('hidden');
+  applyRolePermissions();
   await Promise.all([loadInventory(), loadSyncLogs()]);
+  applyRolePermissions();
+  await refreshActiveTab();
   connectEvents();
 }
+
+function updateAuthRoleUI() {
+  const roleSel = document.getElementById('loginRoleSelect');
+  const branchWrap = document.getElementById('loginBranchWrap');
+  const isSetup = document.getElementById('authGate')?.dataset.mode === 'setup';
+  if (!roleSel || !branchWrap) return;
+  if (isSetup) {
+    roleSel.value = 'ADMIN';
+    branchWrap.classList.add('hidden');
+    return;
+  }
+  const role = roleSel.value;
+  branchWrap.classList.toggle('hidden', role === 'ADMIN');
+}
+
+document.getElementById('loginRoleSelect')?.addEventListener('change', updateAuthRoleUI);
 
 async function checkAuth() {
   const status = await api('/api/auth/status');
   if (status.authenticated) {
+    state.userRole = status.role || 'ADMIN';
+    state.userBranchId = status.branchId || '';
     await bootApp();
     return;
   }
   document.getElementById('appShell').classList.add('hidden');
   document.getElementById('authGate').classList.remove('hidden');
   const isSetup = !status.pinConfigured;
-  document.getElementById('authTitle').textContent = isSetup ? 'Create Owner PIN (First-Time Setup)' : 'Owner Login';
+  document.getElementById('authTitle').textContent = isSetup ? 'Create Owner PIN (First-Time Setup)' : 'Portal Login';
   document.getElementById('authSubtitle').textContent = isSetup
     ? 'Set a 6–12 digit PIN to protect your portal for online/phone access.'
-    : 'Enter your 6–12 digit Owner PIN to unlock the portal.';
+    : 'Select your account role and enter your 6-digit PIN to unlock the portal.';
   document.getElementById('authSubmitBtn').textContent = isSetup ? 'SAVE PIN & UNLOCK' : 'UNLOCK PORTAL';
   document.getElementById('authGate').dataset.mode = isSetup ? 'setup' : 'login';
+
+  const roleSel = document.getElementById('loginRoleSelect');
+  if (roleSel && window.location.pathname.includes('/staff') && roleSel.value === 'ADMIN') {
+    roleSel.value = 'CASHIER';
+  }
+  updateAuthRoleUI();
 }
 
 document.getElementById('authSubmitBtn').addEventListener('click', async () => {
   const pin = document.getElementById('ownerPinInput').value.trim();
+  const role = document.getElementById('loginRoleSelect')?.value || 'ADMIN';
+  const branchId = document.getElementById('loginBranchSelect')?.value || 'br-molave';
   const mode = document.getElementById('authGate').dataset.mode || 'login';
   const errEl = document.getElementById('authErrorMsg');
   errEl.textContent = '';
   try {
-    await api(mode === 'setup' ? '/api/auth/setup' : '/api/auth/login', {
+    const res = await api(mode === 'setup' ? '/api/auth/setup' : '/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ pin }),
+      body: JSON.stringify({ pin, role, branchId }),
     });
+    state.userRole = res.role || role || 'ADMIN';
+    state.userBranchId = res.branchId || (state.userRole === 'ADMIN' ? '' : branchId);
     document.getElementById('ownerPinInput').value = '';
     await bootApp();
   } catch (err) {
