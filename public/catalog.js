@@ -906,6 +906,8 @@ async function initPublicCatalog() {
     const hitImg = new Image();
     hitImg.src = `https://hits.sh/maynardrdelossantos.github.io/ab-gadgetz-catalog-views/${slug}.svg?t=${Date.now()}`;
     fetch(`https://abacus.jasoncameron.dev/hit/ab-gadgetz-views/${slug}`).catch(() => {});
+    const manilaDay = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+    fetch(`https://abacus.jasoncameron.dev/hit/ab-gadgetz-views/${slug}-${manilaDay}`).catch(() => {});
   } catch {}
   renderPublicCatalog();
 }

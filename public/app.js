@@ -314,6 +314,20 @@ async function staticGhApi(url, opts = {}) {
     return { ok: true };
   }
   if (pathname === '/api/catalog/views') {
+    const startParam = u.searchParams.get('start') || '';
+    const endParam = u.searchParams.get('end') || startParam || '';
+    const todayManila = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+    const sDate = /^\d{4}-\d{2}-\d{2}$/.test(startParam) ? startParam : todayManila;
+    const eDate = /^\d{4}-\d{2}-\d{2}$/.test(endParam) ? endParam : sDate;
+    const dates = [];
+    const cur = new Date(`${sDate}T00:00:00Z`);
+    const endD = new Date(`${eDate}T00:00:00Z`);
+    while (cur <= endD && dates.length < 31) {
+      dates.push(cur.toISOString().slice(0, 10));
+      cur.setUTCDate(cur.getUTCDate() + 1);
+    }
+    if (!dates.length) dates.push(todayManila);
+
     const slugs = [['br-molave', 'molave'], ['br-tambulig', 'tambulig'], ['br-bonifacio', 'bonifacio']];
     let bundleViews = null;
     try {
@@ -321,26 +335,40 @@ async function staticGhApi(url, opts = {}) {
       bundleViews = b?.catalogViews || null;
     } catch {}
     const byBranch = {};
-    let total = 0, weekly = 0, monthly = 0;
+    let total = 0;
+    let allTimeTotal = 0;
     await Promise.all(
       slugs.map(async ([bid, slug]) => {
-        const base = bundleViews?.byBranch?.[bid] || { total: 0, weekly: 0, monthly: 0 };
-        let liveVal = 0;
-        try {
-          const r = await fetch(`https://abacus.jasoncameron.dev/get/ab-gadgetz-views/${slug}?v=${Date.now()}`);
-          if (r.ok) {
-            const j = await r.json();
-            liveVal = Number(j.value) > 0 ? Number(j.value) : 0;
-          }
-        } catch {}
-        const t = Math.max(Number(base.total) || 0, liveVal);
-        const w = Math.max(Number(base.weekly) || 0, liveVal);
-        const m = Math.max(Number(base.monthly) || 0, liveVal);
-        byBranch[bid] = { total: t, weekly: w, monthly: m };
-        total += t; weekly += w; monthly += m;
+        const base = bundleViews?.byBranch?.[bid] || { total: 0 };
+        let rangeSum = 0;
+        let liveAll = 0;
+        await Promise.all([
+          ...dates.map(async (dt) => {
+            try {
+              const r = await fetch(`https://abacus.jasoncameron.dev/get/ab-gadgetz-views/${slug}-${dt}?v=${Date.now()}`);
+              if (r.ok) {
+                const j = await r.json();
+                rangeSum += Number(j.value) || 0;
+              }
+            } catch {}
+          }),
+          (async () => {
+            try {
+              const r = await fetch(`https://abacus.jasoncameron.dev/get/ab-gadgetz-views/${slug}?v=${Date.now()}`);
+              if (r.ok) {
+                const j = await r.json();
+                liveAll = Number(j.value) > 0 ? Number(j.value) : 0;
+              }
+            } catch {}
+          })(),
+        ]);
+        const allTime = Math.max(Number(base.total) || 0, liveAll);
+        byBranch[bid] = { total: rangeSum, allTime };
+        total += rangeSum;
+        allTimeTotal += allTime;
       })
     );
-    return { byBranch, total, weekly, monthly };
+    return { byBranch, total, allTimeTotal, start: sDate, end: eDate };
   }
   if (pathname === '/api/sync/now') {
     await getGhBundle(true);
@@ -1898,7 +1926,7 @@ function buildRestockDraftPlan() {
   if (!state.inventory) return [];
   const mode = document.querySelector('input[name="restockSupplierMode"]:checked')?.value || 'LOWEST';
   const typeFilter = document.getElementById('restockTypeFilter')?.value || 'Cellphones';
-  const budgetVal = Number(document.getElementById('restockBudgetInput')?.value) || 0;
+  const budgetVal = parseMoneyInput(document.getElementById('restockBudgetInput')?.value);
   const globalBranchId = document.getElementById('globalBranch')?.value || '';
   const excludeObsolete = document.getElementById('restockExcludeObsoleteChk')?.checked !== false;
 
@@ -2584,6 +2612,17 @@ function saveOrderFundsState() {
   }
 }
 
+function parseMoneyInput(val) {
+  const n = Number(String(val ?? '').replace(/,/g, '').trim());
+  return Number.isFinite(n) ? n : 0;
+}
+
+function formatMoneyInput(val) {
+  const n = parseMoneyInput(val);
+  if (!(n > 0)) return '';
+  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 function computeOrderFundsTotals(f) {
   const metrobank = Number(f.metrobank) || 0;
   const maribank = Number(f.maribank) || 0;
@@ -2629,7 +2668,7 @@ function updateOrderFundsSummaryUI(syncToInput = true) {
   }
   const budgetInp = document.getElementById('restockBudgetInput');
   if (budgetInp && syncToInput) {
-    budgetInp.value = Math.max(0, t.netOrderBudget).toFixed(2);
+    budgetInp.value = formatMoneyInput(Math.max(0, t.netOrderBudget));
   }
 }
 
@@ -2638,9 +2677,9 @@ function renderOrderFundsPanel() {
   const mEl = document.getElementById('fundMetrobank');
   const mbEl = document.getElementById('fundMaribank');
   const gEl = document.getElementById('fundGcash');
-  if (mEl) mEl.value = f.metrobank || '';
-  if (mbEl) mbEl.value = f.maribank || '';
-  if (gEl) gEl.value = f.gcash || '';
+  if (mEl) mEl.value = formatMoneyInput(f.metrobank);
+  if (mbEl) mbEl.value = formatMoneyInput(f.maribank);
+  if (gEl) gEl.value = formatMoneyInput(f.gcash);
 
   const uList = document.getElementById('undepositedSalesList');
   if (uList) {
@@ -2655,7 +2694,7 @@ function renderOrderFundsPanel() {
               <option value="Bonifacio" ${u.branch === 'Bonifacio' ? 'selected' : ''}>Bonifacio</option>
             </select>
             <input type="date" class="fund-undep-date" data-idx="${idx}" value="${u.date || ''}" style="width:auto;padding:5px 8px;font-size:12px;" />
-            <input type="number" class="fund-undep-amt" data-idx="${idx}" value="${u.amount || ''}" min="0" step="0.01" placeholder="Amount" style="flex:1;min-width:100px;padding:5px 8px;font-size:12px;" />
+            <input type="text" inputmode="decimal" class="fund-undep-amt" data-idx="${idx}" value="${formatMoneyInput(u.amount)}" placeholder="0.00" style="flex:1;min-width:100px;padding:5px 8px;font-size:12px;" />
             <label style="display:flex;align-items:center;gap:5px;margin:0;font-size:11px;font-weight:700;cursor:pointer;">
               <input type="checkbox" class="fund-undep-dep" data-idx="${idx}" ${u.deposited ? 'checked' : ''} style="width:15px;height:15px;margin:0;accent-color:var(--gold);" />
               <span>DEPOSITED</span>
@@ -2680,9 +2719,12 @@ function renderOrderFundsPanel() {
     });
     uList.querySelectorAll('.fund-undep-amt').forEach((el) => {
       el.addEventListener('input', (e) => {
-        f.undeposited[Number(e.target.dataset.idx)].amount = Number(e.target.value) || 0;
+        f.undeposited[Number(e.target.dataset.idx)].amount = parseMoneyInput(e.target.value);
         saveOrderFundsState();
         updateOrderFundsSummaryUI(true);
+      });
+      el.addEventListener('blur', (e) => {
+        e.target.value = formatMoneyInput(parseMoneyInput(e.target.value));
       });
     });
     uList.querySelectorAll('.fund-undep-dep').forEach((el) => {
@@ -2721,7 +2763,7 @@ function renderOrderFundsPanel() {
             ${!String(c.dueDate || '').trim() ? '<span class="badge badge-danger" style="font-size:9px;">DUE DATE MISSING</span>' : ''}
           </div>
           <label style="font-size:10px;">BILL AMOUNT</label>
-          <input type="number" class="fund-cc-amt" data-idx="${idx}" value="${c.amount || ''}" min="0" step="0.01" placeholder="₱0" style="padding:5px 8px;font-size:12px;margin-bottom:6px;" />
+          <input type="text" inputmode="decimal" class="fund-cc-amt" data-idx="${idx}" value="${formatMoneyInput(c.amount)}" placeholder="₱0.00" style="padding:5px 8px;font-size:12px;margin-bottom:6px;" />
           <label style="font-size:10px;">DUE DATE</label>
           <input type="date" class="fund-cc-due" data-idx="${idx}" value="${c.dueDate || ''}" style="padding:5px 8px;font-size:12px;" />
         </div>`
@@ -2730,9 +2772,12 @@ function renderOrderFundsPanel() {
 
     ccGrid.querySelectorAll('.fund-cc-amt').forEach((el) => {
       el.addEventListener('input', (e) => {
-        f.creditCards[Number(e.target.dataset.idx)].amount = Number(e.target.value) || 0;
+        f.creditCards[Number(e.target.dataset.idx)].amount = parseMoneyInput(e.target.value);
         saveOrderFundsState();
         updateOrderFundsSummaryUI(true);
+      });
+      el.addEventListener('blur', (e) => {
+        e.target.value = formatMoneyInput(parseMoneyInput(e.target.value));
       });
     });
     ccGrid.querySelectorAll('.fund-cc-due').forEach((el) => {
@@ -2751,7 +2796,7 @@ function renderOrderFundsPanel() {
         (d, idx) => `
         <div style="display:flex;gap:6px;align-items:center;">
           <input type="text" class="fund-ded-lbl" data-idx="${idx}" value="${d.label || ''}" placeholder="Bill / Deduction name" style="flex:2;padding:5px 8px;font-size:12px;" />
-          <input type="number" class="fund-ded-amt" data-idx="${idx}" value="${d.amount || ''}" min="0" step="0.01" placeholder="0.00" style="flex:1;padding:5px 8px;font-size:12px;" />
+          <input type="text" inputmode="decimal" class="fund-ded-amt" data-idx="${idx}" value="${formatMoneyInput(d.amount)}" placeholder="0.00" style="flex:1;padding:5px 8px;font-size:12px;" />
           <button type="button" class="secondary fund-ded-del" data-idx="${idx}" style="padding:4px 8px;font-size:12px;min-height:0;">✕</button>
         </div>`
       )
@@ -2765,9 +2810,12 @@ function renderOrderFundsPanel() {
     });
     dList.querySelectorAll('.fund-ded-amt').forEach((el) => {
       el.addEventListener('input', (e) => {
-        f.deductions[Number(e.target.dataset.idx)].amount = Number(e.target.value) || 0;
+        f.deductions[Number(e.target.dataset.idx)].amount = parseMoneyInput(e.target.value);
         saveOrderFundsState();
         updateOrderFundsSummaryUI(true);
+      });
+      el.addEventListener('blur', (e) => {
+        e.target.value = formatMoneyInput(parseMoneyInput(e.target.value));
       });
     });
     dList.querySelectorAll('.fund-ded-del').forEach((el) => {
@@ -2797,14 +2845,22 @@ document.getElementById('orderFundsToggle')?.addEventListener('click', () => {
 });
 
 ['fundMetrobank', 'fundMaribank', 'fundGcash'].forEach((id) => {
-  document.getElementById(id)?.addEventListener('input', (e) => {
+  const el = document.getElementById(id);
+  el?.addEventListener('input', (e) => {
     const f = getOrderFundsState();
-    if (id === 'fundMetrobank') f.metrobank = Number(e.target.value) || 0;
-    if (id === 'fundMaribank') f.maribank = Number(e.target.value) || 0;
-    if (id === 'fundGcash') f.gcash = Number(e.target.value) || 0;
+    const numVal = parseMoneyInput(e.target.value);
+    if (id === 'fundMetrobank') f.metrobank = numVal;
+    if (id === 'fundMaribank') f.maribank = numVal;
+    if (id === 'fundGcash') f.gcash = numVal;
     saveOrderFundsState();
     updateOrderFundsSummaryUI(true);
   });
+  el?.addEventListener('blur', (e) => {
+    e.target.value = formatMoneyInput(parseMoneyInput(e.target.value));
+  });
+});
+document.getElementById('restockBudgetInput')?.addEventListener('blur', (e) => {
+  e.target.value = formatMoneyInput(parseMoneyInput(e.target.value));
 });
 
 document.getElementById('addUndepositedSaleBtn')?.addEventListener('click', () => {
@@ -4024,7 +4080,7 @@ async function loadActivity() {
   if (globalBranch) state.actBranchFilter = globalBranch;
   const [activity, catalogViews] = await Promise.all([
     api(`/api/activity?start=${start}&end=${end}`),
-    api('/api/catalog/views').catch(() => null),
+    api(`/api/catalog/views?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`).catch(() => null),
   ]);
   state.activity = activity;
   state.catalogViews = catalogViews;
@@ -4069,7 +4125,7 @@ function renderActivity() {
   const viewsGrid = document.getElementById('activityViewsGrid');
   const viewsLbl = document.getElementById('catalogViewsToggleLabel');
   if (viewsLbl) {
-    viewsLbl.textContent = `Catalog Views (${fmtNum(vTot.total)} views)`;
+    viewsLbl.textContent = `Catalog Views (${fmtNum(vTot.total)} views${vTot.allTimeTotal ? ` • All-time: ${fmtNum(vTot.allTimeTotal)}` : ''})`;
   }
   if (viewsGrid) {
     viewsGrid.innerHTML = `
@@ -4850,17 +4906,17 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
         font: 'helvetica',
         fontSize,
         cellPadding,
-        lineColor: [75, 70, 58],
-        lineWidth: 0.65 / 72,
+        lineColor: [27, 25, 19],
+        lineWidth: 1.15 / 72,
         textColor: [27, 25, 19],
         overflow: 'ellipsize',
         valign: 'middle',
       },
       headStyles: {
         fillColor: [235, 226, 190],
-        textColor: [30, 30, 30],
-        lineColor: [55, 50, 40],
-        lineWidth: 0.75 / 72,
+        textColor: [20, 18, 14],
+        lineColor: [20, 18, 14],
+        lineWidth: 1.4 / 72,
         fontStyle: 'bold',
         halign: 'center',
       },
@@ -4869,6 +4925,7 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
         if (hookData.section === 'body' && hookData.row.index === bodyRows.length - 1) {
           hookData.cell.styles.fillColor = [233, 228, 211];
           hookData.cell.styles.fontStyle = 'bold';
+          hookData.cell.styles.lineWidth = 1.35 / 72;
         }
       },
       didDrawCell(hookData) {
