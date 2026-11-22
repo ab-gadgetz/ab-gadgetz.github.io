@@ -603,6 +603,7 @@ async function main() {
     catalogViews: { byBranch: catalogViewsByBranch, total: viewsTotal, weekly: viewsWeekly, monthly: viewsMonthly },
     allMovements: allMovements.slice(0, 3500),
     allInstallments: allInstallments.slice(0, 1200),
+    portal_transactions: seedSnapshot.portal_transactions || [],
     allPayments: allPayments.slice(0, 1500),
     allExpenses: allExpenses.slice(0, 1000),
     allPastDues: allPastDues.slice(0, 800),

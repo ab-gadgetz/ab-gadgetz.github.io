@@ -490,6 +490,15 @@ async function staticGhApi(url, opts = {}) {
       installmentSales: branchId ? allInstallments.filter((i) => i.branch_id === branchId) : allInstallments,
     };
   }
+  if (pathname === '/api/sales/summary') {
+    const start = u.searchParams.get('start') || '';
+    const end = u.searchParams.get('end') || '9999-99-99';
+    const transactions = (bundle.portal_transactions || []).filter((t) => {
+      const d = String(t.tx_date || '').slice(0, 10);
+      return (!start || d >= start) && (!end || d <= end);
+    });
+    return { start, end, transactions };
+  }
   if (pathname === '/api/finance/summary') {
     const start = u.searchParams.get('start') || '';
     const end = u.searchParams.get('end') || '9999-99-99';
@@ -4600,8 +4609,16 @@ async function loadSalesSummary() {
   const fetchStart = start < sixMoStart ? start : sixMoStart;
   const fetchEnd = end > todayStr ? end : todayStr;
 
-  const data = await api(`/api/activity?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`);
-  state.salesData = { start, end, allMovements: data?.allMovements || [] };
+  const [txRes, actRes] = await Promise.all([
+    api(`/api/sales/summary?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`).catch(() => ({ transactions: [] })),
+    api(`/api/activity?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`).catch(() => ({ allMovements: [] })),
+  ]);
+  state.salesData = {
+    start,
+    end,
+    transactions: txRes?.transactions || [],
+    allMovements: actRes?.allMovements || [],
+  };
   const liveEl = document.getElementById('salesLiveStatus');
   if (liveEl) {
     liveEl.textContent = `● LIVE • ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`;
@@ -4611,14 +4628,16 @@ async function loadSalesSummary() {
 
 function getCashSaleAmount(m) {
   const qty = Math.abs(Number(m.delta_qty) || 0);
-  if (qty <= 0) return 0;
+  if (qty <= 0) return { net: 0, gross: 0, disc: 0 };
   let srp = Number(m.base_price) || 0;
   if (!srp && state.inventory?.items) {
     const prod = state.inventory.items.find((i) => i.id === m.product_id || i.sku === m.sku);
     srp = Number(prod?.base_price) || 0;
   }
-  const discPct = (m.product_type || 'Cellphones') === 'Accessories' ? 0.03 : ((Number(m.cash_discount_pct) || 5) / 100);
-  return Math.round(srp * (1 - discPct)) * qty;
+  const gross = srp * qty;
+  const discPct = (m.product_type || 'Cellphones') === 'Accessories' ? 0 : ((Number(m.cash_discount_pct) || 5) / 100);
+  const net = Math.round(srp * (1 - discPct)) * qty;
+  return { net, gross, disc: Math.max(0, gross - net) };
 }
 
 function renderSalesSummary() {
@@ -4628,66 +4647,112 @@ function renderSalesSummary() {
   const branchIds = ['br-molave', 'br-tambulig', 'br-bonifacio'];
   const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
 
-  const cashMoves = (sd.allMovements || []).filter((m) => {
-    if (!(Number(m.delta_qty) < 0)) return false;
-    const mt = String(m.movement_type || '').toUpperCase();
-    if (!mt.includes('SALE') || mt.includes('INSTALLMENT')) return false;
-    if (typeFilter !== 'ALL' && (m.product_type || 'Cellphones') !== typeFilter) return false;
-    return branchIds.includes(m.branch_id);
-  });
+  const mkCell = () => ({ u: 0, a: 0, g: 0, d: 0 });
+  const mkBranchRow = () => ({ 'br-molave': mkCell(), 'br-tambulig': mkCell(), 'br-bonifacio': mkCell() });
 
-  // Today + Range totals + Daily breakdown
-  const todayTotals = { 'br-molave': { u: 0, a: 0 }, 'br-tambulig': { u: 0, a: 0 }, 'br-bonifacio': { u: 0, a: 0 } };
-  const rangeTotals = { 'br-molave': { u: 0, a: 0 }, 'br-tambulig': { u: 0, a: 0 }, 'br-bonifacio': { u: 0, a: 0 } };
+  const todayTotals = mkBranchRow();
+  const rangeTotals = mkBranchRow();
   const dailyMap = new Map();
   const monthlyMap = new Map();
 
-  for (const m of cashMoves) {
-    const dt = String(m.recorded_at || '').slice(0, 10);
-    if (!dt) continue;
-    const mo = dt.slice(0, 7);
-    const qty = Math.abs(Number(m.delta_qty) || 0);
-    const amt = getCashSaleAmount(m);
-    const bid = m.branch_id;
+  const useExactWebTx = typeFilter === 'ALL' && (sd.transactions || []).length > 0;
 
-    if (dt === todayStr) {
-      todayTotals[bid].u += qty;
-      todayTotals[bid].a += amt;
-    }
+  if (useExactWebTx) {
+    for (const tx of sd.transactions) {
+      const dt = String(tx.tx_date || '').slice(0, 10);
+      if (!dt || !branchIds.includes(tx.branch_id)) continue;
+      const mo = dt.slice(0, 7);
+      const bid = tx.branch_id;
+      const net = Number(tx.amount) || 0;
+      const disc = Number(tx.discount) || 0;
+      const gross = Number(tx.srp) || net + disc;
 
-    if (dt >= sd.start && dt <= sd.end) {
-      rangeTotals[bid].u += qty;
-      rangeTotals[bid].a += amt;
-      if (!dailyMap.has(dt)) {
-        dailyMap.set(dt, { 'br-molave': { u: 0, a: 0 }, 'br-tambulig': { u: 0, a: 0 }, 'br-bonifacio': { u: 0, a: 0 } });
+      if (dt === todayStr) {
+        todayTotals[bid].u += 1;
+        todayTotals[bid].a += net;
+        todayTotals[bid].g += gross;
+        todayTotals[bid].d += disc;
       }
-      dailyMap.get(dt)[bid].u += qty;
-      dailyMap.get(dt)[bid].a += amt;
+      if (dt >= sd.start && dt <= sd.end) {
+        rangeTotals[bid].u += 1;
+        rangeTotals[bid].a += net;
+        rangeTotals[bid].g += gross;
+        rangeTotals[bid].d += disc;
+        if (!dailyMap.has(dt)) dailyMap.set(dt, mkBranchRow());
+        dailyMap.get(dt)[bid].u += 1;
+        dailyMap.get(dt)[bid].a += net;
+        dailyMap.get(dt)[bid].g += gross;
+        dailyMap.get(dt)[bid].d += disc;
+      }
+      if (!monthlyMap.has(mo)) monthlyMap.set(mo, mkBranchRow());
+      monthlyMap.get(mo)[bid].u += 1;
+      monthlyMap.get(mo)[bid].a += net;
+      monthlyMap.get(mo)[bid].g += gross;
+      monthlyMap.get(mo)[bid].d += disc;
     }
+  } else {
+    const cashMoves = (sd.allMovements || []).filter((m) => {
+      if (!(Number(m.delta_qty) < 0)) return false;
+      const mt = String(m.movement_type || '').toUpperCase();
+      if (!mt.includes('SALE') || mt.includes('INSTALLMENT')) return false;
+      if (typeFilter !== 'ALL' && (m.product_type || 'Cellphones') !== typeFilter) return false;
+      return branchIds.includes(m.branch_id);
+    });
 
-    if (!monthlyMap.has(mo)) {
-      monthlyMap.set(mo, { 'br-molave': { u: 0, a: 0 }, 'br-tambulig': { u: 0, a: 0 }, 'br-bonifacio': { u: 0, a: 0 } });
+    for (const m of cashMoves) {
+      const dt = String(m.recorded_at || '').slice(0, 10);
+      if (!dt) continue;
+      const mo = dt.slice(0, 7);
+      const qty = Math.abs(Number(m.delta_qty) || 0);
+      const { net, gross, disc } = getCashSaleAmount(m);
+      const bid = m.branch_id;
+
+      if (dt === todayStr) {
+        todayTotals[bid].u += qty;
+        todayTotals[bid].a += net;
+        todayTotals[bid].g += gross;
+        todayTotals[bid].d += disc;
+      }
+      if (dt >= sd.start && dt <= sd.end) {
+        rangeTotals[bid].u += qty;
+        rangeTotals[bid].a += net;
+        rangeTotals[bid].g += gross;
+        rangeTotals[bid].d += disc;
+        if (!dailyMap.has(dt)) dailyMap.set(dt, mkBranchRow());
+        dailyMap.get(dt)[bid].u += qty;
+        dailyMap.get(dt)[bid].a += net;
+        dailyMap.get(dt)[bid].g += gross;
+        dailyMap.get(dt)[bid].d += disc;
+      }
+      if (!monthlyMap.has(mo)) monthlyMap.set(mo, mkBranchRow());
+      monthlyMap.get(mo)[bid].u += qty;
+      monthlyMap.get(mo)[bid].a += net;
+      monthlyMap.get(mo)[bid].g += gross;
+      monthlyMap.get(mo)[bid].d += disc;
     }
-    monthlyMap.get(mo)[bid].u += qty;
-    monthlyMap.get(mo)[bid].a += amt;
   }
 
-  const sumAll = (obj) => branchIds.reduce((acc, b) => ({ u: acc.u + obj[b].u, a: acc.a + obj[b].a }), { u: 0, a: 0 });
+  const sumAll = (obj) =>
+    branchIds.reduce(
+      (acc, b) => ({ u: acc.u + obj[b].u, a: acc.a + obj[b].a, g: acc.g + obj[b].g, d: acc.d + obj[b].d }),
+      { u: 0, a: 0, g: 0, d: 0 }
+    );
   const todayAll = sumAll(todayTotals);
   const rangeAll = sumAll(rangeTotals);
+  const unitLabel = useExactWebTx ? 'tx' : 'units';
 
   const kpiGrid = document.getElementById('salesKpiGrid');
   if (kpiGrid) {
     kpiGrid.innerHTML = `
       <div class="summary-box" style="border-color:var(--gold);">
-        TODAY'S CASH SALES (${todayStr})
+        TODAY'S NET SALES (${todayStr})
         <strong style="color:var(--gold-bright);">${fmtCurrency(todayAll.a)}</strong>
-        <span class="summary-note">${fmtNum(todayAll.u)} units • Mol ${fmtNum(todayTotals['br-molave'].u)} • Tam ${fmtNum(todayTotals['br-tambulig'].u)} • Bon ${fmtNum(todayTotals['br-bonifacio'].u)}</span>
+        <span class="summary-note">Gross: ${fmtCurrency(todayAll.g)} • ${fmtNum(todayAll.u)} ${unitLabel}</span>
       </div>
       <div class="summary-box">
-        RANGE ACCUMULATED (${sd.start} → ${sd.end})
+        RANGE NET SALES (${sd.start} → ${sd.end})
         <strong style="color:var(--green);">${fmtCurrency(rangeAll.a)}</strong>
-        <span class="summary-note">${fmtNum(rangeAll.u)} total units sold</span>
+        <span class="summary-note">Gross: ${fmtCurrency(rangeAll.g)} • Disc: ${fmtCurrency(rangeAll.d)} • ${fmtNum(rangeAll.u)} ${unitLabel}</span>
       </div>
       ${branchIds
         .map(
@@ -4695,14 +4760,17 @@ function renderSalesSummary() {
         <div class="summary-box">
           ${branchNames[b].toUpperCase()} (RANGE)
           <strong>${fmtCurrency(rangeTotals[b].a)}</strong>
-          <span class="summary-note">${fmtNum(rangeTotals[b].u)} units • Today: ${fmtCurrency(todayTotals[b].a)}</span>
+          <span class="summary-note">Gross: ${fmtCurrency(rangeTotals[b].g)} • ${fmtNum(rangeTotals[b].u)} ${unitLabel}</span>
         </div>`
         )
         .join('')}
     `;
   }
 
-  const fmtCell = (cell) => (cell.u > 0 ? `<strong>${fmtCurrency(cell.a)}</strong><div class="small muted">${fmtNum(cell.u)} unit(s)</div>` : '<span class="muted">—</span>');
+  const fmtCell = (cell) =>
+    cell.u > 0
+      ? `<strong>${fmtCurrency(cell.a)}</strong><div class="small muted">Gross: ${fmtCurrency(cell.g)} • ${fmtNum(cell.u)} ${unitLabel}</div>`
+      : '<span class="muted">—</span>';
 
   const dailyRows = [...dailyMap.entries()].sort((a, b) => b[0].localeCompare(a[0]));
   const dailyTbody = document.querySelector('#salesDailyTable tbody');
@@ -4717,7 +4785,7 @@ function renderSalesSummary() {
               <td>${fmtCell(row['br-molave'])}</td>
               <td>${fmtCell(row['br-tambulig'])}</td>
               <td>${fmtCell(row['br-bonifacio'])}</td>
-              <td><strong style="color:var(--gold-bright);">${fmtCurrency(tot.a)}</strong><div class="small muted">${fmtNum(tot.u)} unit(s)</div></td>
+              <td><strong style="color:var(--gold-bright);">${fmtCurrency(tot.a)}</strong><div class="small muted">Gross: ${fmtCurrency(tot.g)} • ${fmtNum(tot.u)} ${unitLabel}</div></td>
             </tr>`;
           })
           .join('')
@@ -4737,7 +4805,7 @@ function renderSalesSummary() {
               <td>${fmtCell(row['br-molave'])}</td>
               <td>${fmtCell(row['br-tambulig'])}</td>
               <td>${fmtCell(row['br-bonifacio'])}</td>
-              <td><strong style="color:var(--green);">${fmtCurrency(tot.a)}</strong><div class="small muted">${fmtNum(tot.u)} unit(s)</div></td>
+              <td><strong style="color:var(--green);">${fmtCurrency(tot.a)}</strong><div class="small muted">Gross: ${fmtCurrency(tot.g)} • ${fmtNum(tot.u)} ${unitLabel}</div></td>
             </tr>`;
           })
           .join('')
