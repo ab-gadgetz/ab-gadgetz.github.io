@@ -505,8 +505,25 @@ async function staticGhApi(url, opts = {}) {
     const branchId = u.searchParams.get('branchId') || '';
     const payRows = (bundle.allPayments || []).filter((p) => (!start || p.payment_date >= start) && (!end || p.payment_date <= end) && (!branchId || p.branch_id === branchId));
     const expRows = (bundle.allExpenses || []).filter((e) => (!start || e.expense_date >= start) && (!end || e.expense_date <= end) && (!branchId || e.branch_id === branchId));
-    const totals = { collections: 0, principal: 0, interest: 0, penalties: 0, rebates: 0, financingIncome: 0, expenses: 0, netCashFlow: 0 };
-    const branchStats = new Map(bundle.inventory.branches.map((b) => [b.id, { branchId: b.id, branchName: b.name, collections: 0, principal: 0, financingIncome: 0, expenses: 0, netCashFlow: 0 }]));
+    const txRows = (bundle.portal_transactions || []).filter((t) => (!start || t.tx_date >= start) && (!end || t.tx_date <= end) && (!branchId || t.branch_id === branchId));
+    const instRows = (bundle.allInstallments || []).filter((i) => (!start || i.sale_date >= start) && (!end || i.sale_date <= end) && (!branchId || i.branch_id === branchId));
+
+    const totals = {
+      collections: 0, principal: 0, interest: 0, penalties: 0, rebates: 0,
+      financingIncome: 0, expenses: 0, netCashFlow: 0,
+      cashGrossSrp: 0, cashDiscount: 0, cashNetSales: 0, cashCogs: 0, cashGrossProfit: 0,
+      downpayments: 0, installmentSales: 0, installmentPrincipal: 0, abWebCashInflow: 0, properNetIncome: 0,
+    };
+    const branchStats = new Map(
+      bundle.inventory.branches.map((b) => [
+        b.id,
+        {
+          branchId: b.id, branchName: b.name, collections: 0, principal: 0, financingIncome: 0, expenses: 0, netCashFlow: 0,
+          cashGrossSrp: 0, cashDiscount: 0, cashNetSales: 0, cashCogs: 0, cashGrossProfit: 0,
+          downpayments: 0, installmentSales: 0, installmentPrincipal: 0, abWebCashInflow: 0, properNetIncome: 0,
+        },
+      ])
+    );
     for (const p of payRows) {
       totals.collections += p.amount; totals.principal += p.principal; totals.interest += p.interest;
       totals.penalties += p.penalties; totals.rebates += p.rebates;
@@ -522,8 +539,32 @@ async function staticGhApi(url, opts = {}) {
       if (bs) bs.expenses += e.amount;
       expByTypeMap.set(e.expense_type, (expByTypeMap.get(e.expense_type) || 0) + e.amount);
     }
-    totals.netCashFlow = totals.collections - totals.expenses;
-    for (const bs of branchStats.values()) bs.netCashFlow = bs.collections - bs.expenses;
+    for (const tx of txRows) {
+      const net = Number(tx.amount) || 0;
+      const disc = Number(tx.discount) || 0;
+      const srp = Number(tx.srp) || net + disc;
+      const cogs = Number(tx.unit_cost) || 0;
+      const gp = cogs > 0 ? net - cogs : 0;
+      totals.cashGrossSrp += srp; totals.cashDiscount += disc; totals.cashNetSales += net; totals.cashCogs += cogs; totals.cashGrossProfit += gp;
+      const bs = branchStats.get(tx.branch_id);
+      if (bs) { bs.cashGrossSrp += srp; bs.cashDiscount += disc; bs.cashNetSales += net; bs.cashCogs += cogs; bs.cashGrossProfit += gp; }
+    }
+    for (const inst of instRows) {
+      const amt = Number(inst.amount) || 0;
+      const dp = Number(inst.deposit) || 0;
+      const prin = Number(inst.principal_amount) || 0;
+      totals.downpayments += dp; totals.installmentSales += amt; totals.installmentPrincipal += prin;
+      const bs = branchStats.get(inst.branch_id);
+      if (bs) { bs.downpayments += dp; bs.installmentSales += amt; bs.installmentPrincipal += prin; }
+    }
+    totals.abWebCashInflow = totals.downpayments + totals.cashNetSales + totals.collections;
+    totals.properNetIncome = totals.cashGrossProfit + totals.financingIncome - totals.expenses;
+    totals.netCashFlow = totals.abWebCashInflow - totals.expenses;
+    for (const bs of branchStats.values()) {
+      bs.abWebCashInflow = bs.downpayments + bs.cashNetSales + bs.collections;
+      bs.properNetIncome = bs.cashGrossProfit + bs.financingIncome - bs.expenses;
+      bs.netCashFlow = bs.abWebCashInflow - bs.expenses;
+    }
     return {
       totals,
       byBranch: Array.from(branchStats.values()),
@@ -4428,32 +4469,93 @@ document.getElementById('saveCostBtn')?.addEventListener('click', async () => {
 async function loadFinance() {
   const start = document.getElementById('finStart').value;
   const end = document.getElementById('finEnd').value;
-  const branchId = document.getElementById('globalBranch').value;
-  const data = await api(`/api/finance/summary?start=${start}&end=${end}&branchId=${branchId}`);
+  const finBranchEl = document.getElementById('finBranchFilter');
+  const globalBranch = document.getElementById('globalBranch').value;
+  const branchId = finBranchEl ? finBranchEl.value : globalBranch;
+  // Fetch all branches for comparative table, plus apply branchId filter for KPIs & details
+  const [allData, scopedData] = await Promise.all([
+    api(`/api/finance/summary?start=${start}&end=${end}`),
+    branchId ? api(`/api/finance/summary?start=${start}&end=${end}&branchId=${branchId}`) : Promise.resolve(null),
+  ]);
+  const data = scopedData || allData;
 
   const t = data.totals;
   document.getElementById('financeKpiGrid').innerHTML = `
     <div class="summary-box">
-      TOTAL COLLECTIONS
-      <strong>${fmtCurrency(t.collections)}</strong>
-      <span class="summary-note">Principal: ${fmtCurrency(t.principal)}</span>
+      CASH + COLLECTIONS INFLOW
+      <strong>${fmtCurrency(t.abWebCashInflow ?? t.collections)}</strong>
+      <span class="summary-note">Cash Sales: ${fmtCurrency(t.cashNetSales || 0)} • DP: ${fmtCurrency(t.downpayments || 0)} • Coll: ${fmtCurrency(t.collections)}</span>
     </div>
     <div class="summary-box">
-      FINANCING INCOME
-      <strong style="color:var(--green);">${fmtCurrency(t.financingIncome)}</strong>
-      <span class="summary-note">Interest + Penalties − Rebates</span>
+      CASH GROSS PROFIT + FIN. INCOME
+      <strong style="color:var(--green);">${fmtCurrency((t.cashGrossProfit || 0) + t.financingIncome)}</strong>
+      <span class="summary-note">Cash GP: ${fmtCurrency(t.cashGrossProfit || 0)} • Fin. Inc: ${fmtCurrency(t.financingIncome)}</span>
     </div>
     <div class="summary-box">
-      TOTAL EXPENSES
+      TOTAL OPERATING EXPENSES
       <strong style="color:var(--danger);">${fmtCurrency(t.expenses)}</strong>
       <span class="summary-note">${data.expensesByType.length} expense categories</span>
     </div>
-    <div class="summary-box">
-      NET CASH FLOW
-      <strong style="color:${t.netCashFlow >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(t.netCashFlow)}</strong>
-      <span class="summary-note">Collections − Expenses</span>
+    <div class="summary-box" style="border-color:var(--gold);">
+      NET INCOME (CASH GP + FIN − EXP)
+      <strong style="color:${(t.properNetIncome ?? t.netCashFlow) >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(t.properNetIncome ?? t.netCashFlow)}</strong>
+      <span class="summary-note">Net Cash Flow: ${fmtCurrency(t.netCashFlow)}</span>
     </div>
   `;
+
+  // Render Comparative Income Statement
+  const stmtTbody = document.querySelector('#financeIncomeStmtTable tbody');
+  const noteEl = document.getElementById('financeAnalysisNote');
+  if (stmtTbody && allData) {
+    const byId = new Map((allData.byBranch || []).map((b) => [b.branchId, b]));
+    const bon = byId.get('br-bonifacio') || {};
+    const mol = byId.get('br-molave') || {};
+    const tam = byId.get('br-tambulig') || {};
+    const tot = allData.totals || {};
+
+    const cols = branchId
+      ? [byId.get(branchId) || tot]
+      : [bon, mol, tam, tot];
+
+    const theadRow = document.querySelector('#financeIncomeStmtTable thead tr');
+    if (theadRow) {
+      theadRow.innerHTML = branchId
+        ? `<th>Income Statement Line Item</th><th>${(byId.get(branchId)?.branchName || 'Selected Branch')}</th>`
+        : `<th>Income Statement Line Item</th><th>Bonifacio</th><th>Molave</th><th>Tambulig</th><th>Total (All Branches)</th>`;
+    }
+
+    const rowHtml = (label, getter, opts = {}) => {
+      const style = opts.bold ? 'font-weight:700;background:rgba(255,255,255,0.03);' : '';
+      const valColor = opts.color || '';
+      return `<tr style="${style}"><td>${label}</td>${cols
+        .map((c) => {
+          const v = Number(getter(c)) || 0;
+          const clr = opts.autoColor ? (v >= 0 ? 'var(--green)' : 'var(--danger)') : valColor;
+          return `<td ${clr ? `style="color:${clr};"` : ''}>${opts.bold ? `<strong>${fmtCurrency(v)}</strong>` : fmtCurrency(v)}</td>`;
+        })
+        .join('')}</tr>`;
+    };
+
+    stmtTbody.innerHTML = [
+      rowHtml('Gross Cash Sales (SRP)', (c) => c.cashGrossSrp),
+      rowHtml('Less: Cash Sales Discounts', (c) => -(c.cashDiscount || 0), { color: 'var(--muted)' }),
+      rowHtml('Net Cash Sales', (c) => c.cashNetSales, { bold: true }),
+      rowHtml('Less: Cash Cost of Goods Sold (FIFO)', (c) => -(c.cashCogs || 0), { color: 'var(--danger)' }),
+      rowHtml('Cash Sales Gross Profit', (c) => c.cashGrossProfit, { bold: true, color: 'var(--green)' }),
+      rowHtml('Add: Financing / Interest Income (Int + Pen − Rebates)', (c) => c.financingIncome, { color: 'var(--green)' }),
+      rowHtml('Total Recognized Gross Profit (Cash GP + Fin. Income)', (c) => (c.cashGrossProfit || 0) + (c.financingIncome || 0), { bold: true }),
+      rowHtml('Less: Operating Expenses', (c) => -(c.expenses || 0), { color: 'var(--danger)' }),
+      rowHtml('Net Operating Income (excl. Installment Unit Profit)', (c) => c.properNetIncome, { bold: true, autoColor: true }),
+      rowHtml('Memo: Installment Contract Sales (New Accounts)', (c) => c.installmentSales, { color: 'var(--muted)' }),
+      rowHtml('Memo: Downpayments Collected', (c) => c.downpayments, { color: 'var(--muted)' }),
+      rowHtml('Memo: Installment Payments Collected', (c) => c.collections, { color: 'var(--muted)' }),
+      rowHtml('Memo: AB Web "Gross Sales" (Total Cash Inflow = DP + Cash + Coll)', (c) => c.abWebCashInflow, { bold: true, color: 'var(--gold-bright)' }),
+    ].join('');
+
+    if (noteEl) {
+      noteEl.innerHTML = `<strong>Auditor Note on AB Web Differences:</strong> AB Web's dashboard labels <strong>Downpayments + Cash Sales + Installment Collections</strong> (${fmtCurrency(tot.abWebCashInflow)}) as <em>"GROSS SALES"</em> — that is actually <strong>Total Cash Inflow</strong>, not Revenue (it double-counts installment principal). Above is the proper Income Statement separating <strong>Cash Sales Revenue</strong>, <strong>FIFO COGS</strong>, <strong>Financing Income</strong>, and <strong>Operating Expenses</strong>.`;
+    }
+  }
 
   document.querySelector('#financeBranchTable tbody').innerHTML = data.byBranch
     .map((b) => `
@@ -4836,6 +4938,7 @@ setInterval(() => {
   }
 }, 30000);
 document.getElementById('refreshFinanceBtn').addEventListener('click', loadFinance);
+document.getElementById('finBranchFilter')?.addEventListener('change', loadFinance);
 document.getElementById('refreshActivityBtn').addEventListener('click', loadActivity);
 function shiftActivityDates(deltaDays) {
   const startEl = document.getElementById('actStart');

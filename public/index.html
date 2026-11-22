@@ -678,6 +678,15 @@
           </div>
           <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
             <div>
+              <label for="finBranchFilter">BRANCH</label>
+              <select id="finBranchFilter" style="width:auto;">
+                <option value="">Total (All Branches)</option>
+                <option value="br-molave">Molave</option>
+                <option value="br-tambulig">Tambulig</option>
+                <option value="br-bonifacio">Bonifacio</option>
+              </select>
+            </div>
+            <div>
               <label for="finStart">FROM</label>
               <input type="date" id="finStart" style="width:auto;" />
             </div>
@@ -690,6 +699,30 @@
         </div>
 
         <div class="summary-grid" id="financeKpiGrid" style="grid-template-columns:repeat(4,minmax(0,1fr));"></div>
+      </div>
+
+      <div class="sub-panel" id="financeIncomeStatementCard" style="margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+          <div>
+            <h3 style="margin:0;">Comparative Income Statement (Proper P&amp;L vs AB Web Dashboard)</h3>
+            <p class="muted small" style="margin:3px 0 0;">Separates true Sales Revenue, COGS, Financing Income, and Expenses—and spots why AB Web's "Gross Sales" differs (Cash Inflow vs Revenue).</p>
+          </div>
+        </div>
+        <div id="financeAnalysisNote" class="sub-panel" style="padding:10px 12px;margin-bottom:10px;font-size:12px;border-left:3px solid var(--gold);"></div>
+        <div class="table-wrap">
+          <table class="data-table" id="financeIncomeStmtTable">
+            <thead>
+              <tr>
+                <th>Income Statement Line Item</th>
+                <th>Bonifacio</th>
+                <th>Molave</th>
+                <th>Tambulig</th>
+                <th>Total (All Branches)</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </div>
 
       <div class="grid-2">
