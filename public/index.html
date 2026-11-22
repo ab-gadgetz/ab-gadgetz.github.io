@@ -106,6 +106,7 @@
       </div>
       <nav class="tabs hidden" id="mainTabsMenu" role="tablist">
         <button type="button" class="tab active" data-tab="inventory">INVENTORY</button>
+        <button type="button" class="tab" data-tab="sales">SALES</button>
         <button type="button" class="tab" data-tab="receivables">RECEIVABLES</button>
         <button type="button" class="tab" data-tab="finance">FINANCE &amp; P&amp;L</button>
         <button type="button" class="tab" data-tab="websiteStock">WEBSITE STOCK</button>
@@ -500,6 +501,80 @@
       </div>
 
       <div id="brandGrid" class="brand-grid"></div>
+    </section>
+
+    <!-- TAB: ADMIN SALES SUMMARY (DAILY & MONTHLY CASH SALES) -->
+    <section id="tab-sales" class="tab-panel card">
+      <div class="sub-panel">
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+          <div>
+            <h3 style="margin:0;">Daily &amp; Accumulated Cash Sales (All Branches)</h3>
+            <p class="muted small" style="margin:3px 0 0;">Live branch cash sales summary by day, month, or custom date range (net of cash discount).</p>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span id="salesLiveStatus" class="badge badge-ok" style="font-size:11px;">● LIVE</span>
+            <button type="button" id="salesRefreshBtn" class="secondary" style="padding:6px 12px;font-size:12px;">Refresh</button>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">
+          <div>
+            <label for="salesMonthInput">MONTH</label>
+            <input type="month" id="salesMonthInput" style="width:auto;padding:6px 10px;font-size:12px;" />
+          </div>
+          <div>
+            <label for="salesStart">FROM</label>
+            <input type="date" id="salesStart" style="width:auto;padding:6px 10px;font-size:12px;" />
+          </div>
+          <div>
+            <label for="salesEnd">TO</label>
+            <input type="date" id="salesEnd" style="width:auto;padding:6px 10px;font-size:12px;" />
+          </div>
+          <div>
+            <label for="salesTypeFilter">PRODUCT TYPE</label>
+            <select id="salesTypeFilter" style="width:auto;padding:6px 10px;font-size:12px;">
+              <option value="ALL">All Products</option>
+              <option value="Cellphones">Cellphones</option>
+              <option value="Accessories">Accessories</option>
+            </select>
+          </div>
+          <button type="button" id="salesApplyBtn" style="padding:7px 14px;font-size:12px;">APPLY RANGE</button>
+        </div>
+
+        <div class="summary-grid" id="salesKpiGrid" style="margin-bottom:14px;"></div>
+
+        <h4 style="margin:0 0 8px;color:var(--gold-bright);">Daily Cash Sales by Branch</h4>
+        <div class="table-wrap" style="margin-bottom:16px;">
+          <table class="data-table" id="salesDailyTable">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Molave</th>
+                <th>Tambulig</th>
+                <th>Bonifacio</th>
+                <th>Daily Total</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <h4 style="margin:0 0 8px;color:var(--gold-bright);">Monthly Accumulated Cash Sales by Branch</h4>
+        <div class="table-wrap">
+          <table class="data-table" id="salesMonthlyTable">
+            <thead>
+              <tr>
+                <th>Month</th>
+                <th>Molave</th>
+                <th>Tambulig</th>
+                <th>Bonifacio</th>
+                <th>Monthly Total</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <!-- TAB: RECEIVABLES & PAST DUES -->

@@ -99,6 +99,8 @@ async function refreshActiveTab() {
   if (tab === 'inventory') {
     await loadInventory();
     if (state.activeInvTool === 'restock') await loadPlanning();
+  } else if (tab === 'sales') {
+    await loadSalesSummary();
   } else if (tab === 'receivables') {
     await loadReceivables();
   } else if (tab === 'finance') {
@@ -4575,6 +4577,196 @@ function renderReceivables() {
 }
 
 document.getElementById('recSearchInput').addEventListener('input', renderReceivables);
+
+function initSalesDateInputs() {
+  const monthInp = document.getElementById('salesMonthInput');
+  const startInp = document.getElementById('salesStart');
+  const endInp = document.getElementById('salesEnd');
+  const curMonth = todayStr.slice(0, 7);
+  if (monthInp && !monthInp.value) monthInp.value = curMonth;
+  if (startInp && !startInp.value) startInp.value = `${curMonth}-01`;
+  if (endInp && !endInp.value) endInp.value = todayStr;
+}
+
+async function loadSalesSummary() {
+  initSalesDateInputs();
+  const start = document.getElementById('salesStart')?.value || `${todayStr.slice(0, 7)}-01`;
+  const end = document.getElementById('salesEnd')?.value || todayStr;
+  // Fetch selected range + last 6 months for monthly accumulated view
+  const sixMoStartDate = new Date();
+  sixMoStartDate.setMonth(sixMoStartDate.getMonth() - 5);
+  sixMoStartDate.setDate(1);
+  const sixMoStart = sixMoStartDate.toISOString().slice(0, 10);
+  const fetchStart = start < sixMoStart ? start : sixMoStart;
+  const fetchEnd = end > todayStr ? end : todayStr;
+
+  const data = await api(`/api/activity?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`);
+  state.salesData = { start, end, allMovements: data?.allMovements || [] };
+  const liveEl = document.getElementById('salesLiveStatus');
+  if (liveEl) {
+    liveEl.textContent = `● LIVE • ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`;
+  }
+  renderSalesSummary();
+}
+
+function getCashSaleAmount(m) {
+  const qty = Math.abs(Number(m.delta_qty) || 0);
+  if (qty <= 0) return 0;
+  let srp = Number(m.base_price) || 0;
+  if (!srp && state.inventory?.items) {
+    const prod = state.inventory.items.find((i) => i.id === m.product_id || i.sku === m.sku);
+    srp = Number(prod?.base_price) || 0;
+  }
+  const discPct = (m.product_type || 'Cellphones') === 'Accessories' ? 0.03 : ((Number(m.cash_discount_pct) || 5) / 100);
+  return Math.round(srp * (1 - discPct)) * qty;
+}
+
+function renderSalesSummary() {
+  const sd = state.salesData;
+  if (!sd) return;
+  const typeFilter = document.getElementById('salesTypeFilter')?.value || 'ALL';
+  const branchIds = ['br-molave', 'br-tambulig', 'br-bonifacio'];
+  const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
+
+  const cashMoves = (sd.allMovements || []).filter((m) => {
+    if (!(Number(m.delta_qty) < 0)) return false;
+    const mt = String(m.movement_type || '').toUpperCase();
+    if (!mt.includes('SALE') || mt.includes('INSTALLMENT')) return false;
+    if (typeFilter !== 'ALL' && (m.product_type || 'Cellphones') !== typeFilter) return false;
+    return branchIds.includes(m.branch_id);
+  });
+
+  // Today + Range totals + Daily breakdown
+  const todayTotals = { 'br-molave': { u: 0, a: 0 }, 'br-tambulig': { u: 0, a: 0 }, 'br-bonifacio': { u: 0, a: 0 } };
+  const rangeTotals = { 'br-molave': { u: 0, a: 0 }, 'br-tambulig': { u: 0, a: 0 }, 'br-bonifacio': { u: 0, a: 0 } };
+  const dailyMap = new Map();
+  const monthlyMap = new Map();
+
+  for (const m of cashMoves) {
+    const dt = String(m.recorded_at || '').slice(0, 10);
+    if (!dt) continue;
+    const mo = dt.slice(0, 7);
+    const qty = Math.abs(Number(m.delta_qty) || 0);
+    const amt = getCashSaleAmount(m);
+    const bid = m.branch_id;
+
+    if (dt === todayStr) {
+      todayTotals[bid].u += qty;
+      todayTotals[bid].a += amt;
+    }
+
+    if (dt >= sd.start && dt <= sd.end) {
+      rangeTotals[bid].u += qty;
+      rangeTotals[bid].a += amt;
+      if (!dailyMap.has(dt)) {
+        dailyMap.set(dt, { 'br-molave': { u: 0, a: 0 }, 'br-tambulig': { u: 0, a: 0 }, 'br-bonifacio': { u: 0, a: 0 } });
+      }
+      dailyMap.get(dt)[bid].u += qty;
+      dailyMap.get(dt)[bid].a += amt;
+    }
+
+    if (!monthlyMap.has(mo)) {
+      monthlyMap.set(mo, { 'br-molave': { u: 0, a: 0 }, 'br-tambulig': { u: 0, a: 0 }, 'br-bonifacio': { u: 0, a: 0 } });
+    }
+    monthlyMap.get(mo)[bid].u += qty;
+    monthlyMap.get(mo)[bid].a += amt;
+  }
+
+  const sumAll = (obj) => branchIds.reduce((acc, b) => ({ u: acc.u + obj[b].u, a: acc.a + obj[b].a }), { u: 0, a: 0 });
+  const todayAll = sumAll(todayTotals);
+  const rangeAll = sumAll(rangeTotals);
+
+  const kpiGrid = document.getElementById('salesKpiGrid');
+  if (kpiGrid) {
+    kpiGrid.innerHTML = `
+      <div class="summary-box" style="border-color:var(--gold);">
+        TODAY'S CASH SALES (${todayStr})
+        <strong style="color:var(--gold-bright);">${fmtCurrency(todayAll.a)}</strong>
+        <span class="summary-note">${fmtNum(todayAll.u)} units • Mol ${fmtNum(todayTotals['br-molave'].u)} • Tam ${fmtNum(todayTotals['br-tambulig'].u)} • Bon ${fmtNum(todayTotals['br-bonifacio'].u)}</span>
+      </div>
+      <div class="summary-box">
+        RANGE ACCUMULATED (${sd.start} → ${sd.end})
+        <strong style="color:var(--green);">${fmtCurrency(rangeAll.a)}</strong>
+        <span class="summary-note">${fmtNum(rangeAll.u)} total units sold</span>
+      </div>
+      ${branchIds
+        .map(
+          (b) => `
+        <div class="summary-box">
+          ${branchNames[b].toUpperCase()} (RANGE)
+          <strong>${fmtCurrency(rangeTotals[b].a)}</strong>
+          <span class="summary-note">${fmtNum(rangeTotals[b].u)} units • Today: ${fmtCurrency(todayTotals[b].a)}</span>
+        </div>`
+        )
+        .join('')}
+    `;
+  }
+
+  const fmtCell = (cell) => (cell.u > 0 ? `<strong>${fmtCurrency(cell.a)}</strong><div class="small muted">${fmtNum(cell.u)} unit(s)</div>` : '<span class="muted">—</span>');
+
+  const dailyRows = [...dailyMap.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  const dailyTbody = document.querySelector('#salesDailyTable tbody');
+  if (dailyTbody) {
+    dailyTbody.innerHTML = dailyRows.length
+      ? dailyRows
+          .map(([dt, row]) => {
+            const tot = sumAll(row);
+            return `
+            <tr>
+              <td><strong>${dt}</strong></td>
+              <td>${fmtCell(row['br-molave'])}</td>
+              <td>${fmtCell(row['br-tambulig'])}</td>
+              <td>${fmtCell(row['br-bonifacio'])}</td>
+              <td><strong style="color:var(--gold-bright);">${fmtCurrency(tot.a)}</strong><div class="small muted">${fmtNum(tot.u)} unit(s)</div></td>
+            </tr>`;
+          })
+          .join('')
+      : '<tr><td colspan="5" class="muted">No cash sales recorded in this date range.</td></tr>';
+  }
+
+  const monthlyRows = [...monthlyMap.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  const monthlyTbody = document.querySelector('#salesMonthlyTable tbody');
+  if (monthlyTbody) {
+    monthlyTbody.innerHTML = monthlyRows.length
+      ? monthlyRows
+          .map(([mo, row]) => {
+            const tot = sumAll(row);
+            return `
+            <tr>
+              <td><strong>${mo}</strong></td>
+              <td>${fmtCell(row['br-molave'])}</td>
+              <td>${fmtCell(row['br-tambulig'])}</td>
+              <td>${fmtCell(row['br-bonifacio'])}</td>
+              <td><strong style="color:var(--green);">${fmtCurrency(tot.a)}</strong><div class="small muted">${fmtNum(tot.u)} unit(s)</div></td>
+            </tr>`;
+          })
+          .join('')
+      : '<tr><td colspan="5" class="muted">No monthly cash sales recorded yet.</td></tr>';
+  }
+}
+
+document.getElementById('salesMonthInput')?.addEventListener('change', (e) => {
+  const ym = e.target.value;
+  if (!/^\d{4}-\d{2}$/.test(ym)) return;
+  const [y, m] = ym.split('-').map(Number);
+  const lastDay = new Date(y, m, 0).getDate();
+  const s = `${ym}-01`;
+  const eDate = `${ym}-${String(lastDay).padStart(2, '0')}`;
+  const startEl = document.getElementById('salesStart');
+  const endEl = document.getElementById('salesEnd');
+  if (startEl) startEl.value = s;
+  if (endEl) endEl.value = eDate;
+  loadSalesSummary();
+});
+document.getElementById('salesApplyBtn')?.addEventListener('click', loadSalesSummary);
+document.getElementById('salesRefreshBtn')?.addEventListener('click', loadSalesSummary);
+document.getElementById('salesTypeFilter')?.addEventListener('change', renderSalesSummary);
+
+setInterval(() => {
+  if (state.activeTab === 'sales' && state.userRole === 'ADMIN') {
+    loadSalesSummary().catch(() => {});
+  }
+}, 30000);
 document.getElementById('refreshFinanceBtn').addEventListener('click', loadFinance);
 document.getElementById('refreshActivityBtn').addEventListener('click', loadActivity);
 function shiftActivityDates(deltaDays) {
@@ -5352,7 +5544,7 @@ function applyRolePermissions() {
       ? ['inventory']
       : role === 'CI'
         ? ['receivables', 'catalogs']
-        : ['inventory', 'activity', 'finance', 'receivables', 'catalogs', 'websiteStock', 'staffPins'];
+        : ['inventory', 'sales', 'activity', 'finance', 'receivables', 'catalogs', 'websiteStock', 'staffPins'];
 
   document.querySelectorAll('.tab[data-tab], .mnav-btn[data-tab]').forEach((btn) => {
     const t = btn.dataset.tab;
