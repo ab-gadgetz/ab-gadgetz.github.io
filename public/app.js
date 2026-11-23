@@ -5002,13 +5002,20 @@ function renderSalesCashPnlTool() {
 
 function estimateProductCostByName(unitName) {
   if (!unitName || !state.inventory?.items) return 0;
-  const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const norm = (s) =>
+    String(s || '')
+      .toLowerCase()
+      .replace(/\bplus\b/g, '+')
+      .replace(/\bgalaxy\b/g, '')
+      .replace(/gb\b/g, '')
+      .replace(/\b4g\b/g, '')
+      .replace(/[^a-z0-9+]/g, '');
   const target = norm(unitName);
   if (!target) return 0;
   for (const p of state.inventory.items) {
-    const k1 = norm((p.brand || '') + (p.model || p.name));
+    const k1 = norm((p.brand || '') + ' ' + (p.model || p.name));
     const k2 = norm(p.model || p.name);
-    if (k1 === target || k2 === target || (k2.length > 6 && target.includes(k2))) {
+    if (k1 === target || k2 === target || (k1.length > 6 && (target.includes(k1) || k1.includes(target))) || (k2.length > 6 && (target.includes(k2) || k2.includes(target)))) {
       const sups = [Number(p.cost_ab) || 0, Number(p.cost_ak) || 0, Number(p.cost_online) || 0].filter((v) => v > 0);
       if (sups.length) return Math.min(...sups);
       if (Number(p.cost_price) > 0) return Number(p.cost_price);
