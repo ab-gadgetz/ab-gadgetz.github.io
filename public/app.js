@@ -4990,13 +4990,13 @@ function renderSalesCashPnlTool() {
     row('Less: Cost of Goods Sold (FIFO Unit Cost)', (c) => -c.cogs, { color: 'var(--danger)' }),
     row('= True Cash Sales Gross Profit (Net − COGS)', (c) => c.gp, { bold: true, color: 'var(--green)' }),
     row('True Cash Gross Margin %', (c) => (c.net > 0 ? (c.gp / c.net) * 100 : 0), { pct: true }),
-    row('Less: Branch Operating Expenses', (c) => -c.expenses, { color: 'var(--danger)' }),
-    row('= Cash Sales Net Operating Income (Cash-Only)', (c) => c.netIncome, { bold: true, auto: true }),
     row('Memo: AB Web Buggy Sales Income (Double-Subtracted Discount)', (c) => c.gp - c.disc, { color: 'var(--muted)' }),
   ].join('');
 
+  state.salesCashStats = { stats, tot };
+
   if (banner) {
-    banner.innerHTML = `<strong>Audit Verification (${sd.start} → ${sd.end}):</strong> True Cash Sales Gross Profit is <strong>${fmtCurrency(tot.gp)}</strong> (<strong>${tot.net > 0 ? ((tot.gp / tot.net) * 100).toFixed(2) : '0.00'}%</strong> margin). AB Web's Dashboard understates this by <strong>${fmtCurrency(tot.disc)}</strong> because it subtracts Cash Discounts twice.`;
+    banner.innerHTML = `<strong>Cash Segment Only (${sd.start} → ${sd.end}):</strong> True Cash Sales Gross Profit is <strong>${fmtCurrency(tot.gp)}</strong> (<strong>${tot.net > 0 ? ((tot.gp / tot.net) * 100).toFixed(2) : '0.00'}%</strong> margin). Shared branch operating expenses are deducted once in <strong>CONSOLIDATED P&amp;L</strong> to avoid double deduction. AB Web understated Cash Profit by <strong>${fmtCurrency(tot.disc)}</strong>.`;
   }
 }
 
@@ -5120,11 +5120,13 @@ function renderSalesInstallmentAccrualTool() {
     row('Add: Accrued Interest Income (Earned Over Term, Accrual Basis)', (c) => c.accruedInterest, { color: 'var(--green)' }),
     row('= Total Accrual Installment Gross Income', (c) => c.merchGp + c.accruedInterest, { bold: true }),
     row(`Less: Bad Debt Provision (${Math.round(badDebtPct * 100)}% of Past-Due Portfolio)`, (c) => -c.badDebtProvision, { color: '#f59e0b' }),
-    row('Less: Branch Operating Expenses', (c) => -c.expenses, { color: 'var(--danger)' }),
-    row('= Installment Accrual Net Income', (c) => c.accrualNetIncome, { bold: true, auto: true }),
+    row('= Net Installment & Financing Contribution (Before Shared OpEx)', (c) => c.merchGp + c.accruedInterest - c.badDebtProvision, { bold: true, auto: true }),
     row('Compare: AB Web Cash-Basis Interest Collected (Payments)', (c) => c.abWebCashInterest, { color: 'var(--muted)' }),
     row('Accrual vs Cash-Basis Interest Variance', (c) => c.accruedInterest - c.abWebCashInterest, { color: 'var(--gold-bright)' }),
   ].join('');
+
+  state.salesInstStats = { stats, tot, badDebtPct };
+  renderSalesConsolidatedTool();
 
   if (guide) {
     guide.innerHTML = `
@@ -5139,6 +5141,84 @@ function renderSalesInstallmentAccrualTool() {
   }
 }
 
+function renderSalesConsolidatedTool() {
+  const sd = state.salesData;
+  const cashData = state.salesCashStats;
+  const instData = state.salesInstStats;
+  const tbody = document.querySelector('#salesConsolidatedTable tbody');
+  const banner = document.getElementById('consolidatedPnlBanner');
+  if (!sd || !cashData || !instData || !tbody) return;
+
+  const branchIds = ['br-bonifacio', 'br-molave', 'br-tambulig'];
+  const finByBranch = new Map((sd.finance?.byBranch || []).map((b) => [b.branchId, b]));
+
+  const buildCol = (c, i, exp) => {
+    const instContrib = i.merchGp + i.accruedInterest - i.badDebtProvision;
+    const totalGrossContrib = c.gp + instContrib;
+    const realAccrualNet = totalGrossContrib - exp;
+    const cashBasisTotalGross = c.gp + i.merchGp + i.abWebCashInterest;
+    const realCashInterestNet = cashBasisTotalGross - exp;
+    return {
+      cashGross: c.gross,
+      cashDisc: c.disc,
+      cashNet: c.net,
+      cashCogs: c.cogs,
+      cashGp: c.gp,
+      instRev: i.contractSales,
+      instCogs: i.estCogs,
+      instGp: i.merchGp,
+      accruedInt: i.accruedInterest,
+      badDebt: i.badDebtProvision,
+      instContrib,
+      totalGrossContrib,
+      expenses: exp,
+      realAccrualNet,
+      abWebCashInt: i.abWebCashInterest,
+      realCashInterestNet,
+    };
+  };
+
+  const cols = branchIds.map((bid) =>
+    buildCol(cashData.stats[bid], instData.stats[bid], Number(finByBranch.get(bid)?.expenses) || 0)
+  );
+  const totExp = cols.reduce((s, x) => s + x.expenses, 0);
+  cols.push(buildCol(cashData.tot, instData.tot, totExp));
+
+  const row = (label, fn, opts = {}) => {
+    const bg = opts.bold ? 'background:rgba(255,255,255,0.04);font-weight:700;' : '';
+    return `<tr style="${bg}"><td>${label}</td>${cols
+      .map((col) => {
+        const v = fn(col);
+        const clr = opts.auto ? (v >= 0 ? 'var(--green)' : 'var(--danger)') : opts.color || '';
+        return `<td ${clr ? `style="color:${clr};"` : ''}>${opts.bold ? `<strong>${fmtCurrency(v)}</strong>` : fmtCurrency(v)}</td>`;
+      })
+      .join('')}</tr>`;
+  };
+
+  tbody.innerHTML = [
+    row('A. Gross Cash Sales (SRP)', (c) => c.cashGross),
+    row('   Less: Cash Sales Discounts', (c) => -c.cashDisc, { color: 'var(--muted)' }),
+    row('   = Net Cash Sales', (c) => c.cashNet, { bold: true }),
+    row('   Less: Cash Cost of Goods Sold (FIFO)', (c) => -c.cashCogs, { color: 'var(--danger)' }),
+    row('   = True Cash Sales Gross Profit', (c) => c.cashGp, { bold: true, color: 'var(--green)' }),
+    row('B. Installment Sales Revenue (Cash-Equiv SRP)', (c) => c.instRev),
+    row('   Less: Est. Installment Unit COGS', (c) => -c.instCogs, { color: 'var(--danger)' }),
+    row('   = Installment Merchandising Gross Profit', (c) => c.instGp, { color: 'var(--green)' }),
+    row('   Add: Accrued Interest Income (Monthly Earned)', (c) => c.accruedInt, { color: 'var(--green)' }),
+    row(`   Less: Bad Debt Provision (${Math.round((instData.badDebtPct || 0.05) * 100)}% Past Due)`, (c) => -c.badDebt, { color: '#f59e0b' }),
+    row('   = Net Installment & Financing Contribution', (c) => c.instContrib, { bold: true, color: 'var(--green)' }),
+    row('C. Total Consolidated Gross Contribution (A + B)', (c) => c.totalGrossContrib, { bold: true }),
+    row('D. Less: Shared Branch Operating Expenses (Deducted ONCE)', (c) => -c.expenses, { color: 'var(--danger)' }),
+    row('E. REAL CONSOLIDATED NET INCOME (Accrual Method)', (c) => c.realAccrualNet, { bold: true, auto: true }),
+    row('Reference: Consolidated Net Income (Using Cash-Collected Interest, No Double-Discount)', (c) => c.realCashInterestNet, { bold: true, color: 'var(--gold-bright)' }),
+  ].join('');
+
+  const totCol = cols[cols.length - 1];
+  if (banner) {
+    banner.innerHTML = `<strong>Consolidated Branch P&amp;L (${sd.start} → ${sd.end}):</strong> Combines True Cash Sales Gross Profit (<strong>${fmtCurrency(totCol.cashGp)}</strong>) + Net Installment &amp; Financing Contribution (<strong>${fmtCurrency(totCol.instContrib)}</strong>), then deducts Shared Branch Operating Expenses (<strong>${fmtCurrency(totCol.expenses)}</strong>) <strong>once</strong> → Real Accrual Net Income: <strong style="color:${totCol.realAccrualNet >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(totCol.realAccrualNet)}</strong> (or <strong style="color:var(--gold-bright);">${fmtCurrency(totCol.realCashInterestNet)}</strong> on a cash-collected interest basis).`;
+  }
+}
+
 document.querySelectorAll('.sales-tool-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
     const target = btn.dataset.salestool;
@@ -5147,7 +5227,7 @@ document.querySelectorAll('.sales-tool-btn').forEach((btn) => {
       b.classList.toggle('active', isAct);
       b.classList.toggle('secondary', !isAct);
     });
-    ['summary', 'cashpnl', 'installment'].forEach((t) => {
+    ['summary', 'cashpnl', 'installment', 'consolidated'].forEach((t) => {
       document.getElementById(`salesTool-${t}`)?.classList.toggle('hidden', t !== target);
     });
   });

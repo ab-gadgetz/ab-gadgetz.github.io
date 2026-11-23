@@ -543,8 +543,9 @@
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;" id="salesToolsBar">
           <button type="button" class="sales-tool-btn active" data-salestool="summary" style="padding:7px 12px;font-size:12px;">DAILY &amp; MONTHLY CASH</button>
-          <button type="button" class="secondary sales-tool-btn" data-salestool="cashpnl" style="padding:7px 12px;font-size:12px;">CASH SALES P&amp;L (GROSS → NET)</button>
-          <button type="button" class="secondary sales-tool-btn" data-salestool="installment" style="padding:7px 12px;font-size:12px;">INSTALLMENT SALES (ACCRUAL P&amp;L)</button>
+          <button type="button" class="secondary sales-tool-btn" data-salestool="cashpnl" style="padding:7px 12px;font-size:12px;">CASH SALES P&amp;L</button>
+          <button type="button" class="secondary sales-tool-btn" data-salestool="installment" style="padding:7px 12px;font-size:12px;">INSTALLMENT (ACCRUAL)</button>
+          <button type="button" class="secondary sales-tool-btn" data-salestool="consolidated" style="padding:7px 12px;font-size:12px;border-color:var(--gold);color:var(--gold-bright);">CONSOLIDATED P&amp;L (REAL NET INCOME)</button>
         </div>
 
         <div id="salesTool-summary">
@@ -631,6 +632,25 @@
           </div>
 
           <div id="installmentAccrualGuide" class="sub-panel" style="padding:12px;font-size:12px;border-left:3px solid var(--gold);line-height:1.55;"></div>
+        </div>
+
+        <!-- SALES TOOL 4: CONSOLIDATED CASH + INSTALLMENT P&L (REAL NET INCOME, EXPENSES DEDUCTED ONCE) -->
+        <div id="salesTool-consolidated" class="hidden">
+          <div id="consolidatedPnlBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--gold);"></div>
+          <div class="table-wrap">
+            <table class="data-table" id="salesConsolidatedTable">
+              <thead>
+                <tr>
+                  <th>Consolidated Income Statement (Cash + Installment)</th>
+                  <th>Bonifacio</th>
+                  <th>Molave</th>
+                  <th>Tambulig</th>
+                  <th>Total (All Branches)</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
         </div>
       </div>
     </section>
