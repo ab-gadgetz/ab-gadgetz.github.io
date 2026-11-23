@@ -4654,16 +4654,18 @@ function renderReceivables() {
       <strong style="color:var(--green);">${fmtCurrency(t.totalMonthlyExpected)}</strong>
       <span class="summary-note">${fmtNum(t.installmentCount)} active contract(s)</span>
     </div>
-    <div class="summary-box">
-      OPENING ALLOWANCE (AGING)
+    <div class="summary-box rec-aging-click" data-bucket="ALL" style="cursor:pointer;border-color:#f59e0b;" title="Click to view customer-by-customer allowance computation per branch">
+      OPENING ALLOWANCE (AGING) ↗
       <strong style="color:#f59e0b;">${fmtCurrency(aging.requiredAllowance)}</strong>
-      <span class="summary-note">${fmtNum(t.dueAccountsCount)} past-due (${fmtCurrency(aging.totalPastDue)})</span>
+      <span class="summary-note">${fmtNum(t.dueAccountsCount)} past-due (${fmtCurrency(aging.totalPastDue)}) • Click to audit</span>
     </div>
   `;
 
   const agingPill = document.getElementById('receivablesAgingSummaryPill');
   if (agingPill) {
-    agingPill.textContent = `Target Opening Allowance: ${fmtCurrency(aging.requiredAllowance)}`;
+    agingPill.textContent = `Target Opening Allowance: ${fmtCurrency(aging.requiredAllowance)} (Click any row to audit)`;
+    agingPill.style.cursor = 'pointer';
+    agingPill.onclick = () => openReceivablesAllowanceModal('ALL', document.getElementById('globalBranch')?.value || 'ALL');
   }
   const agingTbody = document.querySelector('#receivablesAgingTable tbody');
   if (agingTbody) {
@@ -4671,8 +4673,8 @@ function renderReceivables() {
       aging.buckets
         .map(
           (b) => `
-        <tr>
-          <td><strong>${b.label}</strong></td>
+        <tr class="rec-aging-click" data-bucket="${b.key}" style="cursor:pointer;" title="Click to inspect customers in ${b.label}">
+          <td><strong style="text-decoration:underline dotted;">${b.label}</strong></td>
           <td>${Math.round(b.rate * 100)}%</td>
           <td>${fmtNum(b.count)}</td>
           <td>${fmtCurrency(b.balance)}</td>
@@ -4680,13 +4682,19 @@ function renderReceivables() {
         </tr>`
         )
         .join('') +
-      `<tr style="background:rgba(255,255,255,0.04);font-weight:700;">
-        <td>TOTAL OPENING ALLOWANCE (Prior-Period Catch-Up)</td>
+      `<tr class="rec-aging-click" data-bucket="ALL" style="background:rgba(255,255,255,0.04);font-weight:700;cursor:pointer;" title="Click to inspect all past-due customers by branch">
+        <td style="text-decoration:underline dotted;">TOTAL OPENING ALLOWANCE (Prior-Period Catch-Up)</td>
         <td>—</td>
         <td>${fmtNum(aging.buckets.reduce((s, x) => s + x.count, 0))}</td>
         <td><strong>${fmtCurrency(aging.totalPastDue)}</strong></td>
         <td style="color:var(--gold-bright);"><strong>${fmtCurrency(aging.requiredAllowance)}</strong></td>
       </tr>`;
+
+    document.querySelectorAll('#tab-receivables .rec-aging-click').forEach((el) => {
+      el.addEventListener('click', () => {
+        openReceivablesAllowanceModal(el.dataset.bucket || 'ALL', document.getElementById('globalBranch')?.value || 'ALL');
+      });
+    });
   }
 
   document.querySelector('#receivablesBranchTable tbody').innerHTML = data.byBranch
@@ -5452,6 +5460,71 @@ function openSalesDrilldown(kind, branchId, label) {
       `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="3">TOTAL (${pays.length} payments shown)</td><td>${fmtCurrency(sAmt)}</td><td colspan="3"></td><td style="color:var(--green);">${fmtCurrency(sFin)}</td></tr>`;
     formulaEl.innerHTML = `<strong>Formula:</strong> Cash-Basis Financing Income = Interest + Penalties − Rebates = <strong>${fmtCurrency(sFin)}</strong>.`;
   }
+
+  modal.classList.remove('hidden');
+}
+
+function openReceivablesAllowanceModal(bucketKey = 'ALL', branchFilter = 'ALL') {
+  const rec = state.receivables || state.salesData?.receivables;
+  const modal = document.getElementById('salesDrilldownModal');
+  if (!rec || !modal) return;
+  const bNames = { ALL: 'All Branches', 'br-bonifacio': 'Bonifacio', 'br-molave': 'Molave', 'br-tambulig': 'Tambulig' };
+  const bucketLabels = { ALL: 'All Past-Due Buckets', '1-30': '1–30 Days (5%)', '31-60': '31–60 Days (20%)', '61-90': '61–90 Days (50%)', '90+': '90+ Days (85%)' };
+  const activeBranch = branchFilter || 'ALL';
+
+  const allPds = rec.pastDues || [];
+  const filtered = allPds.filter((pd) => {
+    if (activeBranch !== 'ALL' && pd.branch_id !== activeBranch) return false;
+    const days = Number(pd.days_due) || 0;
+    if (bucketKey === '1-30') return days <= 30;
+    if (bucketKey === '31-60') return days > 30 && days <= 60;
+    if (bucketKey === '61-90') return days > 60 && days <= 90;
+    if (bucketKey === '90+') return days > 90;
+    return true;
+  });
+
+  document.getElementById('salesDrilldownTitle').textContent = `Opening Allowance Audit — ${bNames[activeBranch] || activeBranch}`;
+  document.getElementById('salesDrilldownSub').textContent = `Bucket: ${bucketLabels[bucketKey] || bucketKey} • ${filtered.length} customer account(s)`;
+
+  const formulaEl = document.getElementById('salesDrilldownFormula');
+  const thead = document.querySelector('#salesDrilldownTable thead');
+  const tbody = document.querySelector('#salesDrilldownTable tbody');
+
+  let sBal = 0;
+  let sAllow = 0;
+  const branchBtns = ['ALL', 'br-bonifacio', 'br-molave', 'br-tambulig']
+    .map(
+      (bid) =>
+        `<button type="button" class="${bid === activeBranch ? '' : 'secondary'} rec-modal-br-btn" data-bid="${bid}" style="padding:3px 9px;font-size:11px;min-height:0;">${bNames[bid]}</button>`
+    )
+    .join(' ');
+
+  thead.innerHTML = '<tr><th>Branch</th><th>Customer &amp; Account #</th><th>Unit</th><th>Days Due</th><th>Unpaid Balance</th><th>Tier Rate</th><th>Required Allowance</th></tr>';
+  tbody.innerHTML =
+    (filtered.length
+      ? filtered
+          .map((pd) => {
+            const bal = Number(pd.balance) || 0;
+            const days = Number(pd.days_due) || 0;
+            const rate = days <= 30 ? 0.05 : days <= 60 ? 0.2 : days <= 90 ? 0.5 : 0.85;
+            const allow = bal * rate;
+            sBal += bal;
+            sAllow += allow;
+            return `<tr><td>${bNames[pd.branch_id] || pd.branch_name || ''}</td><td><strong>${pd.customer_name}</strong><div class="small muted">${pd.account_no}</div></td><td>${pd.unit || ''}</td><td><strong>${days}d</strong></td><td>${fmtCurrency(bal)}</td><td>${Math.round(rate * 100)}%</td><td style="color:#f59e0b;"><strong>${fmtCurrency(allow)}</strong></td></tr>`;
+          })
+          .join('')
+      : '<tr><td colspan="7" class="muted">No past-due customer accounts in this bucket/branch.</td></tr>') +
+    `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="4">TOTAL (${filtered.length} customers)</td><td>${fmtCurrency(sBal)}</td><td>—</td><td style="color:var(--gold-bright);">${fmtCurrency(sAllow)}</td></tr>`;
+
+  formulaEl.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+      <div><strong>Formula:</strong> <code>Customer Unpaid Balance × Aging Tier Rate</code> → Total Allowance: <strong>${fmtCurrency(sAllow)}</strong> (from <strong>${fmtCurrency(sBal)}</strong> past-due).</div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap;">${branchBtns}</div>
+    </div>
+  `;
+  formulaEl.querySelectorAll('.rec-modal-br-btn').forEach((btn) => {
+    btn.addEventListener('click', () => openReceivablesAllowanceModal(bucketKey, btn.dataset.bid));
+  });
 
   modal.classList.remove('hidden');
 }
