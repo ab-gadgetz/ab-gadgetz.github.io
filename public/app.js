@@ -4898,6 +4898,7 @@ async function loadSalesSummary(forceRefresh = false) {
   renderSalesCashPnlTool();
   renderSalesInstallmentAccrualTool();
   renderSalesChartsTool();
+  renderSalesRebatesTool();
 }
 
 function getCashSaleAmount(m) {
@@ -5779,6 +5780,151 @@ document.getElementById('salesYearBtn')?.addEventListener('click', () => {
   setSalesYearRange(y);
 });
 
+function renderSalesRebatesTool() {
+  const sd = state.salesData;
+  const tbody = document.querySelector('#salesRebatesTable tbody');
+  const kpiGrid = document.getElementById('rebatesKpiGrid');
+  const banner = document.getElementById('rebatesInsightBanner');
+  if (!sd || !tbody) return;
+
+  const groupMode = document.getElementById('rebatesGroupMode')?.value || 'MONTHLY';
+  const branchFilter = document.getElementById('rebatesBranchFilter')?.value || 'ALL';
+  const periodHdr = document.getElementById('rebatesPeriodHdr');
+  if (periodHdr) periodHdr.textContent = groupMode === 'ANNUAL' ? 'Year' : 'Month';
+
+  const bNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
+  const branchIds = branchFilter === 'ALL' ? ['br-bonifacio', 'br-molave', 'br-tambulig'] : [branchFilter];
+
+  const keyOf = (dStr) => {
+    const s = String(dStr || '');
+    return groupMode === 'ANNUAL' ? s.slice(0, 4) : s.slice(0, 7);
+  };
+  const validKey = (k) => (groupMode === 'ANNUAL' ? /^\d{4}$/.test(k) : /^\d{4}-\d{2}$/.test(k));
+
+  const map = new Map();
+  const ensure = (period, bid) => {
+    const k = `${period}::${bid}`;
+    if (!map.has(k)) {
+      map.set(k, {
+        period,
+        branchId: bid,
+        branchName: bNames[bid] || bid,
+        payCount: 0,
+        lateCount: 0,
+        rebateCount: 0,
+        interest: 0,
+        penalties: 0,
+        rebates: 0,
+        expenses: 0,
+      });
+    }
+    return map.get(k);
+  };
+
+  for (const p of sd.histFinance?.recentPayments || []) {
+    if (!branchIds.includes(p.branch_id)) continue;
+    const per = keyOf(p.payment_date);
+    if (!validKey(per)) continue;
+    const r = ensure(per, p.branch_id);
+    r.payCount++;
+    const pen = Number(p.penalties) || 0;
+    const reb = Number(p.rebates) || 0;
+    if (pen > 0) r.lateCount++;
+    if (reb > 0) r.rebateCount++;
+    r.interest += Number(p.interest) || 0;
+    r.penalties += pen;
+    r.rebates += reb;
+  }
+
+  for (const e of sd.histFinance?.recentExpenses || []) {
+    if (!branchIds.includes(e.branch_id)) continue;
+    const per = keyOf(e.expense_date);
+    if (!validKey(per)) continue;
+    const k = `${per}::${e.branch_id}`;
+    if (map.has(k)) map.get(k).expenses += Number(e.amount) || 0;
+  }
+
+  const rows = [...map.values()].sort((a, b) => b.period.localeCompare(a.period) || a.branchName.localeCompare(b.branchName));
+
+  let tPay = 0, tLate = 0, tPen = 0, tReb = 0, tInt = 0, tExp = 0;
+  for (const r of rows) {
+    tPay += r.payCount;
+    tLate += r.lateCount;
+    tPen += r.penalties;
+    tReb += r.rebates;
+    tInt += r.interest;
+    tExp += r.expenses;
+  }
+  const tNet = tPen - tReb;
+  const tOffsetPct = tExp > 0 ? (tNet / tExp) * 100 : 0;
+  const tLatePct = tPay > 0 ? (tLate / tPay) * 100 : 0;
+
+  if (kpiGrid) {
+    kpiGrid.innerHTML = `
+      <div class="summary-box">
+        PENALTIES COLLECTED (+INCOME)
+        <strong style="color:var(--green);">${fmtCurrency(tPen)}</strong>
+        <span class="summary-note">${fmtNum(tLate)} late payments (${tLatePct.toFixed(1)}% of ${fmtNum(tPay)})</span>
+      </div>
+      <div class="summary-box">
+        REBATES GRANTED (−INCOME)
+        <strong style="color:#f59e0b;">${fmtCurrency(tReb)}</strong>
+        <span class="summary-note">Contra-financing revenue / early pay discount</span>
+      </div>
+      <div class="summary-box" style="border-color:var(--gold);">
+        NET IMPACT (PENALTIES − REBATES)
+        <strong style="color:${tNet >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(tNet)}</strong>
+        <span class="summary-note">Direct boost to Net Income</span>
+      </div>
+      <div class="summary-box">
+        OPERATING EXPENSE OFFSET
+        <strong style="color:var(--gold-bright);">${tOffsetPct.toFixed(1)}%</strong>
+        <span class="summary-note">of ${fmtCurrency(tExp)} expenses covered by net penalties</span>
+      </div>
+    `;
+  }
+
+  if (banner) {
+    banner.innerHTML = `<strong>Auditor Finding:</strong> Late payment penalties add <strong>+${fmtCurrency(tPen)}</strong> in financing income while rebates reduce income by <strong>−${fmtCurrency(tReb)}</strong>, producing a net income boost of <strong>${fmtCurrency(tNet)}</strong> (offsetting <strong>${tOffsetPct.toFixed(1)}%</strong> of branch operating expenses). Note: AB Web's Dashboard <em>Interest Income</em> excludes penalties—your portal includes them in True Financing Income (<strong>${fmtCurrency(tInt + tNet)}</strong>).`;
+  }
+
+  tbody.innerHTML = rows.length
+    ? rows
+        .map((r) => {
+          const net = r.penalties - r.rebates;
+          const latePct = r.payCount > 0 ? ((r.lateCount / r.payCount) * 100).toFixed(1) : '0.0';
+          const offPct = r.expenses > 0 ? ((net / r.expenses) * 100).toFixed(1) : '0.0';
+          const totFin = r.interest + net;
+          return `
+            <tr>
+              <td><strong>${r.period}</strong></td>
+              <td><strong>${r.branchName}</strong></td>
+              <td>${fmtNum(r.payCount)} <span class="small muted">(${latePct}% late)</span></td>
+              <td style="color:var(--green);"><strong>${fmtCurrency(r.penalties)}</strong></td>
+              <td style="color:#f59e0b;">${fmtCurrency(-r.rebates)}</td>
+              <td style="color:${net >= 0 ? 'var(--green)' : 'var(--danger)'};"><strong>${fmtCurrency(net)}</strong></td>
+              <td style="color:var(--danger);">${fmtCurrency(r.expenses)}</td>
+              <td><strong>${offPct}%</strong></td>
+              <td style="color:var(--gold-bright);"><strong>${fmtCurrency(totFin)}</strong></td>
+            </tr>`;
+        })
+        .join('') +
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;">
+        <td colspan="2">TOTAL</td>
+        <td>${fmtNum(tPay)} (${tLatePct.toFixed(1)}% late)</td>
+        <td style="color:var(--green);">${fmtCurrency(tPen)}</td>
+        <td style="color:#f59e0b;">${fmtCurrency(-tReb)}</td>
+        <td style="color:${tNet >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(tNet)}</td>
+        <td style="color:var(--danger);">${fmtCurrency(tExp)}</td>
+        <td>${tOffsetPct.toFixed(1)}%</td>
+        <td style="color:var(--gold-bright);">${fmtCurrency(tInt + tNet)}</td>
+      </tr>`
+    : '<tr><td colspan="9" class="muted">No synced payment records found for this filter.</td></tr>';
+}
+
+document.getElementById('rebatesGroupMode')?.addEventListener('change', renderSalesRebatesTool);
+document.getElementById('rebatesBranchFilter')?.addEventListener('change', renderSalesRebatesTool);
+
 document.querySelectorAll('.sales-tool-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
     const target = btn.dataset.salestool;
@@ -5787,10 +5933,11 @@ document.querySelectorAll('.sales-tool-btn').forEach((btn) => {
       b.classList.toggle('active', isAct);
       b.classList.toggle('secondary', !isAct);
     });
-    ['summary', 'cashpnl', 'installment', 'consolidated', 'charts'].forEach((t) => {
+    ['summary', 'cashpnl', 'installment', 'consolidated', 'rebates', 'charts'].forEach((t) => {
       document.getElementById(`salesTool-${t}`)?.classList.toggle('hidden', t !== target);
     });
     if (target === 'charts') renderSalesChartsTool();
+    if (target === 'rebates') renderSalesRebatesTool();
   });
 });
 document.getElementById('accrualBadDebtPct')?.addEventListener('input', renderSalesInstallmentAccrualTool);

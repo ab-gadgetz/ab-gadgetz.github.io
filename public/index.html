@@ -558,6 +558,7 @@
           <button type="button" class="secondary sales-tool-btn" data-salestool="cashpnl" style="padding:7px 12px;font-size:12px;">CASH SALES P&amp;L</button>
           <button type="button" class="secondary sales-tool-btn" data-salestool="installment" style="padding:7px 12px;font-size:12px;">INSTALLMENT (ACCRUAL)</button>
           <button type="button" class="secondary sales-tool-btn" data-salestool="consolidated" style="padding:7px 12px;font-size:12px;border-color:var(--gold);color:var(--gold-bright);">CONSOLIDATED P&amp;L (REAL NET INCOME)</button>
+          <button type="button" class="secondary sales-tool-btn" data-salestool="rebates" style="padding:7px 12px;font-size:12px;">REBATES &amp; PENALTIES</button>
           <button type="button" class="secondary sales-tool-btn" data-salestool="charts" style="padding:7px 12px;font-size:12px;">CHARTS (MONTHLY &amp; YEARLY)</button>
         </div>
 
@@ -737,6 +738,50 @@
             </div>
             <div id="salesChartLegend" style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-bottom:10px;"></div>
             <div id="salesChartContainer" style="overflow-x:auto;padding-bottom:8px;"></div>
+          </div>
+        </div>
+
+        <!-- SALES TOOL 6: REBATES & PENALTIES COMPARATIVE REPORT (MONTHLY & ANNUAL) -->
+        <div id="salesTool-rebates" class="hidden">
+          <div class="sub-panel" style="padding:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+              <div>
+                <h4 style="margin:0;color:var(--gold-bright);">Rebates &amp; Penalties Comparative Analysis (Income &amp; Expense Impact)</h4>
+                <p class="muted small" style="margin:2px 0 0;">Penalties add extra financing income (offsetting operating/collection expenses); Rebates reduce interest income (contra-revenue).</p>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <select id="rebatesGroupMode" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="MONTHLY">Monthly Comparison</option>
+                  <option value="ANNUAL">Annual Comparison (By Year)</option>
+                </select>
+                <select id="rebatesBranchFilter" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="ALL">All Branches</option>
+                  <option value="br-bonifacio">Bonifacio</option>
+                  <option value="br-molave">Molave</option>
+                  <option value="br-tambulig">Tambulig</option>
+                </select>
+              </div>
+            </div>
+            <div class="summary-grid" id="rebatesKpiGrid" style="margin-bottom:12px;"></div>
+            <div id="rebatesInsightBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--gold);"></div>
+            <div class="table-wrap">
+              <table class="data-table" id="salesRebatesTable">
+                <thead>
+                  <tr>
+                    <th id="rebatesPeriodHdr">Month</th>
+                    <th>Branch</th>
+                    <th>Payments (Late %)</th>
+                    <th>Penalties (+Income)</th>
+                    <th>Rebates (−Income)</th>
+                    <th>Net Impact (Pen − Reb)</th>
+                    <th>Operating Expenses</th>
+                    <th>Expense Offset %</th>
+                    <th>Total Fin. Income (Int + Pen − Reb)</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
