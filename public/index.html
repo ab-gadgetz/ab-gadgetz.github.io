@@ -541,38 +541,96 @@
           <button type="button" id="salesApplyBtn" style="padding:7px 14px;font-size:12px;">APPLY RANGE</button>
         </div>
 
-        <div class="summary-grid" id="salesKpiGrid" style="margin-bottom:14px;"></div>
-
-        <h4 style="margin:0 0 8px;color:var(--gold-bright);">Daily Cash Sales by Branch</h4>
-        <div class="table-wrap" style="margin-bottom:16px;">
-          <table class="data-table" id="salesDailyTable">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Molave</th>
-                <th>Tambulig</th>
-                <th>Bonifacio</th>
-                <th>Daily Total</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;" id="salesToolsBar">
+          <button type="button" class="sales-tool-btn active" data-salestool="summary" style="padding:7px 12px;font-size:12px;">DAILY &amp; MONTHLY CASH</button>
+          <button type="button" class="secondary sales-tool-btn" data-salestool="cashpnl" style="padding:7px 12px;font-size:12px;">CASH SALES P&amp;L (GROSS → NET)</button>
+          <button type="button" class="secondary sales-tool-btn" data-salestool="installment" style="padding:7px 12px;font-size:12px;">INSTALLMENT SALES (ACCRUAL P&amp;L)</button>
         </div>
 
-        <h4 style="margin:0 0 8px;color:var(--gold-bright);">Monthly Accumulated Cash Sales by Branch</h4>
-        <div class="table-wrap">
-          <table class="data-table" id="salesMonthlyTable">
-            <thead>
-              <tr>
-                <th>Month</th>
-                <th>Molave</th>
-                <th>Tambulig</th>
-                <th>Bonifacio</th>
-                <th>Monthly Total</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+        <div id="salesTool-summary">
+          <div class="summary-grid" id="salesKpiGrid" style="margin-bottom:14px;"></div>
+
+          <h4 style="margin:0 0 8px;color:var(--gold-bright);">Daily Cash Sales by Branch</h4>
+          <div class="table-wrap" style="margin-bottom:16px;">
+            <table class="data-table" id="salesDailyTable">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Molave</th>
+                  <th>Tambulig</th>
+                  <th>Bonifacio</th>
+                  <th>Daily Total</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+
+          <h4 style="margin:0 0 8px;color:var(--gold-bright);">Monthly Accumulated Cash Sales by Branch</h4>
+          <div class="table-wrap">
+            <table class="data-table" id="salesMonthlyTable">
+              <thead>
+                <tr>
+                  <th>Month</th>
+                  <th>Molave</th>
+                  <th>Tambulig</th>
+                  <th>Bonifacio</th>
+                  <th>Monthly Total</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- SALES TOOL 2: CASH SALES P&L (GROSS CASH SALES -> NET INCOME PER BRANCH) -->
+        <div id="salesTool-cashpnl" class="hidden">
+          <div id="cashPnlAuditBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--green);"></div>
+          <div class="table-wrap">
+            <table class="data-table" id="salesCashPnlTable">
+              <thead>
+                <tr>
+                  <th>Cash Sales Income Statement</th>
+                  <th>Bonifacio</th>
+                  <th>Molave</th>
+                  <th>Tambulig</th>
+                  <th>Total (All Branches)</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- SALES TOOL 3: INSTALLMENT SALES (ACCRUAL METHOD P&L vs CASH-PAYMENT BASIS) -->
+        <div id="salesTool-installment" class="hidden">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+            <div>
+              <h4 style="margin:0;color:var(--gold-bright);">Installment Sales Income Statement — Accrual Method (PFRS 15 / Effective Interest)</h4>
+              <p class="muted small" style="margin:2px 0 0;">Recognizes merchandising profit at release and accrues interest monthly as earned (not when cash is collected), minus a bad-debt provision.</p>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <label for="accrualBadDebtPct" style="margin:0;font-size:11px;color:var(--muted);">BAD DEBT PROVISION (% of Past Due):</label>
+              <input type="number" id="accrualBadDebtPct" value="5" min="0" max="50" step="1" style="width:60px;padding:4px 6px;font-size:12px;text-align:center;" />
+            </div>
+          </div>
+
+          <div class="table-wrap" style="margin-bottom:12px;">
+            <table class="data-table" id="salesInstallmentAccrualTable">
+              <thead>
+                <tr>
+                  <th>Installment Accrual P&amp;L Line Item</th>
+                  <th>Bonifacio</th>
+                  <th>Molave</th>
+                  <th>Tambulig</th>
+                  <th>Total (All Branches)</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+
+          <div id="installmentAccrualGuide" class="sub-panel" style="padding:12px;font-size:12px;border-left:3px solid var(--gold);line-height:1.55;"></div>
         </div>
       </div>
     </section>

@@ -4711,21 +4711,27 @@ async function loadSalesSummary() {
   const fetchStart = start < sixMoStart ? start : sixMoStart;
   const fetchEnd = end > todayStr ? end : todayStr;
 
-  const [txRes, actRes] = await Promise.all([
+  const [txRes, actRes, finRes, recRes] = await Promise.all([
     api(`/api/sales/summary?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`).catch(() => ({ transactions: [] })),
     api(`/api/activity?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`).catch(() => ({ allMovements: [] })),
+    api(`/api/finance/summary?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`).catch(() => null),
+    api('/api/receivables/summary').catch(() => null),
   ]);
   state.salesData = {
     start,
     end,
     transactions: txRes?.transactions || [],
     allMovements: actRes?.allMovements || [],
+    finance: finRes,
+    receivables: recRes,
   };
   const liveEl = document.getElementById('salesLiveStatus');
   if (liveEl) {
     liveEl.textContent = `● LIVE • ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`;
   }
   renderSalesSummary();
+  renderSalesCashPnlTool();
+  renderSalesInstallmentAccrualTool();
 }
 
 function getCashSaleAmount(m) {
@@ -4914,6 +4920,239 @@ function renderSalesSummary() {
       : '<tr><td colspan="5" class="muted">No monthly cash sales recorded yet.</td></tr>';
   }
 }
+
+function renderSalesCashPnlTool() {
+  const sd = state.salesData;
+  const tbody = document.querySelector('#salesCashPnlTable tbody');
+  const banner = document.getElementById('cashPnlAuditBanner');
+  if (!sd || !tbody) return;
+
+  const branchIds = ['br-bonifacio', 'br-molave', 'br-tambulig'];
+  const finByBranch = new Map((sd.finance?.byBranch || []).map((b) => [b.branchId, b]));
+  const stats = {};
+  for (const bid of branchIds) {
+    stats[bid] = {
+      gross: 0,
+      disc: 0,
+      net: 0,
+      cogs: 0,
+      gp: 0,
+      expenses: Number(finByBranch.get(bid)?.expenses) || 0,
+      netIncome: 0,
+    };
+  }
+
+  for (const tx of sd.transactions || []) {
+    const dt = String(tx.tx_date || '').slice(0, 10);
+    if (dt < sd.start || dt > sd.end || !stats[tx.branch_id]) continue;
+    const net = Number(tx.amount) || 0;
+    const disc = Number(tx.discount) || 0;
+    const gross = Number(tx.srp) || net + disc;
+    const cogs = Number(tx.unit_cost) || 0;
+    const s = stats[tx.branch_id];
+    s.gross += gross;
+    s.disc += disc;
+    s.net += net;
+    s.cogs += cogs;
+    s.gp += cogs > 0 ? net - cogs : 0;
+  }
+
+  const tot = { gross: 0, disc: 0, net: 0, cogs: 0, gp: 0, expenses: 0, netIncome: 0 };
+  for (const bid of branchIds) {
+    const s = stats[bid];
+    s.netIncome = s.gp - s.expenses;
+    tot.gross += s.gross;
+    tot.disc += s.disc;
+    tot.net += s.net;
+    tot.cogs += s.cogs;
+    tot.gp += s.gp;
+    tot.expenses += s.expenses;
+    tot.netIncome += s.netIncome;
+  }
+
+  const cols = [stats['br-bonifacio'], stats['br-molave'], stats['br-tambulig'], tot];
+  const row = (label, fn, opts = {}) => {
+    const bg = opts.bold ? 'background:rgba(255,255,255,0.03);font-weight:700;' : '';
+    return `<tr style="${bg}"><td>${label}</td>${cols
+      .map((c) => {
+        const val = fn(c);
+        if (opts.pct) return `<td style="color:${val >= 10 ? 'var(--green)' : val >= 5 ? 'var(--gold-bright)' : 'var(--danger)'};"><strong>${val.toFixed(2)}%</strong></td>`;
+        const clr = opts.auto ? (val >= 0 ? 'var(--green)' : 'var(--danger)') : opts.color || '';
+        return `<td ${clr ? `style="color:${clr};"` : ''}>${opts.bold ? `<strong>${fmtCurrency(val)}</strong>` : fmtCurrency(val)}</td>`;
+      })
+      .join('')}</tr>`;
+  };
+
+  tbody.innerHTML = [
+    row('Gross Cash Sales (SRP)', (c) => c.gross),
+    row('Less: Cash Sales Discounts', (c) => -c.disc, { color: 'var(--muted)' }),
+    row('= Net Cash Sales (Amount Collected)', (c) => c.net, { bold: true }),
+    row('Less: Cost of Goods Sold (FIFO Unit Cost)', (c) => -c.cogs, { color: 'var(--danger)' }),
+    row('= True Cash Sales Gross Profit (Net − COGS)', (c) => c.gp, { bold: true, color: 'var(--green)' }),
+    row('True Cash Gross Margin %', (c) => (c.net > 0 ? (c.gp / c.net) * 100 : 0), { pct: true }),
+    row('Less: Branch Operating Expenses', (c) => -c.expenses, { color: 'var(--danger)' }),
+    row('= Cash Sales Net Operating Income (Cash-Only)', (c) => c.netIncome, { bold: true, auto: true }),
+    row('Memo: AB Web Buggy Sales Income (Double-Subtracted Discount)', (c) => c.gp - c.disc, { color: 'var(--muted)' }),
+  ].join('');
+
+  if (banner) {
+    banner.innerHTML = `<strong>Audit Verification (${sd.start} → ${sd.end}):</strong> True Cash Sales Gross Profit is <strong>${fmtCurrency(tot.gp)}</strong> (<strong>${tot.net > 0 ? ((tot.gp / tot.net) * 100).toFixed(2) : '0.00'}%</strong> margin). AB Web's Dashboard understates this by <strong>${fmtCurrency(tot.disc)}</strong> because it subtracts Cash Discounts twice.`;
+  }
+}
+
+function estimateProductCostByName(unitName) {
+  if (!unitName || !state.inventory?.items) return 0;
+  const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const target = norm(unitName);
+  if (!target) return 0;
+  for (const p of state.inventory.items) {
+    const k1 = norm((p.brand || '') + (p.model || p.name));
+    const k2 = norm(p.model || p.name);
+    if (k1 === target || k2 === target || (k2.length > 6 && target.includes(k2))) {
+      const sups = [Number(p.cost_ab) || 0, Number(p.cost_ak) || 0, Number(p.cost_online) || 0].filter((v) => v > 0);
+      if (sups.length) return Math.min(...sups);
+      if (Number(p.cost_price) > 0) return Number(p.cost_price);
+    }
+  }
+  return 0;
+}
+
+function renderSalesInstallmentAccrualTool() {
+  const sd = state.salesData;
+  const tbody = document.querySelector('#salesInstallmentAccrualTable tbody');
+  const guide = document.getElementById('installmentAccrualGuide');
+  if (!sd || !tbody) return;
+
+  const badDebtPct = Math.max(0, Math.min(50, Number(document.getElementById('accrualBadDebtPct')?.value) || 5)) / 100;
+  const branchIds = ['br-bonifacio', 'br-molave', 'br-tambulig'];
+  const finByBranch = new Map((sd.finance?.byBranch || []).map((b) => [b.branchId, b]));
+  const allInst = sd.receivables?.installments || [];
+  const allPastDues = sd.receivables?.pastDues || [];
+
+  // Period length in months (for pro-rating monthly accrued interest)
+  const d1 = new Date(`${sd.start}T00:00:00Z`);
+  const d2 = new Date(`${sd.end}T00:00:00Z`);
+  const periodDays = Math.max(1, Math.round((d2 - d1) / 86400000) + 1);
+  const periodMonths = Math.max(0.1, periodDays / 30);
+
+  const stats = {};
+  for (const bid of branchIds) {
+    stats[bid] = {
+      newCount: 0,
+      contractSales: 0,
+      estCogs: 0,
+      merchGp: 0,
+      accruedInterest: 0,
+      pastDueBalance: 0,
+      badDebtProvision: 0,
+      expenses: Number(finByBranch.get(bid)?.expenses) || 0,
+      accrualNetIncome: 0,
+      abWebCashInterest: Number(finByBranch.get(bid)?.financingIncome) || 0,
+    };
+  }
+
+  for (const inst of allInst) {
+    const bid = inst.branch_id;
+    if (!stats[bid]) continue;
+    const s = stats[bid];
+    const saleDate = String(inst.sale_date || '').slice(0, 10);
+    const term = Math.max(1, Number(inst.term) || 6);
+    const monthly = Number(inst.monthly) || 0;
+    const principal = Number(inst.principal_amount) || 0;
+    const deposit = Number(inst.deposit) || 0;
+    const cashEquivSrp = deposit + principal > 0 ? deposit + principal : Number(inst.amount) || 0;
+
+    // 1. Merchandising Revenue & Gross Profit recognized at Point of Sale (in selected range)
+    if (saleDate >= sd.start && saleDate <= sd.end) {
+      s.newCount++;
+      s.contractSales += cashEquivSrp;
+      const matchedCost = estimateProductCostByName(inst.unit);
+      const unitCogs = matchedCost > 0 ? matchedCost : cashEquivSrp * 0.85;
+      s.estCogs += unitCogs;
+      s.merchGp += Math.max(0, cashEquivSrp - unitCogs);
+    }
+
+    // 2. Accrual Financing Interest earned during the selected period on active contracts
+    if (saleDate <= sd.end) {
+      const startObj = new Date(`${saleDate}T00:00:00Z`);
+      const monthsElapsed = (d2 - startObj) / (86400000 * 30);
+      if (monthsElapsed >= 0 && monthsElapsed <= term + 0.5) {
+        const totalFinanceCharge = Math.max(0, monthly * term - principal);
+        const monthlyEarnedInt = totalFinanceCharge / term;
+        s.accruedInterest += monthlyEarnedInt * Math.min(periodMonths, 1);
+      }
+    }
+  }
+
+  for (const pd of allPastDues) {
+    const bid = pd.branch_id;
+    if (!stats[bid]) continue;
+    stats[bid].pastDueBalance += Number(pd.balance) || 0;
+  }
+
+  const tot = {
+    newCount: 0, contractSales: 0, estCogs: 0, merchGp: 0, accruedInterest: 0,
+    pastDueBalance: 0, badDebtProvision: 0, expenses: 0, accrualNetIncome: 0, abWebCashInterest: 0,
+  };
+  for (const bid of branchIds) {
+    const s = stats[bid];
+    s.badDebtProvision = s.pastDueBalance * badDebtPct;
+    s.accrualNetIncome = s.merchGp + s.accruedInterest - s.badDebtProvision - s.expenses;
+    for (const k of Object.keys(tot)) tot[k] += s[k];
+  }
+
+  const cols = [stats['br-bonifacio'], stats['br-molave'], stats['br-tambulig'], tot];
+  const row = (label, fn, opts = {}) => {
+    const bg = opts.bold ? 'background:rgba(255,255,255,0.03);font-weight:700;' : '';
+    return `<tr style="${bg}"><td>${label}</td>${cols
+      .map((c) => {
+        const val = fn(c);
+        const clr = opts.auto ? (val >= 0 ? 'var(--green)' : 'var(--danger)') : opts.color || '';
+        return `<td ${clr ? `style="color:${clr};"` : ''}>${opts.bold ? `<strong>${fmtCurrency(val)}</strong>` : fmtCurrency(val)}</td>`;
+      })
+      .join('')}</tr>`;
+  };
+
+  tbody.innerHTML = [
+    row('Installment Sales Revenue (Cash-Equiv SRP at Release)', (c) => c.contractSales),
+    row('Less: Est. Unit Cost of Goods Sold (COGS)', (c) => -c.estCogs, { color: 'var(--danger)' }),
+    row('= Installment Merchandising Gross Profit (Earned at Release)', (c) => c.merchGp, { bold: true, color: 'var(--green)' }),
+    row('Add: Accrued Interest Income (Earned Over Term, Accrual Basis)', (c) => c.accruedInterest, { color: 'var(--green)' }),
+    row('= Total Accrual Installment Gross Income', (c) => c.merchGp + c.accruedInterest, { bold: true }),
+    row(`Less: Bad Debt Provision (${Math.round(badDebtPct * 100)}% of Past-Due Portfolio)`, (c) => -c.badDebtProvision, { color: '#f59e0b' }),
+    row('Less: Branch Operating Expenses', (c) => -c.expenses, { color: 'var(--danger)' }),
+    row('= Installment Accrual Net Income', (c) => c.accrualNetIncome, { bold: true, auto: true }),
+    row('Compare: AB Web Cash-Basis Interest Collected (Payments)', (c) => c.abWebCashInterest, { color: 'var(--muted)' }),
+    row('Accrual vs Cash-Basis Interest Variance', (c) => c.accruedInterest - c.abWebCashInterest, { color: 'var(--gold-bright)' }),
+  ].join('');
+
+  if (guide) {
+    guide.innerHTML = `
+      <strong style="color:var(--gold-bright);">How to Properly Compute Installment Net Income Under the Accrual Method (PFRS 15 / Accounting Standards):</strong>
+      <ol style="margin:6px 0 0 18px;padding:0;">
+        <li><strong>Separate Merchandising Revenue from Financing Revenue:</strong> At the moment a phone is released on installment, recognize <em>only</em> the <strong>Cash-Equivalent SRP (Deposit + Principal)</strong> as Sales Revenue and match it immediately against the phone's <strong>FIFO Cost (COGS)</strong> to get <em>Installment Merchandising Gross Profit</em>. Do <strong>not</strong> count downpayments or monthly principal collections as revenue again.</li>
+        <li><strong>Accrue Interest Income Monthly as Earned (Not When Paid):</strong> Record the total finance charge <code>(Monthly × Term) − Principal</code> as <em>Unearned Interest Income</em> (a balance sheet contra-receivable) at release, then recognize interest income each month as time passes—even if a customer pays late—instead of AB Web's cash-payment basis.</li>
+        <li><strong>Match with a Bad Debt Provision (Allowance for Doubtful Accounts):</strong> Because accrual accounting records revenue and interest before cash arrives, deduct a monthly bad-debt allowance (e.g. <strong>5%–10% of Past-Due Accounts</strong>, adjustable above) so Net Income isn't overstated by uncollectible accounts.</li>
+        <li><strong>Deduct Operating Expenses Incurred:</strong> Deduct salaries, rent, utilities, and franchise shares incurred during the period (whether paid in cash or still payable).</li>
+      </ol>
+    `;
+  }
+}
+
+document.querySelectorAll('.sales-tool-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const target = btn.dataset.salestool;
+    document.querySelectorAll('.sales-tool-btn').forEach((b) => {
+      const isAct = b.dataset.salestool === target;
+      b.classList.toggle('active', isAct);
+      b.classList.toggle('secondary', !isAct);
+    });
+    ['summary', 'cashpnl', 'installment'].forEach((t) => {
+      document.getElementById(`salesTool-${t}`)?.classList.toggle('hidden', t !== target);
+    });
+  });
+});
+document.getElementById('accrualBadDebtPct')?.addEventListener('input', renderSalesInstallmentAccrualTool);
 
 document.getElementById('salesMonthInput')?.addEventListener('change', (e) => {
   const ym = e.target.value;
