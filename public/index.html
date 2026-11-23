@@ -747,10 +747,15 @@
           <div class="sub-panel" style="padding:12px;">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
               <div>
-                <h4 style="margin:0;color:var(--gold-bright);">Rebates &amp; Penalties Comparative Analysis (Income &amp; Expense Impact)</h4>
-                <p class="muted small" style="margin:2px 0 0;">Penalties add extra financing income (offsetting operating/collection expenses); Rebates reduce interest income (contra-revenue).</p>
+                <h4 style="margin:0;color:var(--gold-bright);">Rebates &amp; Penalties Comparative Analysis (2.5% Auto-Deducted Detection)</h4>
+                <p class="muted small" style="margin:2px 0 0;">Detects hidden 2.5% early-payment rebates auto-deducted by AB Web before cash posting, computes unrecorded Principal profit overstatement (~67%), and compares against late Penalties &amp; OpEx.</p>
               </div>
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <select id="rebatesDetectionMode" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="DETECTED">Detected 2.5% Rebates (Non-₱5 Fingerprint)</option>
+                  <option value="CEILING">Ceiling Estimate (All No-Penalty = Early 2.5%)</option>
+                  <option value="RECORDED">AB Web Recorded Only (Raw ₱0)</option>
+                </select>
                 <select id="rebatesGroupMode" style="width:auto;padding:5px 9px;font-size:12px;">
                   <option value="MONTHLY">Monthly Comparison</option>
                   <option value="ANNUAL">Annual Comparison (By Year)</option>
@@ -764,20 +769,21 @@
               </div>
             </div>
             <div class="summary-grid" id="rebatesKpiGrid" style="margin-bottom:12px;"></div>
-            <div id="rebatesInsightBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--gold);"></div>
+            <div id="rebatesInsightBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--gold);line-height:1.55;"></div>
             <div class="table-wrap">
               <table class="data-table" id="salesRebatesTable">
                 <thead>
                   <tr>
                     <th id="rebatesPeriodHdr">Month</th>
                     <th>Branch</th>
-                    <th>Payments (Late %)</th>
+                    <th>Payment Events</th>
                     <th>Penalties (+Income)</th>
-                    <th>Rebates (−Income)</th>
+                    <th>2.5% Rebates (−Income)</th>
+                    <th>Hidden Profit Adj (~67% Prin)</th>
                     <th>Net Impact (Pen − Reb)</th>
                     <th>Operating Expenses</th>
                     <th>Expense Offset %</th>
-                    <th>Total Fin. Income (Int + Pen − Reb)</th>
+                    <th>True Fin. Income</th>
                   </tr>
                 </thead>
                 <tbody></tbody>

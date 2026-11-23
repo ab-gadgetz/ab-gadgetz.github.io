@@ -4831,29 +4831,212 @@ function initSalesDateInputs() {
   }
 }
 
+function analyzePaymentRebates(payments, mode = 'DETECTED') {
+  const byEvent = new Map();
+  for (const p of payments || []) {
+    const dt = String(p.payment_date || '').slice(0, 10);
+    const key = `${p.branch_id}|${dt}|${p.account_no || p.customer_name || ''}`;
+    if (!byEvent.has(key)) byEvent.set(key, []);
+    byEvent.get(key).push(p);
+  }
+
+  const REBATE_FACTOR = 0.025 / 0.975; // Net cash = 97.5% of full amort -> Rebate (2.5% of full amort) = Net cash * (0.025 / 0.975)
+  const branchIds = ['br-molave', 'br-tambulig', 'br-bonifacio'];
+  const mkAgg = () => ({
+    eventCount: 0,
+    rowCount: 0,
+    lateCount: 0,
+    onTimeOrEarlyCount: 0,
+    detectedCount: 0,
+    rebatedCount: 0,
+    cashCollected: 0,
+    principal: 0,
+    interest: 0,
+    penalties: 0,
+    explicitRebates: 0,
+    detectedRebates: 0,
+    ceilingRebates: 0,
+    activeRebates: 0,
+    detectedPrincipalLoss: 0,
+    ceilingPrincipalLoss: 0,
+    unrecordedPrincipalLoss: 0,
+    rawFinIncome: 0,
+    trueFinIncome: 0,
+  });
+
+  const byBranch = new Map(branchIds.map((id) => [id, mkAgg()]));
+  const totals = mkAgg();
+  const events = [];
+
+  for (const list of byEvent.values()) {
+    const first = list[0];
+    const bid = first.branch_id;
+    const sumAmt = list.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    const sumPrin = list.reduce((s, r) => s + (Number(r.principal) || 0), 0);
+    const sumInt = list.reduce((s, r) => s + (Number(r.interest) || 0), 0);
+    const sumPen = list.reduce((s, r) => s + (Number(r.penalties) || 0), 0);
+    const sumExpReb = list.reduce((s, r) => s + (Number(r.rebates) || 0), 0);
+
+    // Largest row = primary amortization payment (excludes small advance carryovers like ₱3, ₱14, ₱17)
+    const mainRow = list.reduce((best, r) => ((Number(r.amount) || 0) > (Number(best.amount) || 0) ? r : best), first);
+    const mainAmt = Number(mainRow.amount) || 0;
+    const mainPrin = Number(mainRow.principal) || 0;
+    const mainPrinRatio = mainAmt > 0 ? mainPrin / mainAmt : sumAmt > 0 ? sumPrin / sumAmt : 0.67;
+    const eventPrinRatio = sumAmt > 0 ? sumPrin / sumAmt : 0.67;
+
+    const isLate = sumPen > 0;
+    let isDetected = false;
+    let detectedReb = 0;
+    let detectedPrinLoss = 0;
+    let ceilingReb = 0;
+    let ceilingPrinLoss = 0;
+
+    if (!isLate) {
+      if (sumExpReb > 0) {
+        detectedReb = sumExpReb;
+        ceilingReb = sumExpReb;
+        isDetected = true;
+      } else {
+        const isNotMod5 = mainAmt >= 200 && Math.abs(mainAmt % 5) >= 0.5;
+        const has25PairedRow = list.length >= 2 && sumAmt > 0 && Math.abs(mainAmt / sumAmt - 0.975) <= 0.005;
+        isDetected = isNotMod5 || has25PairedRow;
+        if (isDetected) {
+          detectedReb = mainAmt * REBATE_FACTOR;
+          detectedPrinLoss = detectedReb * mainPrinRatio;
+        }
+        ceilingReb = sumAmt * REBATE_FACTOR;
+        ceilingPrinLoss = ceilingReb * eventPrinRatio;
+      }
+    } else if (sumExpReb > 0) {
+      detectedReb = sumExpReb;
+      ceilingReb = sumExpReb;
+    }
+
+    let activeReb = 0;
+    let activePrinLoss = 0;
+    let activeBaseAmt = 0;
+    let isRebated = false;
+
+    if (mode === 'RECORDED') {
+      activeReb = sumExpReb;
+      activePrinLoss = 0;
+      activeBaseAmt = sumExpReb > 0 ? mainAmt : 0;
+      isRebated = sumExpReb > 0;
+    } else if (mode === 'CEILING') {
+      activeReb = ceilingReb;
+      activePrinLoss = ceilingPrinLoss;
+      activeBaseAmt = !isLate && sumAmt > 0 ? sumAmt : 0;
+      isRebated = !isLate && sumAmt > 0;
+    } else {
+      activeReb = detectedReb;
+      activePrinLoss = detectedPrinLoss;
+      activeBaseAmt = isDetected ? mainAmt : 0;
+      isRebated = isDetected;
+    }
+
+    const rawFinInc = sumInt + sumPen - sumExpReb;
+    // True Financing Income = Scheduled Full Interest + Penalties - Active Rebate
+    // Because AB Web's pro-rated sumInt already reduced Interest by ~(1 - prinRatio) * Rebate,
+    // subtracting ONLY the unrecorded Principal share (prinRatio * Rebate) yields exact FullInt + Pen - Rebate with zero double-counting.
+    const trueFinInc = rawFinInc - activePrinLoss;
+    const alreadyCutFromInt = Math.max(0, activeReb - activePrinLoss);
+    const fullAmortCleared = activeBaseAmt > 0 ? activeBaseAmt + activeReb : sumAmt;
+
+    const ev = {
+      payment_date: String(first.payment_date || '').slice(0, 10),
+      branch_id: bid,
+      branch_name: first.branch_name || '',
+      account_no: first.account_no || '',
+      customer_name: first.customer_name || '',
+      rowCount: list.length,
+      amount: sumAmt,
+      mainAmt,
+      principal: sumPrin,
+      interest: sumInt,
+      penalties: sumPen,
+      explicitRebates: sumExpReb,
+      isLate,
+      isDetected,
+      isRebated,
+      detectedRebate: detectedReb,
+      ceilingRebate: ceilingReb,
+      activeRebate: activeReb,
+      activeBaseAmt,
+      fullAmortCleared,
+      alreadyCutFromInt,
+      detectedPrincipalLoss: detectedPrinLoss,
+      ceilingPrincipalLoss: ceilingPrinLoss,
+      unrecordedPrincipalLoss: activePrinLoss,
+      rawFinInc,
+      trueFinInc,
+    };
+    events.push(ev);
+
+    const addTo = (agg) => {
+      if (!agg) return;
+      agg.eventCount++;
+      agg.rowCount += list.length;
+      if (isLate) agg.lateCount++;
+      else agg.onTimeOrEarlyCount++;
+      if (isDetected) agg.detectedCount++;
+      if (isRebated) agg.rebatedCount++;
+      agg.cashCollected += sumAmt;
+      agg.principal += sumPrin;
+      agg.interest += sumInt;
+      agg.penalties += sumPen;
+      agg.explicitRebates += sumExpReb;
+      agg.detectedRebates += detectedReb;
+      agg.ceilingRebates += ceilingReb;
+      agg.activeRebates += activeReb;
+      agg.detectedPrincipalLoss += detectedPrinLoss;
+      agg.ceilingPrincipalLoss += ceilingPrinLoss;
+      agg.unrecordedPrincipalLoss += activePrinLoss;
+      agg.rawFinIncome += rawFinInc;
+      agg.trueFinIncome += trueFinInc;
+    };
+    addTo(byBranch.get(bid));
+    addTo(totals);
+  }
+
+  return { events, byBranch, totals };
+}
+
 function buildScopedFinanceFromCache(histFin, start, end) {
   const branches = [
     { branchId: 'br-molave', branchName: 'Molave' },
     { branchId: 'br-tambulig', branchName: 'Tambulig' },
     { branchId: 'br-bonifacio', branchName: 'Bonifacio' },
   ];
-  const map = new Map(
-    branches.map((b) => [b.branchId, { ...b, collections: 0, financingIncome: 0, expenses: 0 }])
-  );
   const recentPayments = (histFin?.recentPayments || []).filter((p) => p.payment_date >= start && p.payment_date <= end);
   const recentExpenses = (histFin?.recentExpenses || []).filter((e) => e.expense_date >= start && e.expense_date <= end);
-  for (const p of recentPayments) {
-    const b = map.get(p.branch_id);
-    if (b) {
-      b.collections += Number(p.amount) || 0;
-      b.financingIncome += (Number(p.interest) || 0) + (Number(p.penalties) || 0) - (Number(p.rebates) || 0);
-    }
-  }
+  const rebAnalysis = analyzePaymentRebates(recentPayments, 'DETECTED');
+
+  const map = new Map(
+    branches.map((b) => {
+      const ra = rebAnalysis.byBranch.get(b.branchId);
+      return [
+        b.branchId,
+        {
+          ...b,
+          collections: ra?.cashCollected || 0,
+          interest: ra?.interest || 0,
+          penalties: ra?.penalties || 0,
+          explicitRebates: ra?.explicitRebates || 0,
+          detectedRebates: ra?.detectedRebates || 0,
+          ceilingRebates: ra?.ceilingRebates || 0,
+          unrecordedPrincipalLoss: ra?.unrecordedPrincipalLoss || 0,
+          rawFinancingIncome: ra?.rawFinIncome || 0,
+          financingIncome: ra?.trueFinIncome || 0,
+          expenses: 0,
+        },
+      ];
+    })
+  );
   for (const e of recentExpenses) {
     const b = map.get(e.branch_id);
     if (b) b.expenses += Number(e.amount) || 0;
   }
-  return { byBranch: Array.from(map.values()), recentPayments, recentExpenses };
+  return { byBranch: Array.from(map.values()), recentPayments, recentExpenses, rebAnalysis };
 }
 
 async function loadSalesSummary(forceRefresh = false) {
@@ -5217,6 +5400,7 @@ function renderSalesInstallmentAccrualTool() {
   for (const bid of branchIds) {
     const branchPds = allPastDues.filter((pd) => pd.branch_id === bid);
     const ag = computeAgingAllowance(branchPds);
+    const finRec = finByBranch.get(bid);
     stats[bid] = {
       newCount: 0,
       newPrincipal: 0,
@@ -5224,12 +5408,15 @@ function renderSalesInstallmentAccrualTool() {
       estCogs: 0,
       merchGp: 0,
       accruedInterest: 0,
+      penalties: Number(finRec?.penalties) || 0,
+      detectedRebates: Number(finRec?.detectedRebates) || 0,
+      unrecordedPrincipalLoss: Number(finRec?.unrecordedPrincipalLoss) || 0,
       pastDueBalance: ag.totalPastDue,
       openingAllowance: ag.requiredAllowance,
       badDebtProvision: 0,
-      expenses: Number(finByBranch.get(bid)?.expenses) || 0,
+      expenses: Number(finRec?.expenses) || 0,
       accrualNetIncome: 0,
-      abWebCashInterest: Number(finByBranch.get(bid)?.financingIncome) || 0,
+      abWebCashInterest: Number(finRec?.financingIncome) || 0,
     };
   }
 
@@ -5269,13 +5456,14 @@ function renderSalesInstallmentAccrualTool() {
 
   const tot = {
     newCount: 0, newPrincipal: 0, contractSales: 0, estCogs: 0, merchGp: 0, accruedInterest: 0,
+    penalties: 0, detectedRebates: 0, unrecordedPrincipalLoss: 0,
     pastDueBalance: 0, openingAllowance: 0, badDebtProvision: 0, expenses: 0, accrualNetIncome: 0, abWebCashInterest: 0,
   };
   for (const bid of branchIds) {
     const s = stats[bid];
     // Prospective Monthly Bad Debt Expense = % of New Installment Principal
     s.badDebtProvision = s.newPrincipal * badDebtPct;
-    s.accrualNetIncome = s.merchGp + s.accruedInterest - s.badDebtProvision - s.expenses;
+    s.accrualNetIncome = s.merchGp + s.accruedInterest + s.penalties - s.detectedRebates - s.badDebtProvision - s.expenses;
     for (const k of Object.keys(tot)) tot[k] += s[k];
   }
 
@@ -5300,12 +5488,14 @@ function renderSalesInstallmentAccrualTool() {
     row('Less: Est. Unit Cost of Goods Sold (COGS)', (c) => -c.estCogs, { color: 'var(--danger)', drill: 'installment' }),
     row('= Installment Merchandising Gross Profit (Earned at Release)', (c) => c.merchGp, { bold: true, color: 'var(--green)', drill: 'installment' }),
     row('Add: Accrued Interest Income (Earned Over Term, Accrual Basis)', (c) => c.accruedInterest, { color: 'var(--green)', drill: 'accrued_interest' }),
-    row('= Total Accrual Installment Gross Income', (c) => c.merchGp + c.accruedInterest, { bold: true, drill: 'installment' }),
+    row('Add: Late Payment Penalties Collected', (c) => c.penalties, { color: 'var(--green)', drill: 'penalties' }),
+    row('Less: Early-Payment Rebates (2.5% Auto-Deducted Detection)', (c) => -c.detectedRebates, { color: '#f59e0b', drill: 'rebates_detected' }),
+    row('= Total Accrual Installment Gross Income', (c) => c.merchGp + c.accruedInterest + c.penalties - c.detectedRebates, { bold: true, drill: 'installment' }),
     row(`Less: Prospective Monthly Bad Debt Expense (${(badDebtPct * 100).toFixed(1)}% of New Principal)`, (c) => -c.badDebtProvision, { color: '#f59e0b', drill: 'installment' }),
-    row('= Net Installment & Financing Contribution (Before Shared OpEx)', (c) => c.merchGp + c.accruedInterest - c.badDebtProvision, { bold: true, auto: true, drill: 'installment' }),
+    row('= Net Installment & Financing Contribution (Before Shared OpEx)', (c) => c.merchGp + c.accruedInterest + c.penalties - c.detectedRebates - c.badDebtProvision, { bold: true, auto: true, drill: 'installment' }),
     row('Memo: One-Time Opening Allowance (Aging-Based on Past-Due Accounts — Synced w/ Receivables)', (c) => c.openingAllowance, { color: '#f59e0b', drill: 'opening_allowance' }),
-    row('Compare: AB Web Cash-Basis Interest Collected (Payments)', (c) => c.abWebCashInterest, { color: 'var(--muted)', drill: 'cash_interest' }),
-    row('Accrual vs Cash-Basis Interest Variance', (c) => c.accruedInterest - c.abWebCashInterest, { color: 'var(--gold-bright)', drill: 'accrued_interest' }),
+    row('Compare: Cash-Basis Financing Income (Int + Pen − Hidden Rebate Prin. Adj)', (c) => c.abWebCashInterest, { color: 'var(--muted)', drill: 'cash_interest' }),
+    row('Accrual vs Cash-Basis Financing Variance', (c) => (c.accruedInterest + c.penalties - c.detectedRebates) - c.abWebCashInterest, { color: 'var(--gold-bright)', drill: 'accrued_interest' }),
   ].join('');
 
   state.salesInstStats = { stats, tot, badDebtPct };
@@ -5316,8 +5506,8 @@ function renderSalesInstallmentAccrualTool() {
       <strong style="color:var(--gold-bright);">How to Properly Compute Installment Net Income Under the Accrual Method (PFRS 15 / Accounting Standards):</strong>
       <ol style="margin:6px 0 0 18px;padding:0;">
         <li><strong>Separate Merchandising Revenue from Financing Revenue:</strong> At the moment a phone is released on installment, recognize <em>only</em> the <strong>Cash-Equivalent SRP (Deposit + Principal)</strong> as Sales Revenue and match it immediately against the phone's <strong>FIFO Cost (COGS)</strong> to get <em>Installment Merchandising Gross Profit</em>. Do <strong>not</strong> count downpayments or monthly principal collections as revenue again.</li>
-        <li><strong>Accrue Interest Income Monthly as Earned (Not When Paid):</strong> Record the total finance charge <code>(Monthly × Term) − Principal</code> as <em>Unearned Interest Income</em> (a balance sheet contra-receivable) at release, then recognize interest income each month as time passes—even if a customer pays late—instead of AB Web's cash-payment basis.</li>
-        <li><strong>Match with a Bad Debt Provision (Allowance for Doubtful Accounts):</strong> Because accrual accounting records revenue and interest before cash arrives, deduct a monthly bad-debt allowance (e.g. <strong>5%–10% of Past-Due Accounts</strong>, adjustable above) so Net Income isn't overstated by uncollectible accounts.</li>
+        <li><strong>Accrue Interest Income Monthly as Earned &amp; Adjust for Penalties/Rebates:</strong> Record the total finance charge <code>(Monthly × Term) − Principal</code> as <em>Unearned Interest Income</em> at release, then recognize gross interest monthly, adding <strong>Late Payment Penalties</strong> and deducting <strong>2.5% Early-Payment Rebates</strong> (auto-deducted by AB Web before cash posting).</li>
+        <li><strong>Match with a Bad Debt Provision (Allowance for Doubtful Accounts):</strong> Because accrual accounting records revenue and interest before cash arrives, deduct a monthly bad-debt allowance (e.g. <strong>3% of New Principal</strong>, adjustable above) so Net Income isn't overstated by uncollectible accounts.</li>
         <li><strong>Deduct Operating Expenses Incurred:</strong> Deduct salaries, rent, utilities, and franchise shares incurred during the period (whether paid in cash or still payable).</li>
       </ol>
     `;
@@ -5336,7 +5526,7 @@ function renderSalesConsolidatedTool() {
   const finByBranch = new Map((sd.finance?.byBranch || []).map((b) => [b.branchId, b]));
 
   const buildCol = (c, i, exp) => {
-    const instContrib = i.merchGp + i.accruedInterest - i.badDebtProvision;
+    const instContrib = i.merchGp + i.accruedInterest + (i.penalties || 0) - (i.detectedRebates || 0) - i.badDebtProvision;
     const totalGrossContrib = c.gp + instContrib;
     const realAccrualNet = totalGrossContrib - exp;
     const cashBasisTotalGross = c.gp + i.merchGp + i.abWebCashInterest;
@@ -5351,6 +5541,9 @@ function renderSalesConsolidatedTool() {
       instCogs: i.estCogs,
       instGp: i.merchGp,
       accruedInt: i.accruedInterest,
+      penalties: i.penalties || 0,
+      detectedRebates: i.detectedRebates || 0,
+      unrecordedPrincipalLoss: i.unrecordedPrincipalLoss || 0,
       badDebt: i.badDebtProvision,
       openingAllowance: i.openingAllowance || 0,
       instContrib,
@@ -5392,19 +5585,22 @@ function renderSalesConsolidatedTool() {
     row('B. Installment Sales Revenue (Cash-Equiv SRP)', (c) => c.instRev, { drill: 'installment' }),
     row('   Less: Est. Installment Unit COGS', (c) => -c.instCogs, { color: 'var(--danger)', drill: 'installment' }),
     row('   = Installment Merchandising Gross Profit', (c) => c.instGp, { color: 'var(--green)', drill: 'installment' }),
-    row('   Add: Accrued Interest Income (Monthly Earned)', (c) => c.accruedInt, { color: 'var(--green)', drill: 'accrued_interest' }),
+    row('   Add: Accrued Interest Income (Monthly Earned, Gross)', (c) => c.accruedInt, { color: 'var(--green)', drill: 'accrued_interest' }),
+    row('   Add: Late Payment Penalties Collected', (c) => c.penalties, { color: 'var(--green)', drill: 'penalties' }),
+    row('   Less: Early-Payment Rebates (2.5% Auto-Deducted Detection)', (c) => -c.detectedRebates, { color: '#f59e0b', drill: 'rebates_detected' }),
     row(`   Less: Prospective Monthly Bad Debt (${((instData.badDebtPct || 0.03) * 100).toFixed(1)}% of New Principal)`, (c) => -c.badDebt, { color: '#f59e0b', drill: 'installment' }),
     row('   = Net Installment & Financing Contribution', (c) => c.instContrib, { bold: true, color: 'var(--green)', drill: 'installment' }),
     row('C. Total Consolidated Gross Contribution (A + B)', (c) => c.totalGrossContrib, { bold: true, drill: 'cash' }),
     row('D. Less: Shared Branch Operating Expenses (Deducted ONCE)', (c) => -c.expenses, { color: 'var(--danger)', drill: 'expenses' }),
     row('E. REAL CONSOLIDATED NET INCOME (Accrual Method)', (c) => c.realAccrualNet, { bold: true, auto: true, drill: 'expenses' }),
     row('Memo: One-Time Opening Allowance (Aging-Based — Synced w/ Receivables Tab)', (c) => c.openingAllowance, { color: '#f59e0b', drill: 'opening_allowance' }),
-    row('Reference: Consolidated Net Income (Using Cash-Collected Interest, No Double-Discount)', (c) => c.realCashInterestNet, { bold: true, color: 'var(--gold-bright)', drill: 'cash_interest' }),
+    row('Memo: Hidden Rebate Profit Overstatement in AB Web (~67% Principal Share)', (c) => -c.unrecordedPrincipalLoss, { color: '#f59e0b', drill: 'rebates_detected' }),
+    row('Reference: Consolidated Net Income (Cash-Collected Int., Adj. for Penalties & 2.5% Rebates)', (c) => c.realCashInterestNet, { bold: true, color: 'var(--gold-bright)', drill: 'cash_interest' }),
   ].join('');
 
   const totCol = cols[cols.length - 1];
   if (banner) {
-    banner.innerHTML = `<strong>Consolidated Branch P&amp;L (${sd.start} → ${sd.end}):</strong> Combines True Cash Sales Gross Profit (<strong>${fmtCurrency(totCol.cashGp)}</strong>) + Net Installment &amp; Financing Contribution (<strong>${fmtCurrency(totCol.instContrib)}</strong>), then deducts Shared Branch Operating Expenses (<strong>${fmtCurrency(totCol.expenses)}</strong>) <strong>once</strong> → Real Accrual Net Income: <strong style="color:${totCol.realAccrualNet >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(totCol.realAccrualNet)}</strong> (or <strong style="color:var(--gold-bright);">${fmtCurrency(totCol.realCashInterestNet)}</strong> on a cash-collected interest basis).`;
+    banner.innerHTML = `<strong>Consolidated Branch P&amp;L (${sd.start} → ${sd.end}):</strong> Combines Cash GP (<strong>${fmtCurrency(totCol.cashGp)}</strong>) + Installment &amp; Financing Contribution (<strong>${fmtCurrency(totCol.instContrib)}</strong>, incl. <strong style="color:var(--green);">+${fmtCurrency(totCol.penalties)}</strong> penalties &amp; <strong style="color:#f59e0b;">−${fmtCurrency(totCol.detectedRebates)}</strong> detected 2.5% rebates), less Shared OpEx (<strong>${fmtCurrency(totCol.expenses)}</strong>) <strong>once</strong> → Real Accrual Net Income: <strong style="color:${totCol.realAccrualNet >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(totCol.realAccrualNet)}</strong> (Cash-Collected basis: <strong style="color:var(--gold-bright);">${fmtCurrency(totCol.realCashInterestNet)}</strong> after <strong>−${fmtCurrency(totCol.unrecordedPrincipalLoss)}</strong> hidden Principal rebate adj.).`;
   }
   renderHistoricalRestatedNetIncome();
 }
@@ -5478,6 +5674,13 @@ function renderHistoricalRestatedNetIncome() {
         rowMap.get(mo).instIncome += moInt;
       }
     }
+  }
+
+  // 2b. Add Net Penalties − Detected 2.5% Early-Payment Rebates per payment month
+  const allPays = (sd.histFinance?.recentPayments || sd.finance?.recentPayments || []).filter((p) => matchBranch(p.branch_id));
+  for (const ev of analyzePaymentRebates(allPays, 'DETECTED').events) {
+    const mo = String(ev.payment_date || '').slice(0, 7);
+    if (rowMap.has(mo)) rowMap.get(mo).instIncome += ev.penalties - ev.activeRebate;
   }
 
   // 3. Operating Expenses per month
@@ -5606,11 +5809,11 @@ function renderSalesChartsTool() {
       if (!validKey(k) || !['br-molave', 'br-tambulig', 'br-bonifacio'].includes(e.branch_id)) continue;
       ensure(k)[e.branch_id].exp += Number(e.amount) || 0;
     }
-    for (const p of sd.histFinance?.recentPayments || []) {
-      const k = keyOf(p.payment_date);
-      if (!validKey(k) || !['br-molave', 'br-tambulig', 'br-bonifacio'].includes(p.branch_id)) continue;
-      const finInc = (Number(p.interest) || 0) + (Number(p.penalties) || 0) - (Number(p.rebates) || 0);
-      ensure(k)[p.branch_id].inst += finInc;
+    const chartReb = analyzePaymentRebates(sd.histFinance?.recentPayments || [], 'DETECTED');
+    for (const ev of chartReb.events) {
+      const k = keyOf(ev.payment_date);
+      if (!validKey(k) || !['br-molave', 'br-tambulig', 'br-bonifacio'].includes(ev.branch_id)) continue;
+      ensure(k)[ev.branch_id].inst += ev.trueFinInc;
     }
     for (const inst of sd.receivables?.installments || []) {
       const k = keyOf(inst.sale_date);
@@ -5871,6 +6074,7 @@ function renderSalesRebatesTool() {
   const banner = document.getElementById('rebatesInsightBanner');
   if (!sd || !tbody) return;
 
+  const detectMode = document.getElementById('rebatesDetectionMode')?.value || 'DETECTED';
   const groupMode = document.getElementById('rebatesGroupMode')?.value || 'MONTHLY';
   const branchFilter = document.getElementById('rebatesBranchFilter')?.value || 'ALL';
   const periodHdr = document.getElementById('rebatesPeriodHdr');
@@ -5885,6 +6089,9 @@ function renderSalesRebatesTool() {
   };
   const validKey = (k) => (groupMode === 'ANNUAL' ? /^\d{4}$/.test(k) : /^\d{4}-\d{2}$/.test(k));
 
+  const scopedPayments = (sd.histFinance?.recentPayments || []).filter((p) => branchIds.includes(p.branch_id));
+  const rebAnalysis = analyzePaymentRebates(scopedPayments, detectMode);
+
   const map = new Map();
   const ensure = (period, bid) => {
     const k = `${period}::${bid}`;
@@ -5893,31 +6100,36 @@ function renderSalesRebatesTool() {
         period,
         branchId: bid,
         branchName: bNames[bid] || bid,
-        payCount: 0,
+        eventCount: 0,
         lateCount: 0,
-        rebateCount: 0,
+        rebatedCount: 0,
         interest: 0,
         penalties: 0,
+        explicitRebates: 0,
         rebates: 0,
+        ceilingRebates: 0,
+        unrecordedPrincipalLoss: 0,
+        trueFinIncome: 0,
         expenses: 0,
       });
     }
     return map.get(k);
   };
 
-  for (const p of sd.histFinance?.recentPayments || []) {
-    if (!branchIds.includes(p.branch_id)) continue;
-    const per = keyOf(p.payment_date);
+  for (const ev of rebAnalysis.events) {
+    const per = keyOf(ev.payment_date);
     if (!validKey(per)) continue;
-    const r = ensure(per, p.branch_id);
-    r.payCount++;
-    const pen = Number(p.penalties) || 0;
-    const reb = Number(p.rebates) || 0;
-    if (pen > 0) r.lateCount++;
-    if (reb > 0) r.rebateCount++;
-    r.interest += Number(p.interest) || 0;
-    r.penalties += pen;
-    r.rebates += reb;
+    const r = ensure(per, ev.branch_id);
+    r.eventCount++;
+    if (ev.isLate) r.lateCount++;
+    if (ev.isRebated) r.rebatedCount++;
+    r.interest += ev.interest;
+    r.penalties += ev.penalties;
+    r.explicitRebates += ev.explicitRebates;
+    r.rebates += ev.activeRebate;
+    r.ceilingRebates += ev.ceilingRebate;
+    r.unrecordedPrincipalLoss += ev.unrecordedPrincipalLoss;
+    r.trueFinIncome += ev.trueFinInc;
   }
 
   for (const e of sd.histFinance?.recentExpenses || []) {
@@ -5930,82 +6142,101 @@ function renderSalesRebatesTool() {
 
   const rows = [...map.values()].sort((a, b) => b.period.localeCompare(a.period) || a.branchName.localeCompare(b.branchName));
 
-  let tPay = 0, tLate = 0, tPen = 0, tReb = 0, tInt = 0, tExp = 0;
+  let tEvents = 0, tLate = 0, tRebCnt = 0, tPen = 0, tReb = 0, tCeilReb = 0, tExpReb = 0, tPrinLoss = 0, tTrueFin = 0, tExp = 0;
   for (const r of rows) {
-    tPay += r.payCount;
+    tEvents += r.eventCount;
     tLate += r.lateCount;
+    tRebCnt += r.rebatedCount;
     tPen += r.penalties;
     tReb += r.rebates;
-    tInt += r.interest;
+    tCeilReb += r.ceilingRebates;
+    tExpReb += r.explicitRebates;
+    tPrinLoss += r.unrecordedPrincipalLoss;
+    tTrueFin += r.trueFinIncome;
     tExp += r.expenses;
   }
   const tNet = tPen - tReb;
   const tOffsetPct = tExp > 0 ? (tNet / tExp) * 100 : 0;
-  const tLatePct = tPay > 0 ? (tLate / tPay) * 100 : 0;
+  const tLatePct = tEvents > 0 ? (tLate / tEvents) * 100 : 0;
+  const tRebPct = tEvents > 0 ? (tRebCnt / tEvents) * 100 : 0;
+  const modeLabel = detectMode === 'CEILING' ? 'Ceiling 2.5%' : detectMode === 'RECORDED' ? 'AB Web Raw' : 'Detected 2.5%';
 
   if (kpiGrid) {
     kpiGrid.innerHTML = `
       <div class="summary-box">
         PENALTIES COLLECTED (+INCOME)
         <strong style="color:var(--green);">${fmtCurrency(tPen)}</strong>
-        <span class="summary-note">${fmtNum(tLate)} late payments (${tLatePct.toFixed(1)}% of ${fmtNum(tPay)})</span>
+        <span class="summary-note">${fmtNum(tLate)} late events (${tLatePct.toFixed(1)}% of ${fmtNum(tEvents)})</span>
       </div>
       <div class="summary-box">
-        REBATES GRANTED (−INCOME)
-        <strong style="color:#f59e0b;">${fmtCurrency(tReb)}</strong>
-        <span class="summary-note">Contra-financing revenue / early pay discount</span>
+        EARLY-PAY REBATES (${modeLabel.toUpperCase()})
+        <strong style="color:#f59e0b;">${fmtCurrency(-tReb)}</strong>
+        <span class="summary-note">${fmtNum(tRebCnt)} rebated (${tRebPct.toFixed(1)}%) • Ceiling: ${fmtCurrency(tCeilReb)} • AB Web logged: ${fmtCurrency(tExpReb)}</span>
+      </div>
+      <div class="summary-box" style="border-color:#f59e0b;">
+        HIDDEN PROFIT OVERSTATEMENT (~67% PRIN.)
+        <strong style="color:${tPrinLoss > 0 ? '#f59e0b' : 'var(--muted)'};">${fmtCurrency(-tPrinLoss)}</strong>
+        <span class="summary-note">Principal share of 2.5% rebates never deducted in AB Web</span>
       </div>
       <div class="summary-box" style="border-color:var(--gold);">
-        NET IMPACT (PENALTIES − REBATES)
+        TRUE NET IMPACT (PENALTIES − REBATES)
         <strong style="color:${tNet >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(tNet)}</strong>
-        <span class="summary-note">Direct boost to Net Income</span>
-      </div>
-      <div class="summary-box">
-        OPERATING EXPENSE OFFSET
-        <strong style="color:var(--gold-bright);">${tOffsetPct.toFixed(1)}%</strong>
-        <span class="summary-note">of ${fmtCurrency(tExp)} expenses covered by net penalties</span>
+        <span class="summary-note">Offsets ${tOffsetPct.toFixed(1)}% of ${fmtCurrency(tExp)} OpEx • True Fin: ${fmtCurrency(tTrueFin)}</span>
       </div>
     `;
   }
 
   if (banner) {
-    banner.innerHTML = `<strong>Auditor Finding:</strong> Late payment penalties add <strong>+${fmtCurrency(tPen)}</strong> in financing income while rebates reduce income by <strong>−${fmtCurrency(tReb)}</strong>, producing a net income boost of <strong>${fmtCurrency(tNet)}</strong> (offsetting <strong>${tOffsetPct.toFixed(1)}%</strong> of branch operating expenses). Note: AB Web's Dashboard <em>Interest Income</em> excludes penalties—your portal includes them in True Financing Income (<strong>${fmtCurrency(tInt + tNet)}</strong>).`;
+    banner.innerHTML = `
+      <strong>2.5% Auto-Deducted Rebate Audit (${modeLabel}):</strong>
+      AB Web logged <strong>${fmtCurrency(tExpReb)}</strong> in its Rebates column because it auto-deducts 2.5% from the customer's schedule before posting net cash received (<code>97.5%</code> of full monthly amortization).
+      Since AB Web pro-rates that lower net cash into Principal (~67%) and Interest (~33%), only ~33% of each rebate reduces AB Web Interest while the remaining <strong>${fmtCurrency(tPrinLoss)}</strong> Principal share is <strong>unrecorded profit overstatement</strong>.
+      Overall, late penalties (<strong>+${fmtCurrency(tPen)}</strong>) vs. early-payment rebates (<strong>−${fmtCurrency(tReb)}</strong>) yield a net financing impact of <strong style="color:${tNet >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(tNet)}</strong> (offsetting <strong>${tOffsetPct.toFixed(1)}%</strong> of branch operating expenses).
+      <span class="muted">Click any Penalty, Rebate, or Hidden Profit Adj. figure below to inspect every customer payment.</span>
+    `;
   }
+
+  const drillCell = (kind, bid, period, label, val, color, bold = false) => {
+    const attrs = `class="sales-drill-cell" data-drill-kind="${kind}" data-drill-branch="${bid}" data-drill-period="${period}" data-drill-mode="${detectMode}" data-drill-label="${label.replace(/"/g, '&quot;')}" title="Click to audit customer payments" style="cursor:pointer;text-decoration:underline dotted;${color ? `color:${color};` : ''}"`;
+    return `<td ${attrs}>${bold ? `<strong>${fmtCurrency(val)}</strong>` : fmtCurrency(val)}</td>`;
+  };
 
   tbody.innerHTML = rows.length
     ? rows
         .map((r) => {
           const net = r.penalties - r.rebates;
-          const latePct = r.payCount > 0 ? ((r.lateCount / r.payCount) * 100).toFixed(1) : '0.0';
+          const latePct = r.eventCount > 0 ? ((r.lateCount / r.eventCount) * 100).toFixed(1) : '0.0';
           const offPct = r.expenses > 0 ? ((net / r.expenses) * 100).toFixed(1) : '0.0';
-          const totFin = r.interest + net;
           return `
             <tr>
               <td><strong>${r.period}</strong></td>
               <td><strong>${r.branchName}</strong></td>
-              <td>${fmtNum(r.payCount)} <span class="small muted">(${latePct}% late)</span></td>
-              <td style="color:var(--green);"><strong>${fmtCurrency(r.penalties)}</strong></td>
-              <td style="color:#f59e0b;">${fmtCurrency(-r.rebates)}</td>
+              <td>${fmtNum(r.eventCount)} <span class="small muted">(${r.lateCount} late ${latePct}% • ${r.rebatedCount} rebated)</span></td>
+              ${drillCell('penalties', r.branchId, r.period, `Late Payment Penalties (${r.period})`, r.penalties, 'var(--green)', true)}
+              ${drillCell('rebates_detected', r.branchId, r.period, `2.5% Early-Payment Rebates (${r.period} • ${modeLabel})`, -r.rebates, '#f59e0b', true)}
+              ${drillCell('rebates_detected', r.branchId, r.period, `Hidden Principal Profit Overstatement (${r.period} • ${modeLabel})`, -r.unrecordedPrincipalLoss, '#f59e0b', false)}
               <td style="color:${net >= 0 ? 'var(--green)' : 'var(--danger)'};"><strong>${fmtCurrency(net)}</strong></td>
               <td style="color:var(--danger);">${fmtCurrency(r.expenses)}</td>
               <td><strong>${offPct}%</strong></td>
-              <td style="color:var(--gold-bright);"><strong>${fmtCurrency(totFin)}</strong></td>
+              <td style="color:var(--gold-bright);"><strong>${fmtCurrency(r.trueFinIncome)}</strong></td>
             </tr>`;
         })
         .join('') +
       `<tr style="background:rgba(255,255,255,0.05);font-weight:700;">
         <td colspan="2">TOTAL</td>
-        <td>${fmtNum(tPay)} (${tLatePct.toFixed(1)}% late)</td>
-        <td style="color:var(--green);">${fmtCurrency(tPen)}</td>
-        <td style="color:#f59e0b;">${fmtCurrency(-tReb)}</td>
+        <td>${fmtNum(tEvents)} (${tLate} late ${tLatePct.toFixed(1)}% • ${tRebCnt} rebated)</td>
+        ${drillCell('penalties', branchFilter, 'ALL', `All Late Payment Penalties`, tPen, 'var(--green)', true)}
+        ${drillCell('rebates_detected', branchFilter, 'ALL', `All 2.5% Early-Payment Rebates (${modeLabel})`, -tReb, '#f59e0b', true)}
+        ${drillCell('rebates_detected', branchFilter, 'ALL', `Total Hidden Profit Overstatement (${modeLabel})`, -tPrinLoss, '#f59e0b', true)}
         <td style="color:${tNet >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(tNet)}</td>
         <td style="color:var(--danger);">${fmtCurrency(tExp)}</td>
         <td>${tOffsetPct.toFixed(1)}%</td>
-        <td style="color:var(--gold-bright);">${fmtCurrency(tInt + tNet)}</td>
+        <td style="color:var(--gold-bright);">${fmtCurrency(tTrueFin)}</td>
       </tr>`
-    : '<tr><td colspan="9" class="muted">No synced payment records found for this filter.</td></tr>';
+    : '<tr><td colspan="10" class="muted">No synced payment records found for this filter.</td></tr>';
 }
 
+document.getElementById('rebatesDetectionMode')?.addEventListener('change', renderSalesRebatesTool);
 document.getElementById('rebatesGroupMode')?.addEventListener('change', renderSalesRebatesTool);
 document.getElementById('rebatesBranchFilter')?.addEventListener('change', renderSalesRebatesTool);
 
@@ -6026,7 +6257,7 @@ document.querySelectorAll('.sales-tool-btn').forEach((btn) => {
 });
 document.getElementById('accrualBadDebtPct')?.addEventListener('input', renderSalesInstallmentAccrualTool);
 
-function openSalesDrilldown(kind, branchId, label) {
+function openSalesDrilldown(kind, branchId, label, periodFilter = '', modeOverride = '') {
   const sd = state.salesData;
   const modal = document.getElementById('salesDrilldownModal');
   if (!sd || !modal) return;
@@ -6035,7 +6266,7 @@ function openSalesDrilldown(kind, branchId, label) {
   const matchBranch = (bid) => branchId === 'ALL' || bid === branchId;
 
   document.getElementById('salesDrilldownTitle').textContent = `${label} — ${branchLabel}`;
-  document.getElementById('salesDrilldownSub').textContent = `Period: ${sd.start} → ${sd.end}`;
+  document.getElementById('salesDrilldownSub').textContent = periodFilter && periodFilter !== 'ALL' ? `Period: ${periodFilter}` : `Period: ${sd.start} → ${sd.end}`;
   const formulaEl = document.getElementById('salesDrilldownFormula');
   const thead = document.querySelector('#salesDrilldownTable thead');
   const tbody = document.querySelector('#salesDrilldownTable tbody');
@@ -6152,23 +6383,67 @@ function openSalesDrilldown(kind, branchId, label) {
         : '<tr><td colspan="7" class="muted">No past-due accounts found.</td></tr>') +
       `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="4">TOTAL (${pds.length} past-due accounts)</td><td>${fmtCurrency(sBal)}</td><td>—</td><td style="color:#f59e0b;">${fmtCurrency(sAllow)}</td></tr>`;
     formulaEl.innerHTML = `<strong>5-Tier Risk Matrix:</strong> 1–30d (5%), 31–60d (20%), 61–90d (50%), 91–180d (80% Repo), 180+d (95% Write-Off). Total Opening Allowance = <strong>${fmtCurrency(sAllow)}</strong>.`;
+  } else if (kind === 'rebates_detected') {
+    const mode = modeOverride || 'DETECTED';
+    const rawPays = periodFilter
+      ? (sd.histFinance?.recentPayments || []).filter((p) => matchBranch(p.branch_id) && (periodFilter === 'ALL' || String(p.payment_date || '').startsWith(periodFilter)))
+      : (sd.finance?.recentPayments || []).filter((p) => matchBranch(p.branch_id));
+    const ra = analyzePaymentRebates(rawPays, mode);
+    const rebEvents = ra.events.filter((ev) => ev.isRebated && ev.activeRebate > 0);
+    let sCash = 0, sFull = 0, sReb = 0, sIntCut = 0, sPrinLoss = 0;
+    thead.innerHTML = '<tr><th>Date</th><th>Branch</th><th>Customer / Account</th><th>Cash Paid (97.5%)</th><th>Est. Full Amort (100%)</th><th>2.5% Rebate</th><th>Cut from Int (~33%)</th><th>Hidden Prin. Loss (~67%)</th></tr>';
+    tbody.innerHTML =
+      (rebEvents.length
+        ? rebEvents
+            .map((ev) => {
+              sCash += ev.activeBaseAmt;
+              sFull += ev.fullAmortCleared;
+              sReb += ev.activeRebate;
+              sIntCut += ev.alreadyCutFromInt;
+              sPrinLoss += ev.unrecordedPrincipalLoss;
+              return `<tr><td>${ev.payment_date}</td><td>${ev.branch_name || bNames[ev.branch_id] || ''}</td><td><strong>${ev.customer_name}</strong><div class="small muted">${ev.account_no}</div></td><td>${fmtCurrency(ev.activeBaseAmt)}</td><td>${fmtCurrency(ev.fullAmortCleared)}</td><td style="color:#f59e0b;"><strong>${fmtCurrency(-ev.activeRebate)}</strong></td><td class="muted">${fmtCurrency(-ev.alreadyCutFromInt)}</td><td style="color:#f59e0b;"><strong>${fmtCurrency(-ev.unrecordedPrincipalLoss)}</strong></td></tr>`;
+            })
+            .join('')
+        : '<tr><td colspan="8" class="muted">No rebated payment events matched under this mode.</td></tr>') +
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="3">TOTAL (${rebEvents.length} early-rebated events)</td><td>${fmtCurrency(sCash)}</td><td>${fmtCurrency(sFull)}</td><td style="color:#f59e0b;">${fmtCurrency(-sReb)}</td><td class="muted">${fmtCurrency(-sIntCut)}</td><td style="color:#f59e0b;">${fmtCurrency(-sPrinLoss)}</td></tr>`;
+    formulaEl.innerHTML = `<strong>Formula (${mode}):</strong> Net Cash = <code>97.5% × Full Amort</code> → 2.5% Rebate = <code>Cash Paid × (0.025 ÷ 0.975)</code> = <strong>${fmtCurrency(sReb)}</strong>. AB Web already shaved <strong>${fmtCurrency(sIntCut)}</strong> from Interest (~33%); the remaining <strong>${fmtCurrency(sPrinLoss)}</strong> (~67% Principal share) is hidden profit overstatement.`;
+  } else if (kind === 'penalties') {
+    const rawPays = periodFilter
+      ? (sd.histFinance?.recentPayments || []).filter((p) => matchBranch(p.branch_id) && (periodFilter === 'ALL' || String(p.payment_date || '').startsWith(periodFilter)))
+      : (sd.finance?.recentPayments || []).filter((p) => matchBranch(p.branch_id));
+    const ra = analyzePaymentRebates(rawPays, 'DETECTED');
+    const lateEvents = ra.events.filter((ev) => ev.penalties > 0);
+    let sCash = 0, sInt = 0, sPen = 0;
+    thead.innerHTML = '<tr><th>Date</th><th>Branch</th><th>Customer / Account</th><th>Payment Collected</th><th>Interest</th><th>Late Penalty (+Income)</th></tr>';
+    tbody.innerHTML =
+      (lateEvents.length
+        ? lateEvents
+            .map((ev) => {
+              sCash += ev.amount;
+              sInt += ev.interest;
+              sPen += ev.penalties;
+              return `<tr><td>${ev.payment_date}</td><td>${ev.branch_name || bNames[ev.branch_id] || ''}</td><td><strong>${ev.customer_name}</strong><div class="small muted">${ev.account_no}</div></td><td>${fmtCurrency(ev.amount)}</td><td>${fmtCurrency(ev.interest)}</td><td style="color:var(--green);"><strong>+${fmtCurrency(ev.penalties)}</strong></td></tr>`;
+            })
+            .join('')
+        : '<tr><td colspan="6" class="muted">No late payment penalties recorded in this period.</td></tr>') +
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="3">TOTAL (${lateEvents.length} late payment events)</td><td>${fmtCurrency(sCash)}</td><td>${fmtCurrency(sInt)}</td><td style="color:var(--green);">+${fmtCurrency(sPen)}</td></tr>`;
+    formulaEl.innerHTML = `<strong>Formula:</strong> Late payment penalties collected = <strong>+${fmtCurrency(sPen)}</strong> across ${lateEvents.length} late payment events (no 2.5% early rebate applies to late payments).`;
   } else if (kind === 'cash_interest') {
     const pays = (sd.finance?.recentPayments || []).filter((p) => matchBranch(p.branch_id));
-    let sAmt = 0, sFin = 0;
-    thead.innerHTML = '<tr><th>Date</th><th>Branch</th><th>Customer</th><th>Payment</th><th>Interest</th><th>Penalties</th><th>Rebates</th><th>Net Fin. Inc.</th></tr>';
+    const ra = analyzePaymentRebates(pays, 'DETECTED');
+    let sAmt = 0, sInt = 0, sPen = 0, sPrinLoss = 0, sFin = 0;
+    thead.innerHTML = '<tr><th>Date</th><th>Branch</th><th>Customer</th><th>Payment</th><th>AB Web Int.</th><th>Penalties</th><th>Hidden Rebate Adj (~67%)</th><th>True Fin. Inc.</th></tr>';
     tbody.innerHTML =
-      (pays.length
-        ? pays
-            .map((p) => {
-              const a = Number(p.amount) || 0;
-              const fin = (Number(p.interest) || 0) + (Number(p.penalties) || 0) - (Number(p.rebates) || 0);
-              sAmt += a; sFin += fin;
-              return `<tr><td>${p.payment_date}</td><td>${p.branch_name || bNames[p.branch_id] || ''}</td><td><strong>${p.customer_name}</strong></td><td>${fmtCurrency(a)}</td><td>${fmtCurrency(p.interest)}</td><td>${fmtCurrency(p.penalties)}</td><td>${fmtCurrency(p.rebates)}</td><td style="color:var(--green);"><strong>${fmtCurrency(fin)}</strong></td></tr>`;
+      (ra.events.length
+        ? ra.events
+            .map((ev) => {
+              sAmt += ev.amount; sInt += ev.interest; sPen += ev.penalties; sPrinLoss += ev.unrecordedPrincipalLoss; sFin += ev.trueFinInc;
+              return `<tr><td>${ev.payment_date}</td><td>${ev.branch_name || bNames[ev.branch_id] || ''}</td><td><strong>${ev.customer_name}</strong></td><td>${fmtCurrency(ev.amount)}</td><td>${fmtCurrency(ev.interest)}</td><td style="color:var(--green);">${fmtCurrency(ev.penalties)}</td><td style="color:#f59e0b;">${ev.unrecordedPrincipalLoss > 0 ? fmtCurrency(-ev.unrecordedPrincipalLoss) : '₱0.00'}</td><td style="color:var(--green);"><strong>${fmtCurrency(ev.trueFinInc)}</strong></td></tr>`;
             })
             .join('')
         : '<tr><td colspan="8" class="muted">No payments synced in this period.</td></tr>') +
-      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="3">TOTAL (${pays.length} payments shown)</td><td>${fmtCurrency(sAmt)}</td><td colspan="3"></td><td style="color:var(--green);">${fmtCurrency(sFin)}</td></tr>`;
-    formulaEl.innerHTML = `<strong>Formula:</strong> Cash-Basis Financing Income = Interest + Penalties − Rebates = <strong>${fmtCurrency(sFin)}</strong>.`;
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="3">TOTAL (${ra.events.length} payment events)</td><td>${fmtCurrency(sAmt)}</td><td>${fmtCurrency(sInt)}</td><td style="color:var(--green);">${fmtCurrency(sPen)}</td><td style="color:#f59e0b;">${fmtCurrency(-sPrinLoss)}</td><td style="color:var(--green);">${fmtCurrency(sFin)}</td></tr>`;
+    formulaEl.innerHTML = `<strong>Formula:</strong> True Cash-Basis Financing Income = AB Web Interest (<code>${fmtCurrency(sInt)}</code>) + Penalties (<code>${fmtCurrency(sPen)}</code>) − Hidden 2.5% Rebate Principal Loss (<code>${fmtCurrency(sPrinLoss)}</code>) = <strong>${fmtCurrency(sFin)}</strong>.`;
   }
 
   modal.classList.remove('hidden');
@@ -6247,7 +6522,13 @@ function openReceivablesAllowanceModal(bucketKey = 'ALL', branchFilter = 'ALL') 
 document.getElementById('tab-sales')?.addEventListener('click', (e) => {
   const cell = e.target.closest('.sales-drill-cell');
   if (!cell) return;
-  openSalesDrilldown(cell.dataset.drillKind, cell.dataset.drillBranch, cell.dataset.drillLabel);
+  openSalesDrilldown(
+    cell.dataset.drillKind,
+    cell.dataset.drillBranch,
+    cell.dataset.drillLabel,
+    cell.dataset.drillPeriod || '',
+    cell.dataset.drillMode || ''
+  );
 });
 document.getElementById('closeSalesDrilldownBtn')?.addEventListener('click', () => {
   document.getElementById('salesDrilldownModal')?.classList.add('hidden');
