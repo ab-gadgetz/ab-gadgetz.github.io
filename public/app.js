@@ -21,7 +21,7 @@ const state = {
 };
 
 const fmtCurrency = (n) =>
-  new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(n || 0);
+  new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(n) || 0);
 
 const fmtNum = (n) => (Number(n) || 0).toLocaleString('en-PH');
 
@@ -4742,10 +4742,10 @@ function getCashSaleAmount(m) {
     const prod = state.inventory.items.find((i) => i.id === m.product_id || i.sku === m.sku);
     srp = Number(prod?.base_price) || 0;
   }
-  const gross = srp * qty;
+  const gross = Number((srp * qty).toFixed(2));
   const discPct = (m.product_type || 'Cellphones') === 'Accessories' ? 0 : ((Number(m.cash_discount_pct) || 5) / 100);
-  const net = Math.round(srp * (1 - discPct)) * qty;
-  return { net, gross, disc: Math.max(0, gross - net) };
+  const net = Number((srp * (1 - discPct) * qty).toFixed(2));
+  return { net, gross, disc: Number(Math.max(0, gross - net).toFixed(2)) };
 }
 
 function renderSalesSummary() {
