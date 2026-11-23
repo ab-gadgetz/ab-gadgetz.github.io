@@ -637,7 +637,7 @@
         <!-- SALES TOOL 4: CONSOLIDATED CASH + INSTALLMENT P&L (REAL NET INCOME, EXPENSES DEDUCTED ONCE) -->
         <div id="salesTool-consolidated" class="hidden">
           <div id="consolidatedPnlBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--gold);"></div>
-          <div class="table-wrap">
+          <div class="table-wrap" style="margin-bottom:16px;">
             <table class="data-table" id="salesConsolidatedTable">
               <thead>
                 <tr>
@@ -650,6 +650,43 @@
               </thead>
               <tbody></tbody>
             </table>
+          </div>
+
+          <div class="sub-panel" style="padding:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+              <div>
+                <h4 style="margin:0;color:var(--gold-bright);">Restated Historical Net Income (Opening Allowance Spread)</h4>
+                <p class="muted small" style="margin:2px 0 0;">Spreads the One-Time Opening Bad Debt Allowance back to historical months as if it had been recorded from the beginning.</p>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <select id="restatedBranchFilter" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="ALL">All Branches</option>
+                  <option value="br-bonifacio">Bonifacio</option>
+                  <option value="br-molave">Molave</option>
+                  <option value="br-tambulig">Tambulig</option>
+                </select>
+                <select id="restatedSpreadMode" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="VINTAGE">Spread by Origination Month (Exact Vintage)</option>
+                  <option value="EVEN">Spread Evenly Across Last 6 Months</option>
+                </select>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table" id="salesHistoricalRestatedTable">
+                <thead>
+                  <tr>
+                    <th>Month</th>
+                    <th>Cash GP</th>
+                    <th>Inst. GP + Accrued Int.</th>
+                    <th>Operating Expenses</th>
+                    <th>Unadjusted Net Income</th>
+                    <th>Spread Bad Debt</th>
+                    <th>Corrected Historical Net Income</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>

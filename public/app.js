@@ -569,8 +569,8 @@ async function staticGhApi(url, opts = {}) {
       totals,
       byBranch: Array.from(branchStats.values()),
       expensesByType: Array.from(expByTypeMap.entries()).map(([expenseType, amount]) => ({ expenseType, amount })).sort((a, b) => b.amount - a.amount),
-      recentPayments: payRows.slice(0, 100),
-      recentExpenses: expRows.slice(0, 100),
+      recentPayments: payRows.slice(0, 500),
+      recentExpenses: expRows.slice(0, 2000),
     };
   }
   if (pathname === '/api/receivables/summary') {
@@ -4785,10 +4785,11 @@ async function loadSalesSummary() {
   const fetchStart = start < sixMoStart ? start : sixMoStart;
   const fetchEnd = end > todayStr ? end : todayStr;
 
-  const [txRes, actRes, finRes, recRes] = await Promise.all([
+  const [txRes, actRes, finRes, histFinRes, recRes] = await Promise.all([
     api(`/api/sales/summary?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`).catch(() => ({ transactions: [] })),
     api(`/api/activity?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`).catch(() => ({ allMovements: [] })),
     api(`/api/finance/summary?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`).catch(() => null),
+    api(`/api/finance/summary?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`).catch(() => null),
     api('/api/receivables/summary').catch(() => null),
   ]);
   state.salesData = {
@@ -4797,6 +4798,7 @@ async function loadSalesSummary() {
     transactions: txRes?.transactions || [],
     allMovements: actRes?.allMovements || [],
     finance: finRes,
+    histFinance: histFinRes,
     receivables: recRes,
   };
   const liveEl = document.getElementById('salesLiveStatus');
@@ -5313,7 +5315,131 @@ function renderSalesConsolidatedTool() {
   if (banner) {
     banner.innerHTML = `<strong>Consolidated Branch P&amp;L (${sd.start} → ${sd.end}):</strong> Combines True Cash Sales Gross Profit (<strong>${fmtCurrency(totCol.cashGp)}</strong>) + Net Installment &amp; Financing Contribution (<strong>${fmtCurrency(totCol.instContrib)}</strong>), then deducts Shared Branch Operating Expenses (<strong>${fmtCurrency(totCol.expenses)}</strong>) <strong>once</strong> → Real Accrual Net Income: <strong style="color:${totCol.realAccrualNet >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(totCol.realAccrualNet)}</strong> (or <strong style="color:var(--gold-bright);">${fmtCurrency(totCol.realCashInterestNet)}</strong> on a cash-collected interest basis).`;
   }
+  renderHistoricalRestatedNetIncome();
 }
+
+function renderHistoricalRestatedNetIncome() {
+  const sd = state.salesData;
+  const tbody = document.querySelector('#salesHistoricalRestatedTable tbody');
+  if (!sd || !tbody) return;
+
+  const branchFilter = document.getElementById('restatedBranchFilter')?.value || 'ALL';
+  const spreadMode = document.getElementById('restatedSpreadMode')?.value || 'VINTAGE';
+  const matchBranch = (bid) => branchFilter === 'ALL' || bid === branchFilter;
+
+  // Build last 6 months keys YYYY-MM (newest first)
+  const months = [];
+  const now = new Date();
+  for (let i = 0; i < 6; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  const monthSet = new Set(months);
+
+  const mkRow = (mo) => ({ month: mo, cashGp: 0, instIncome: 0, expenses: 0, spreadBadDebt: 0 });
+  const rowMap = new Map(months.map((m) => [m, mkRow(m)]));
+  const priorRow = mkRow('Prior Months (< 6 mos)');
+
+  // 1. Cash Sales Gross Profit per month
+  for (const tx of sd.transactions || []) {
+    if (!matchBranch(tx.branch_id)) continue;
+    const mo = String(tx.tx_date || '').slice(0, 7);
+    const r = rowMap.get(mo);
+    if (!r) continue;
+    const net = Number(tx.amount) || 0;
+    const cost = Number(tx.unit_cost) || 0;
+    if (cost > 0) r.cashGp += net - cost;
+  }
+
+  // 2. Installment Merchandising GP + Monthly Accrued Interest per month
+  for (const inst of sd.receivables?.installments || []) {
+    if (!matchBranch(inst.branch_id)) continue;
+    const saleDate = String(inst.sale_date || '').slice(0, 10);
+    const saleMo = saleDate.slice(0, 7);
+    const term = Math.max(1, Number(inst.term) || 6);
+    const monthly = Number(inst.monthly) || 0;
+    const principal = Number(inst.principal_amount) || 0;
+    const deposit = Number(inst.deposit) || 0;
+    const srp = deposit + principal > 0 ? deposit + principal : Number(inst.amount) || 0;
+
+    if (rowMap.has(saleMo)) {
+      const matched = estimateProductCostByName(inst.unit);
+      const cost = matched > 0 ? matched : srp * 0.85;
+      rowMap.get(saleMo).instIncome += Math.max(0, srp - cost);
+    }
+
+    const totalFc = Math.max(0, monthly * term - principal);
+    const moInt = totalFc / term;
+    const startObj = new Date(`${saleDate}T00:00:00Z`);
+    for (const mo of months) {
+      const [y, m] = mo.split('-').map(Number);
+      const moEnd = new Date(Date.UTC(y, m, 0));
+      const elapsed = (moEnd - startObj) / (86400000 * 30);
+      if (elapsed >= 0 && elapsed <= term + 0.5) {
+        rowMap.get(mo).instIncome += moInt;
+      }
+    }
+  }
+
+  // 3. Operating Expenses per month
+  const allExps = sd.histFinance?.recentExpenses || sd.finance?.recentExpenses || [];
+  for (const e of allExps) {
+    if (!matchBranch(e.branch_id)) continue;
+    const mo = String(e.expense_date || '').slice(0, 7);
+    if (rowMap.has(mo)) rowMap.get(mo).expenses += Number(e.amount) || 0;
+  }
+
+  // 4. Spread One-Time Opening Allowance back to historical months
+  const pds = (sd.receivables?.pastDues || []).filter((pd) => matchBranch(pd.branch_id));
+  if (spreadMode === 'EVEN') {
+    const totalAllow = computeAgingAllowance(pds).requiredAllowance;
+    const perMo = totalAllow / months.length;
+    for (const mo of months) rowMap.get(mo).spreadBadDebt += perMo;
+  } else {
+    for (const pd of pds) {
+      const allow = (Number(pd.balance) || 0) * getAgingTier(pd.days_due).rate;
+      const relMo = String(pd.release_date || '').slice(0, 7);
+      if (monthSet.has(relMo)) rowMap.get(relMo).spreadBadDebt += allow;
+      else priorRow.spreadBadDebt += allow;
+    }
+  }
+
+  const displayRows = [...months.map((m) => rowMap.get(m))];
+  if (spreadMode === 'VINTAGE' && priorRow.spreadBadDebt > 0) displayRows.push(priorRow);
+
+  let tCash = 0, tInst = 0, tExp = 0, tUnadj = 0, tBd = 0, tCorr = 0;
+  tbody.innerHTML =
+    displayRows
+      .map((r) => {
+        const unadj = r.cashGp + r.instIncome - r.expenses;
+        const corr = unadj - r.spreadBadDebt;
+        tCash += r.cashGp; tInst += r.instIncome; tExp += r.expenses;
+        tUnadj += unadj; tBd += r.spreadBadDebt; tCorr += corr;
+        return `
+          <tr>
+            <td><strong>${r.month}</strong></td>
+            <td>${fmtCurrency(r.cashGp)}</td>
+            <td>${fmtCurrency(r.instIncome)}</td>
+            <td style="color:var(--danger);">${fmtCurrency(-r.expenses)}</td>
+            <td><strong>${fmtCurrency(unadj)}</strong></td>
+            <td style="color:#f59e0b;"><strong>${fmtCurrency(-r.spreadBadDebt)}</strong></td>
+            <td style="color:${corr >= 0 ? 'var(--green)' : 'var(--danger)'};"><strong>${fmtCurrency(corr)}</strong></td>
+          </tr>`;
+      })
+      .join('') +
+    `<tr style="background:rgba(255,255,255,0.05);font-weight:700;">
+      <td>TOTAL RESTATED</td>
+      <td>${fmtCurrency(tCash)}</td>
+      <td>${fmtCurrency(tInst)}</td>
+      <td style="color:var(--danger);">${fmtCurrency(-tExp)}</td>
+      <td>${fmtCurrency(tUnadj)}</td>
+      <td style="color:#f59e0b;">${fmtCurrency(-tBd)}</td>
+      <td style="color:${tCorr >= 0 ? 'var(--green)' : 'var(--danger)'};"><strong>${fmtCurrency(tCorr)}</strong></td>
+    </tr>`;
+}
+
+document.getElementById('restatedBranchFilter')?.addEventListener('change', renderHistoricalRestatedNetIncome);
+document.getElementById('restatedSpreadMode')?.addEventListener('change', renderHistoricalRestatedNetIncome);
 
 document.querySelectorAll('.sales-tool-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
