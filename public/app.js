@@ -5022,15 +5022,19 @@ function renderSalesCashPnlTool() {
     tot.netIncome += s.netIncome;
   }
 
+  const colBranches = ['br-bonifacio', 'br-molave', 'br-tambulig', 'ALL'];
   const cols = [stats['br-bonifacio'], stats['br-molave'], stats['br-tambulig'], tot];
   const row = (label, fn, opts = {}) => {
     const bg = opts.bold ? 'background:rgba(255,255,255,0.03);font-weight:700;' : '';
+    const drill = opts.drill || 'cash';
     return `<tr style="${bg}"><td>${label}</td>${cols
-      .map((c) => {
+      .map((c, idx) => {
         const val = fn(c);
-        if (opts.pct) return `<td style="color:${val >= 10 ? 'var(--green)' : val >= 5 ? 'var(--gold-bright)' : 'var(--danger)'};"><strong>${val.toFixed(2)}%</strong></td>`;
+        const bid = colBranches[idx];
+        const dAttrs = `class="sales-drill-cell" data-drill-kind="${drill}" data-drill-branch="${bid}" data-drill-label="${label.replace(/"/g, '&quot;')}" title="Click to inspect actual computation" style="cursor:pointer;text-decoration:underline dotted;`;
+        if (opts.pct) return `<td ${dAttrs}color:${val >= 10 ? 'var(--green)' : val >= 5 ? 'var(--gold-bright)' : 'var(--danger)'};"><strong>${val.toFixed(2)}%</strong></td>`;
         const clr = opts.auto ? (val >= 0 ? 'var(--green)' : 'var(--danger)') : opts.color || '';
-        return `<td ${clr ? `style="color:${clr};"` : ''}>${opts.bold ? `<strong>${fmtCurrency(val)}</strong>` : fmtCurrency(val)}</td>`;
+        return `<td ${dAttrs}${clr ? `color:${clr};` : ''}">${opts.bold ? `<strong>${fmtCurrency(val)}</strong>` : fmtCurrency(val)}</td>`;
       })
       .join('')}</tr>`;
   };
@@ -5160,29 +5164,33 @@ function renderSalesInstallmentAccrualTool() {
     for (const k of Object.keys(tot)) tot[k] += s[k];
   }
 
+  const colBranches = ['br-bonifacio', 'br-molave', 'br-tambulig', 'ALL'];
   const cols = [stats['br-bonifacio'], stats['br-molave'], stats['br-tambulig'], tot];
   const row = (label, fn, opts = {}) => {
     const bg = opts.bold ? 'background:rgba(255,255,255,0.03);font-weight:700;' : '';
+    const drill = opts.drill || 'installment';
     return `<tr style="${bg}"><td>${label}</td>${cols
-      .map((c) => {
+      .map((c, idx) => {
         const val = fn(c);
+        const bid = colBranches[idx];
         const clr = opts.auto ? (val >= 0 ? 'var(--green)' : 'var(--danger)') : opts.color || '';
-        return `<td ${clr ? `style="color:${clr};"` : ''}>${opts.bold ? `<strong>${fmtCurrency(val)}</strong>` : fmtCurrency(val)}</td>`;
+        const dAttrs = `class="sales-drill-cell" data-drill-kind="${drill}" data-drill-branch="${bid}" data-drill-label="${label.replace(/"/g, '&quot;')}" title="Click to inspect actual computation" style="cursor:pointer;text-decoration:underline dotted;${clr ? `color:${clr};` : ''}"`;
+        return `<td ${dAttrs}>${opts.bold ? `<strong>${fmtCurrency(val)}</strong>` : fmtCurrency(val)}</td>`;
       })
       .join('')}</tr>`;
   };
 
   tbody.innerHTML = [
-    row('Installment Sales Revenue (Cash-Equiv SRP at Release)', (c) => c.contractSales),
-    row('Less: Est. Unit Cost of Goods Sold (COGS)', (c) => -c.estCogs, { color: 'var(--danger)' }),
-    row('= Installment Merchandising Gross Profit (Earned at Release)', (c) => c.merchGp, { bold: true, color: 'var(--green)' }),
-    row('Add: Accrued Interest Income (Earned Over Term, Accrual Basis)', (c) => c.accruedInterest, { color: 'var(--green)' }),
-    row('= Total Accrual Installment Gross Income', (c) => c.merchGp + c.accruedInterest, { bold: true }),
-    row(`Less: Prospective Monthly Bad Debt Expense (${(badDebtPct * 100).toFixed(1)}% of New Principal)`, (c) => -c.badDebtProvision, { color: '#f59e0b' }),
-    row('= Net Installment & Financing Contribution (Before Shared OpEx)', (c) => c.merchGp + c.accruedInterest - c.badDebtProvision, { bold: true, auto: true }),
-    row('Memo: One-Time Opening Allowance (Aging-Based on Past-Due Accounts — Synced w/ Receivables)', (c) => c.openingAllowance, { color: '#f59e0b' }),
-    row('Compare: AB Web Cash-Basis Interest Collected (Payments)', (c) => c.abWebCashInterest, { color: 'var(--muted)' }),
-    row('Accrual vs Cash-Basis Interest Variance', (c) => c.accruedInterest - c.abWebCashInterest, { color: 'var(--gold-bright)' }),
+    row('Installment Sales Revenue (Cash-Equiv SRP at Release)', (c) => c.contractSales, { drill: 'installment' }),
+    row('Less: Est. Unit Cost of Goods Sold (COGS)', (c) => -c.estCogs, { color: 'var(--danger)', drill: 'installment' }),
+    row('= Installment Merchandising Gross Profit (Earned at Release)', (c) => c.merchGp, { bold: true, color: 'var(--green)', drill: 'installment' }),
+    row('Add: Accrued Interest Income (Earned Over Term, Accrual Basis)', (c) => c.accruedInterest, { color: 'var(--green)', drill: 'accrued_interest' }),
+    row('= Total Accrual Installment Gross Income', (c) => c.merchGp + c.accruedInterest, { bold: true, drill: 'installment' }),
+    row(`Less: Prospective Monthly Bad Debt Expense (${(badDebtPct * 100).toFixed(1)}% of New Principal)`, (c) => -c.badDebtProvision, { color: '#f59e0b', drill: 'installment' }),
+    row('= Net Installment & Financing Contribution (Before Shared OpEx)', (c) => c.merchGp + c.accruedInterest - c.badDebtProvision, { bold: true, auto: true, drill: 'installment' }),
+    row('Memo: One-Time Opening Allowance (Aging-Based on Past-Due Accounts — Synced w/ Receivables)', (c) => c.openingAllowance, { color: '#f59e0b', drill: 'opening_allowance' }),
+    row('Compare: AB Web Cash-Basis Interest Collected (Payments)', (c) => c.abWebCashInterest, { color: 'var(--muted)', drill: 'cash_interest' }),
+    row('Accrual vs Cash-Basis Interest Variance', (c) => c.accruedInterest - c.abWebCashInterest, { color: 'var(--gold-bright)', drill: 'accrued_interest' }),
   ].join('');
 
   state.salesInstStats = { stats, tot, badDebtPct };
@@ -5245,34 +5253,38 @@ function renderSalesConsolidatedTool() {
   const totExp = cols.reduce((s, x) => s + x.expenses, 0);
   cols.push(buildCol(cashData.tot, instData.tot, totExp));
 
+  const colBranches = ['br-bonifacio', 'br-molave', 'br-tambulig', 'ALL'];
   const row = (label, fn, opts = {}) => {
     const bg = opts.bold ? 'background:rgba(255,255,255,0.04);font-weight:700;' : '';
+    const drill = opts.drill || 'cash';
     return `<tr style="${bg}"><td>${label}</td>${cols
-      .map((col) => {
+      .map((col, idx) => {
         const v = fn(col);
+        const bid = colBranches[idx];
         const clr = opts.auto ? (v >= 0 ? 'var(--green)' : 'var(--danger)') : opts.color || '';
-        return `<td ${clr ? `style="color:${clr};"` : ''}>${opts.bold ? `<strong>${fmtCurrency(v)}</strong>` : fmtCurrency(v)}</td>`;
+        const dAttrs = `class="sales-drill-cell" data-drill-kind="${drill}" data-drill-branch="${bid}" data-drill-label="${label.replace(/"/g, '&quot;')}" title="Click to inspect actual computation" style="cursor:pointer;text-decoration:underline dotted;${clr ? `color:${clr};` : ''}"`;
+        return `<td ${dAttrs}>${opts.bold ? `<strong>${fmtCurrency(v)}</strong>` : fmtCurrency(v)}</td>`;
       })
       .join('')}</tr>`;
   };
 
   tbody.innerHTML = [
-    row('A. Gross Cash Sales (SRP)', (c) => c.cashGross),
-    row('   Less: Cash Sales Discounts', (c) => -c.cashDisc, { color: 'var(--muted)' }),
-    row('   = Net Cash Sales', (c) => c.cashNet, { bold: true }),
-    row('   Less: Cash Cost of Goods Sold (FIFO)', (c) => -c.cashCogs, { color: 'var(--danger)' }),
-    row('   = True Cash Sales Gross Profit', (c) => c.cashGp, { bold: true, color: 'var(--green)' }),
-    row('B. Installment Sales Revenue (Cash-Equiv SRP)', (c) => c.instRev),
-    row('   Less: Est. Installment Unit COGS', (c) => -c.instCogs, { color: 'var(--danger)' }),
-    row('   = Installment Merchandising Gross Profit', (c) => c.instGp, { color: 'var(--green)' }),
-    row('   Add: Accrued Interest Income (Monthly Earned)', (c) => c.accruedInt, { color: 'var(--green)' }),
-    row(`   Less: Prospective Monthly Bad Debt (${((instData.badDebtPct || 0.03) * 100).toFixed(1)}% of New Principal)`, (c) => -c.badDebt, { color: '#f59e0b' }),
-    row('   = Net Installment & Financing Contribution', (c) => c.instContrib, { bold: true, color: 'var(--green)' }),
-    row('C. Total Consolidated Gross Contribution (A + B)', (c) => c.totalGrossContrib, { bold: true }),
-    row('D. Less: Shared Branch Operating Expenses (Deducted ONCE)', (c) => -c.expenses, { color: 'var(--danger)' }),
-    row('E. REAL CONSOLIDATED NET INCOME (Accrual Method)', (c) => c.realAccrualNet, { bold: true, auto: true }),
-    row('Memo: One-Time Opening Allowance (Aging-Based — Synced w/ Receivables Tab)', (c) => c.openingAllowance, { color: '#f59e0b' }),
-    row('Reference: Consolidated Net Income (Using Cash-Collected Interest, No Double-Discount)', (c) => c.realCashInterestNet, { bold: true, color: 'var(--gold-bright)' }),
+    row('A. Gross Cash Sales (SRP)', (c) => c.cashGross, { drill: 'cash' }),
+    row('   Less: Cash Sales Discounts', (c) => -c.cashDisc, { color: 'var(--muted)', drill: 'cash' }),
+    row('   = Net Cash Sales', (c) => c.cashNet, { bold: true, drill: 'cash' }),
+    row('   Less: Cash Cost of Goods Sold (FIFO)', (c) => -c.cashCogs, { color: 'var(--danger)', drill: 'cash' }),
+    row('   = True Cash Sales Gross Profit', (c) => c.cashGp, { bold: true, color: 'var(--green)', drill: 'cash' }),
+    row('B. Installment Sales Revenue (Cash-Equiv SRP)', (c) => c.instRev, { drill: 'installment' }),
+    row('   Less: Est. Installment Unit COGS', (c) => -c.instCogs, { color: 'var(--danger)', drill: 'installment' }),
+    row('   = Installment Merchandising Gross Profit', (c) => c.instGp, { color: 'var(--green)', drill: 'installment' }),
+    row('   Add: Accrued Interest Income (Monthly Earned)', (c) => c.accruedInt, { color: 'var(--green)', drill: 'accrued_interest' }),
+    row(`   Less: Prospective Monthly Bad Debt (${((instData.badDebtPct || 0.03) * 100).toFixed(1)}% of New Principal)`, (c) => -c.badDebt, { color: '#f59e0b', drill: 'installment' }),
+    row('   = Net Installment & Financing Contribution', (c) => c.instContrib, { bold: true, color: 'var(--green)', drill: 'installment' }),
+    row('C. Total Consolidated Gross Contribution (A + B)', (c) => c.totalGrossContrib, { bold: true, drill: 'cash' }),
+    row('D. Less: Shared Branch Operating Expenses (Deducted ONCE)', (c) => -c.expenses, { color: 'var(--danger)', drill: 'expenses' }),
+    row('E. REAL CONSOLIDATED NET INCOME (Accrual Method)', (c) => c.realAccrualNet, { bold: true, auto: true, drill: 'expenses' }),
+    row('Memo: One-Time Opening Allowance (Aging-Based — Synced w/ Receivables Tab)', (c) => c.openingAllowance, { color: '#f59e0b', drill: 'opening_allowance' }),
+    row('Reference: Consolidated Net Income (Using Cash-Collected Interest, No Double-Discount)', (c) => c.realCashInterestNet, { bold: true, color: 'var(--gold-bright)', drill: 'cash_interest' }),
   ].join('');
 
   const totCol = cols[cols.length - 1];
@@ -5295,6 +5307,166 @@ document.querySelectorAll('.sales-tool-btn').forEach((btn) => {
   });
 });
 document.getElementById('accrualBadDebtPct')?.addEventListener('input', renderSalesInstallmentAccrualTool);
+
+function openSalesDrilldown(kind, branchId, label) {
+  const sd = state.salesData;
+  const modal = document.getElementById('salesDrilldownModal');
+  if (!sd || !modal) return;
+  const bNames = { 'br-bonifacio': 'Bonifacio', 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', ALL: 'All Branches' };
+  const branchLabel = bNames[branchId] || branchId;
+  const matchBranch = (bid) => branchId === 'ALL' || bid === branchId;
+
+  document.getElementById('salesDrilldownTitle').textContent = `${label} — ${branchLabel}`;
+  document.getElementById('salesDrilldownSub').textContent = `Period: ${sd.start} → ${sd.end}`;
+  const formulaEl = document.getElementById('salesDrilldownFormula');
+  const thead = document.querySelector('#salesDrilldownTable thead');
+  const tbody = document.querySelector('#salesDrilldownTable tbody');
+
+  if (kind === 'cash') {
+    const txs = (sd.transactions || []).filter((t) => {
+      const dt = String(t.tx_date || '').slice(0, 10);
+      return dt >= sd.start && dt <= sd.end && matchBranch(t.branch_id);
+    });
+    let sSrp = 0, sDisc = 0, sNet = 0, sCost = 0, sProf = 0;
+    thead.innerHTML = '<tr><th>Date</th><th>Order #</th><th>Branch</th><th>Gross SRP</th><th>Discount</th><th>Net Amount</th><th>FIFO Cost</th><th>Profit</th></tr>';
+    tbody.innerHTML =
+      (txs.length
+        ? txs
+            .map((t) => {
+              const net = Number(t.amount) || 0;
+              const disc = Number(t.discount) || 0;
+              const srp = Number(t.srp) || net + disc;
+              const cost = Number(t.unit_cost) || 0;
+              const prof = cost > 0 ? net - cost : 0;
+              sSrp += srp; sDisc += disc; sNet += net; sCost += cost; sProf += prof;
+              return `<tr><td>${t.tx_date}</td><td><strong>${t.order_no}</strong></td><td>${bNames[t.branch_id] || t.branch_id}</td><td>${fmtCurrency(srp)}</td><td>${fmtCurrency(disc)}</td><td><strong>${fmtCurrency(net)}</strong></td><td>${fmtCurrency(cost)}</td><td style="color:${prof >= 0 ? 'var(--green)' : 'var(--danger)'};"><strong>${fmtCurrency(prof)}</strong></td></tr>`;
+            })
+            .join('')
+        : '<tr><td colspan="8" class="muted">No cash sales transactions in this period.</td></tr>') +
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="3">TOTAL (${txs.length} tx)</td><td>${fmtCurrency(sSrp)}</td><td>${fmtCurrency(sDisc)}</td><td>${fmtCurrency(sNet)}</td><td>${fmtCurrency(sCost)}</td><td style="color:var(--green);">${fmtCurrency(sProf)}</td></tr>`;
+    formulaEl.innerHTML = `<strong>Formula:</strong> Net Cash Sales (<code>${fmtCurrency(sNet)}</code>) = Gross SRP (<code>${fmtCurrency(sSrp)}</code>) − Discount (<code>${fmtCurrency(sDisc)}</code>). True Cash Profit = Net − FIFO Cost = <strong>${fmtCurrency(sProf)}</strong>.`;
+  } else if (kind === 'installment') {
+    const badDebtPct = Math.max(0, Math.min(30, Number(document.getElementById('accrualBadDebtPct')?.value) || 3)) / 100;
+    const rows = (sd.receivables?.installments || []).filter((i) => {
+      const dt = String(i.sale_date || '').slice(0, 10);
+      return dt >= sd.start && dt <= sd.end && matchBranch(i.branch_id);
+    });
+    let sDp = 0, sPrin = 0, sSrp = 0, sCost = 0, sGp = 0, sBd = 0;
+    thead.innerHTML = '<tr><th>Date</th><th>Branch</th><th>Unit</th><th>Deposit</th><th>Principal</th><th>Cash-Equiv SRP</th><th>Unit Cost</th><th>Merch GP</th></tr>';
+    tbody.innerHTML =
+      (rows.length
+        ? rows
+            .map((i) => {
+              const dp = Number(i.deposit) || 0;
+              const prin = Number(i.principal_amount) || 0;
+              const srp = dp + prin > 0 ? dp + prin : Number(i.amount) || 0;
+              const matched = estimateProductCostByName(i.unit);
+              const cost = matched > 0 ? matched : srp * 0.85;
+              const gp = Math.max(0, srp - cost);
+              sDp += dp; sPrin += prin; sSrp += srp; sCost += cost; sGp += gp; sBd += prin * badDebtPct;
+              return `<tr><td>${i.sale_date}</td><td>${bNames[i.branch_id] || i.branch_name || ''}</td><td><strong>${i.unit}</strong>${matched > 0 ? '' : ' <span class="small muted">(85% est)</span>'}</td><td>${fmtCurrency(dp)}</td><td>${fmtCurrency(prin)}</td><td>${fmtCurrency(srp)}</td><td>${fmtCurrency(cost)}</td><td style="color:var(--green);"><strong>${fmtCurrency(gp)}</strong></td></tr>`;
+            })
+            .join('')
+        : '<tr><td colspan="8" class="muted">No new installment contracts in this period.</td></tr>') +
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="3">TOTAL (${rows.length} contracts)</td><td>${fmtCurrency(sDp)}</td><td>${fmtCurrency(sPrin)}</td><td>${fmtCurrency(sSrp)}</td><td>${fmtCurrency(sCost)}</td><td style="color:var(--green);">${fmtCurrency(sGp)}</td></tr>`;
+    formulaEl.innerHTML = `<strong>Formula:</strong> Merchandising GP = Cash-Equiv SRP (<code>${fmtCurrency(sSrp)}</code>) − Unit Cost (<code>${fmtCurrency(sCost)}</code>) = <strong>${fmtCurrency(sGp)}</strong>. Prospective Monthly Bad Debt (${(badDebtPct * 100).toFixed(1)}% of Principal <code>${fmtCurrency(sPrin)}</code>) = <strong>${fmtCurrency(sBd)}</strong>.`;
+  } else if (kind === 'accrued_interest') {
+    const d1 = new Date(`${sd.start}T00:00:00Z`);
+    const d2 = new Date(`${sd.end}T00:00:00Z`);
+    const periodMonths = Math.max(0.1, (Math.max(1, Math.round((d2 - d1) / 86400000) + 1)) / 30);
+    const active = (sd.receivables?.installments || []).filter((i) => {
+      const dt = String(i.sale_date || '').slice(0, 10);
+      if (dt > sd.end || !matchBranch(i.branch_id)) return false;
+      const term = Math.max(1, Number(i.term) || 6);
+      const elapsed = (d2 - new Date(`${dt}T00:00:00Z`)) / (86400000 * 30);
+      return elapsed >= 0 && elapsed <= term + 0.5;
+    });
+    let sFc = 0, sAcc = 0;
+    thead.innerHTML = '<tr><th>Sale Date</th><th>Branch</th><th>Unit</th><th>Principal</th><th>Monthly × Term</th><th>Total Finance Chg</th><th>Period Accrued Int.</th></tr>';
+    tbody.innerHTML =
+      (active.length
+        ? active
+            .map((i) => {
+              const term = Math.max(1, Number(i.term) || 6);
+              const mo = Number(i.monthly) || 0;
+              const prin = Number(i.principal_amount) || 0;
+              const fc = Math.max(0, mo * term - prin);
+              const acc = (fc / term) * Math.min(periodMonths, 1);
+              sFc += fc; sAcc += acc;
+              return `<tr><td>${i.sale_date}</td><td>${bNames[i.branch_id] || i.branch_name || ''}</td><td><strong>${i.unit}</strong></td><td>${fmtCurrency(prin)}</td><td>${fmtCurrency(mo)} × ${term}m</td><td>${fmtCurrency(fc)}</td><td style="color:var(--green);"><strong>${fmtCurrency(acc)}</strong></td></tr>`;
+            })
+            .join('')
+        : '<tr><td colspan="7" class="muted">No active installment contracts accruing interest in this period.</td></tr>') +
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="5">TOTAL (${active.length} active contracts)</td><td>${fmtCurrency(sFc)}</td><td style="color:var(--green);">${fmtCurrency(sAcc)}</td></tr>`;
+    formulaEl.innerHTML = `<strong>Accrual Formula:</strong> Monthly Interest = <code>((Monthly × Term) − Principal) ÷ Term</code> × Period Factor (${Math.min(periodMonths, 1).toFixed(2)} mo) = <strong>${fmtCurrency(sAcc)}</strong>.`;
+  } else if (kind === 'expenses') {
+    const exps = (sd.finance?.recentExpenses || []).filter((e) => matchBranch(e.branch_id));
+    let sAmt = 0;
+    thead.innerHTML = '<tr><th>Date</th><th>Branch</th><th>Expense Type</th><th>Particular</th><th>Amount</th></tr>';
+    tbody.innerHTML =
+      (exps.length
+        ? exps
+            .map((e) => {
+              const a = Number(e.amount) || 0;
+              sAmt += a;
+              return `<tr><td>${e.expense_date}</td><td>${e.branch_name || bNames[e.branch_id] || ''}</td><td>${e.expense_type}</td><td>${e.particular || ''}</td><td style="color:var(--danger);"><strong>${fmtCurrency(a)}</strong></td></tr>`;
+            })
+            .join('')
+        : '<tr><td colspan="5" class="muted">No expenses synced in this date range.</td></tr>') +
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="4">TOTAL (${exps.length} entries)</td><td style="color:var(--danger);">${fmtCurrency(sAmt)}</td></tr>`;
+    formulaEl.innerHTML = `<strong>Formula:</strong> Sum of branch operating expenses synced from AB Web for ${sd.start} → ${sd.end} = <strong>${fmtCurrency(sAmt)}</strong> (deducted once in Consolidated P&L).`;
+  } else if (kind === 'opening_allowance') {
+    const pds = (sd.receivables?.pastDues || []).filter((pd) => matchBranch(pd.branch_id));
+    let sBal = 0, sAllow = 0;
+    thead.innerHTML = '<tr><th>Branch</th><th>Customer / Account</th><th>Unit</th><th>Days Due</th><th>Balance</th><th>Tier Rate</th><th>Allowance</th></tr>';
+    tbody.innerHTML =
+      (pds.length
+        ? pds
+            .map((pd) => {
+              const bal = Number(pd.balance) || 0;
+              const days = Number(pd.days_due) || 0;
+              const rate = days <= 30 ? 0.05 : days <= 60 ? 0.2 : days <= 90 ? 0.5 : 0.85;
+              const allow = bal * rate;
+              sBal += bal; sAllow += allow;
+              return `<tr><td>${bNames[pd.branch_id] || pd.branch_name || ''}</td><td><strong>${pd.customer_name}</strong><div class="small muted">${pd.account_no}</div></td><td>${pd.unit}</td><td>${days}d</td><td>${fmtCurrency(bal)}</td><td>${Math.round(rate * 100)}%</td><td style="color:#f59e0b;"><strong>${fmtCurrency(allow)}</strong></td></tr>`;
+            })
+            .join('')
+        : '<tr><td colspan="7" class="muted">No past-due accounts found.</td></tr>') +
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="4">TOTAL (${pds.length} past-due accounts)</td><td>${fmtCurrency(sBal)}</td><td>—</td><td style="color:#f59e0b;">${fmtCurrency(sAllow)}</td></tr>`;
+    formulaEl.innerHTML = `<strong>Aging Tiers:</strong> 1–30d (5%), 31–60d (20%), 61–90d (50%), 90+d (85% net of repo). Total Opening Allowance = <strong>${fmtCurrency(sAllow)}</strong>.`;
+  } else if (kind === 'cash_interest') {
+    const pays = (sd.finance?.recentPayments || []).filter((p) => matchBranch(p.branch_id));
+    let sAmt = 0, sFin = 0;
+    thead.innerHTML = '<tr><th>Date</th><th>Branch</th><th>Customer</th><th>Payment</th><th>Interest</th><th>Penalties</th><th>Rebates</th><th>Net Fin. Inc.</th></tr>';
+    tbody.innerHTML =
+      (pays.length
+        ? pays
+            .map((p) => {
+              const a = Number(p.amount) || 0;
+              const fin = (Number(p.interest) || 0) + (Number(p.penalties) || 0) - (Number(p.rebates) || 0);
+              sAmt += a; sFin += fin;
+              return `<tr><td>${p.payment_date}</td><td>${p.branch_name || bNames[p.branch_id] || ''}</td><td><strong>${p.customer_name}</strong></td><td>${fmtCurrency(a)}</td><td>${fmtCurrency(p.interest)}</td><td>${fmtCurrency(p.penalties)}</td><td>${fmtCurrency(p.rebates)}</td><td style="color:var(--green);"><strong>${fmtCurrency(fin)}</strong></td></tr>`;
+            })
+            .join('')
+        : '<tr><td colspan="8" class="muted">No payments synced in this period.</td></tr>') +
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="3">TOTAL (${pays.length} payments shown)</td><td>${fmtCurrency(sAmt)}</td><td colspan="3"></td><td style="color:var(--green);">${fmtCurrency(sFin)}</td></tr>`;
+    formulaEl.innerHTML = `<strong>Formula:</strong> Cash-Basis Financing Income = Interest + Penalties − Rebates = <strong>${fmtCurrency(sFin)}</strong>.`;
+  }
+
+  modal.classList.remove('hidden');
+}
+
+document.getElementById('tab-sales')?.addEventListener('click', (e) => {
+  const cell = e.target.closest('.sales-drill-cell');
+  if (!cell) return;
+  openSalesDrilldown(cell.dataset.drillKind, cell.dataset.drillBranch, cell.dataset.drillLabel);
+});
+document.getElementById('closeSalesDrilldownBtn')?.addEventListener('click', () => {
+  document.getElementById('salesDrilldownModal')?.classList.add('hidden');
+});
+document.getElementById('salesDrilldownModal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'salesDrilldownModal') e.target.classList.add('hidden');
+});
 
 document.getElementById('salesMonthInput')?.addEventListener('change', (e) => {
   const ym = e.target.value;

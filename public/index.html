@@ -1318,6 +1318,26 @@
     </div>
   </div>
 
+  <!-- SALES LINE-ITEM AUDIT DRILL-DOWN MODAL -->
+  <div id="salesDrilldownModal" class="calc-modal hidden" role="dialog" aria-modal="true">
+    <div class="calc-modal-sheet" style="max-width:920px;">
+      <div class="calc-modal-head">
+        <div style="min-width:0;">
+          <h3 id="salesDrilldownTitle" style="margin:0;color:var(--gold-bright);">Line Item Breakdown</h3>
+          <div id="salesDrilldownSub" class="small muted"></div>
+        </div>
+        <button type="button" id="closeSalesDrilldownBtn" class="secondary" style="padding:6px 12px;">✕</button>
+      </div>
+      <div id="salesDrilldownFormula" class="sub-panel" style="padding:8px 12px;margin-bottom:10px;font-size:12px;border-left:3px solid var(--gold);"></div>
+      <div class="table-wrap" style="max-height:58vh;overflow-y:auto;">
+        <table class="data-table" id="salesDrilldownTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <script src="/app.js"></script>
 </body>
 </html>
