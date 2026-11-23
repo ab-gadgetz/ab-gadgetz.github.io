@@ -520,7 +520,19 @@
         <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">
           <div>
             <label for="salesMonthInput">MONTH</label>
-            <input type="month" id="salesMonthInput" style="width:auto;padding:6px 10px;font-size:12px;" />
+            <div style="display:flex;align-items:center;gap:4px;">
+              <button type="button" id="salesPrevMonthBtn" class="secondary" style="padding:6px 9px;font-size:13px;" title="Previous Month">‹</button>
+              <input type="month" id="salesMonthInput" style="width:auto;padding:6px 8px;font-size:12px;" />
+              <button type="button" id="salesNextMonthBtn" class="secondary" style="padding:6px 9px;font-size:13px;" title="Next Month">›</button>
+            </div>
+          </div>
+          <div>
+            <label>YEAR VIEW</label>
+            <div style="display:flex;align-items:center;gap:4px;">
+              <button type="button" id="salesPrevYearBtn" class="secondary" style="padding:6px 9px;font-size:13px;" title="Previous Year">‹</button>
+              <button type="button" id="salesYearBtn" class="secondary" style="padding:6px 10px;font-size:12px;font-weight:700;min-width:60px;" title="Show full year">2026</button>
+              <button type="button" id="salesNextYearBtn" class="secondary" style="padding:6px 9px;font-size:13px;" title="Next Year">›</button>
+            </div>
           </div>
           <div>
             <label for="salesStart">FROM</label>
@@ -546,6 +558,7 @@
           <button type="button" class="secondary sales-tool-btn" data-salestool="cashpnl" style="padding:7px 12px;font-size:12px;">CASH SALES P&amp;L</button>
           <button type="button" class="secondary sales-tool-btn" data-salestool="installment" style="padding:7px 12px;font-size:12px;">INSTALLMENT (ACCRUAL)</button>
           <button type="button" class="secondary sales-tool-btn" data-salestool="consolidated" style="padding:7px 12px;font-size:12px;border-color:var(--gold);color:var(--gold-bright);">CONSOLIDATED P&amp;L (REAL NET INCOME)</button>
+          <button type="button" class="secondary sales-tool-btn" data-salestool="charts" style="padding:7px 12px;font-size:12px;">CHARTS (MONTHLY &amp; YEARLY)</button>
         </div>
 
         <div id="salesTool-summary">
@@ -691,6 +704,39 @@
                 <tbody></tbody>
               </table>
             </div>
+          </div>
+        </div>
+
+        <!-- SALES TOOL 5: GRAPHICAL COMPARISON (MONTHLY & YEARLY PER BRANCH & ALL BRANCHES) -->
+        <div id="salesTool-charts" class="hidden">
+          <div class="sub-panel" style="padding:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+              <div>
+                <h4 style="margin:0;color:var(--gold-bright);">Graphical Sales &amp; Profit Comparison</h4>
+                <p class="muted small" style="margin:2px 0 0;">Compare monthly or yearly performance across Molave, Tambulig, Bonifacio, and All Branches.</p>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <select id="salesChartPeriod" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="MONTHLY">Monthly Comparison</option>
+                  <option value="YEARLY">Yearly Comparison</option>
+                </select>
+                <select id="salesChartMetric" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="NET_CASH">Net Cash Sales</option>
+                  <option value="GROSS_CASH">Gross Cash Sales (SRP)</option>
+                  <option value="CASH_GP">True Cash Sales Profit</option>
+                  <option value="CONSOLIDATED_NET">Consolidated Net Income</option>
+                </select>
+                <select id="salesChartBranch" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="GROUPED">All Branches (Side-by-Side)</option>
+                  <option value="TOTAL">Total Combined (All Branches)</option>
+                  <option value="br-molave">Molave Only</option>
+                  <option value="br-tambulig">Tambulig Only</option>
+                  <option value="br-bonifacio">Bonifacio Only</option>
+                </select>
+              </div>
+            </div>
+            <div id="salesChartLegend" style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-bottom:10px;"></div>
+            <div id="salesChartContainer" style="overflow-x:auto;padding-bottom:8px;"></div>
           </div>
         </div>
       </div>

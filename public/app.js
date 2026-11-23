@@ -4820,35 +4820,75 @@ function initSalesDateInputs() {
   const monthInp = document.getElementById('salesMonthInput');
   const startInp = document.getElementById('salesStart');
   const endInp = document.getElementById('salesEnd');
+  const yearBtn = document.getElementById('salesYearBtn');
   const curMonth = todayStr.slice(0, 7);
   if (monthInp && !monthInp.value) monthInp.value = curMonth;
   if (startInp && !startInp.value) startInp.value = `${curMonth}-01`;
   if (endInp && !endInp.value) endInp.value = todayStr;
+  if (yearBtn && !yearBtn.dataset.year) {
+    yearBtn.dataset.year = todayStr.slice(0, 4);
+    yearBtn.textContent = todayStr.slice(0, 4);
+  }
 }
 
-async function loadSalesSummary() {
+function buildScopedFinanceFromCache(histFin, start, end) {
+  const branches = [
+    { branchId: 'br-molave', branchName: 'Molave' },
+    { branchId: 'br-tambulig', branchName: 'Tambulig' },
+    { branchId: 'br-bonifacio', branchName: 'Bonifacio' },
+  ];
+  const map = new Map(
+    branches.map((b) => [b.branchId, { ...b, collections: 0, financingIncome: 0, expenses: 0 }])
+  );
+  const recentPayments = (histFin?.recentPayments || []).filter((p) => p.payment_date >= start && p.payment_date <= end);
+  const recentExpenses = (histFin?.recentExpenses || []).filter((e) => e.expense_date >= start && e.expense_date <= end);
+  for (const p of recentPayments) {
+    const b = map.get(p.branch_id);
+    if (b) {
+      b.collections += Number(p.amount) || 0;
+      b.financingIncome += (Number(p.interest) || 0) + (Number(p.penalties) || 0) - (Number(p.rebates) || 0);
+    }
+  }
+  for (const e of recentExpenses) {
+    const b = map.get(e.branch_id);
+    if (b) b.expenses += Number(e.amount) || 0;
+  }
+  return { byBranch: Array.from(map.values()), recentPayments, recentExpenses };
+}
+
+async function loadSalesSummary(forceRefresh = false) {
   initSalesDateInputs();
   const start = document.getElementById('salesStart')?.value || `${todayStr.slice(0, 7)}-01`;
   const end = document.getElementById('salesEnd')?.value || todayStr;
-  // Fetch full endless history (all years) for monthly & annual accumulated views
   const fetchStart = '2020-01-01';
   const fetchEnd = end > todayStr ? end : todayStr;
 
-  const [txRes, actRes, finRes, histFinRes, recRes] = await Promise.all([
-    api(`/api/sales/summary?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`).catch(() => ({ transactions: [] })),
-    api(`/api/activity?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`).catch(() => ({ allMovements: [] })),
-    api(`/api/finance/summary?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`).catch(() => null),
-    api(`/api/finance/summary?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`).catch(() => null),
-    api('/api/receivables/summary').catch(() => null),
-  ]);
+  const cacheValid = !forceRefresh && state.salesFullCache && Date.now() - state.salesFullCache.ts < 60000;
+  if (!cacheValid) {
+    const [txRes, actRes, histFinRes, recRes] = await Promise.all([
+      api(`/api/sales/summary?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`).catch(() => ({ transactions: [] })),
+      api(`/api/activity?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`).catch(() => ({ allMovements: [] })),
+      api(`/api/finance/summary?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`).catch(() => null),
+      api('/api/receivables/summary').catch(() => null),
+    ]);
+    state.salesFullCache = {
+      ts: Date.now(),
+      transactions: txRes?.transactions || [],
+      allMovements: actRes?.allMovements || [],
+      histFinance: histFinRes,
+      receivables: recRes,
+    };
+  }
+
+  const c = state.salesFullCache;
   state.salesData = {
     start,
     end,
-    transactions: txRes?.transactions || [],
-    allMovements: actRes?.allMovements || [],
-    finance: finRes,
-    histFinance: histFinRes,
-    receivables: recRes,
+    transactions: c.transactions,
+    allMovements: c.allMovements,
+    finance: buildScopedFinanceFromCache(c.histFinance, start, end),
+    histFinance: c.histFinance,
+    receivables: c.receivables,
   };
   const liveEl = document.getElementById('salesLiveStatus');
   if (liveEl) {
@@ -4857,6 +4897,7 @@ async function loadSalesSummary() {
   renderSalesSummary();
   renderSalesCashPnlTool();
   renderSalesInstallmentAccrualTool();
+  renderSalesChartsTool();
 }
 
 function getCashSaleAmount(m) {
@@ -5510,6 +5551,234 @@ document.getElementById('restatedGroupMode')?.addEventListener('change', renderH
 document.getElementById('restatedBranchFilter')?.addEventListener('change', renderHistoricalRestatedNetIncome);
 document.getElementById('restatedSpreadMode')?.addEventListener('change', renderHistoricalRestatedNetIncome);
 
+function renderSalesChartsTool() {
+  const sd = state.salesData;
+  const container = document.getElementById('salesChartContainer');
+  const legendEl = document.getElementById('salesChartLegend');
+  if (!sd || !container) return;
+
+  const periodMode = document.getElementById('salesChartPeriod')?.value || 'MONTHLY';
+  const metric = document.getElementById('salesChartMetric')?.value || 'NET_CASH';
+  const branchMode = document.getElementById('salesChartBranch')?.value || 'GROUPED';
+
+  const branches = [
+    { id: 'br-molave', name: 'Molave', color: '#77e82a' },
+    { id: 'br-tambulig', name: 'Tambulig', color: '#3b82f6' },
+    { id: 'br-bonifacio', name: 'Bonifacio', color: '#f59e0b' },
+  ];
+
+  // Collect periods (YYYY-MM or YYYY) across all history
+  const keyOf = (dStr) => {
+    const s = String(dStr || '');
+    return periodMode === 'YEARLY' ? s.slice(0, 4) : s.slice(0, 7);
+  };
+  const validKey = (k) => (periodMode === 'YEARLY' ? /^\d{4}$/.test(k) : /^\d{4}-\d{2}$/.test(k));
+
+  const dataMap = new Map();
+  const ensure = (k) => {
+    if (!dataMap.has(k)) {
+      dataMap.set(k, {
+        'br-molave': { net: 0, gross: 0, gp: 0, exp: 0, inst: 0 },
+        'br-tambulig': { net: 0, gross: 0, gp: 0, exp: 0, inst: 0 },
+        'br-bonifacio': { net: 0, gross: 0, gp: 0, exp: 0, inst: 0 },
+      });
+    }
+    return dataMap.get(k);
+  };
+
+  for (const tx of sd.transactions || []) {
+    const k = keyOf(tx.tx_date);
+    if (!validKey(k) || !['br-molave', 'br-tambulig', 'br-bonifacio'].includes(tx.branch_id)) continue;
+    const cell = ensure(k)[tx.branch_id];
+    const net = Number(tx.amount) || 0;
+    const disc = Number(tx.discount) || 0;
+    const gross = Number(tx.srp) || net + disc;
+    const cost = Number(tx.unit_cost) || 0;
+    cell.net += net;
+    cell.gross += gross;
+    if (cost > 0) cell.gp += net - cost;
+  }
+
+  if (metric === 'CONSOLIDATED_NET') {
+    for (const e of sd.histFinance?.recentExpenses || []) {
+      const k = keyOf(e.expense_date);
+      if (!validKey(k) || !['br-molave', 'br-tambulig', 'br-bonifacio'].includes(e.branch_id)) continue;
+      ensure(k)[e.branch_id].exp += Number(e.amount) || 0;
+    }
+    for (const inst of sd.receivables?.installments || []) {
+      const k = keyOf(inst.sale_date);
+      if (!validKey(k) || !['br-molave', 'br-tambulig', 'br-bonifacio'].includes(inst.branch_id)) continue;
+      const dp = Number(inst.deposit) || 0;
+      const prin = Number(inst.principal_amount) || 0;
+      const srp = dp + prin > 0 ? dp + prin : Number(inst.amount) || 0;
+      const matched = estimateProductCostByName(inst.unit);
+      const cost = matched > 0 ? matched : srp * 0.85;
+      ensure(k)[inst.branch_id].inst += Math.max(0, srp - cost);
+    }
+  }
+
+  let periods = [...dataMap.keys()].sort((a, b) => a.localeCompare(b));
+  if (periodMode === 'MONTHLY' && periods.length > 12) periods = periods.slice(-12);
+
+  if (!periods.length) {
+    container.innerHTML = '<div class="muted small" style="padding:16px 0;">No sales data available to chart yet.</div>';
+    return;
+  }
+
+  const getMetricVal = (cell) => {
+    if (metric === 'GROSS_CASH') return cell.gross;
+    if (metric === 'CASH_GP') return cell.gp;
+    if (metric === 'CONSOLIDATED_NET') return cell.gp + cell.inst - cell.exp;
+    return cell.net;
+  };
+
+  const series =
+    branchMode === 'GROUPED'
+      ? branches
+      : branchMode === 'TOTAL'
+        ? [{ id: 'TOTAL', name: 'All Branches Total', color: '#e7c55f' }]
+        : branches.filter((b) => b.id === branchMode);
+
+  if (legendEl) {
+    legendEl.innerHTML = series
+      .map(
+        (s) =>
+          `<span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:12px;height:12px;border-radius:3px;background:${s.color};display:inline-block;"></span><strong>${s.name}</strong></span>`
+      )
+      .join('');
+  }
+
+  const values = [];
+  for (const p of periods) {
+    const row = dataMap.get(p);
+    for (const s of series) {
+      const v =
+        s.id === 'TOTAL'
+          ? getMetricVal(row['br-molave']) + getMetricVal(row['br-tambulig']) + getMetricVal(row['br-bonifacio'])
+          : getMetricVal(row[s.id]);
+      values.push(v);
+    }
+  }
+  const maxVal = Math.max(1, ...values.map((v) => Math.max(0, v)));
+  const fmtShort = (v) => (Math.abs(v) >= 1000000 ? `₱${(v / 1000000).toFixed(2)}M` : Math.abs(v) >= 1000 ? `₱${(v / 1000).toFixed(1)}k` : `₱${Math.round(v)}`);
+
+  const groupW = series.length === 1 ? 74 : 108;
+  const barW = series.length === 1 ? 40 : 24;
+  const barGap = 5;
+  const chartH = 220;
+  const topPad = 28;
+  const bottomPad = 34;
+  const leftPad = 14;
+  const svgW = Math.max(520, leftPad * 2 + periods.length * groupW);
+  const svgH = topPad + chartH + bottomPad;
+
+  const gridLines = [0, 0.25, 0.5, 0.75, 1]
+    .map((f) => {
+      const y = topPad + chartH * (1 - f);
+      return `<line x1="0" y1="${y}" x2="${svgW}" y2="${y}" stroke="rgba(255,255,255,0.08)" stroke-width="1" />`;
+    })
+    .join('');
+
+  const barsSvg = periods
+    .map((p, pIdx) => {
+      const row = dataMap.get(p);
+      const gx = leftPad + pIdx * groupW;
+      const totalBarsW = series.length * barW + (series.length - 1) * barGap;
+      const startX = gx + (groupW - totalBarsW) / 2;
+
+      const bars = series
+        .map((s, sIdx) => {
+          const v =
+            s.id === 'TOTAL'
+              ? getMetricVal(row['br-molave']) + getMetricVal(row['br-tambulig']) + getMetricVal(row['br-bonifacio'])
+              : getMetricVal(row[s.id]);
+          const clamped = Math.max(0, v);
+          const h = Math.max(clamped > 0 ? 3 : 0, (clamped / maxVal) * chartH);
+          const x = startX + sIdx * (barW + barGap);
+          const y = topPad + chartH - h;
+          const color = v < 0 ? '#ef4444' : s.color;
+          return `
+            <rect x="${x}" y="${y}" width="${barW}" height="${h}" rx="4" fill="${color}" opacity="0.92">
+              <title>${p} • ${s.name}: ${fmtCurrency(v)}</title>
+            </rect>
+            ${v !== 0 ? `<text x="${x + barW / 2}" y="${Math.max(12, y - 5)}" fill="#e5e7eb" font-size="9.5" text-anchor="middle">${fmtShort(v)}</text>` : ''}
+          `;
+        })
+        .join('');
+
+      return `
+        ${bars}
+        <text x="${gx + groupW / 2}" y="${topPad + chartH + 20}" fill="#cbd5e1" font-size="11" font-weight="700" text-anchor="middle">${p}</text>
+      `;
+    })
+    .join('');
+
+  container.innerHTML = `<svg width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}" style="display:block;max-width:none;">${gridLines}${barsSvg}</svg>`;
+}
+
+document.getElementById('salesChartPeriod')?.addEventListener('change', renderSalesChartsTool);
+document.getElementById('salesChartMetric')?.addEventListener('change', renderSalesChartsTool);
+document.getElementById('salesChartBranch')?.addEventListener('change', renderSalesChartsTool);
+
+function setSalesMonthRange(ym) {
+  if (!/^\d{4}-\d{2}$/.test(ym)) return;
+  const [y, m] = ym.split('-').map(Number);
+  const lastDay = new Date(y, m, 0).getDate();
+  const s = `${ym}-01`;
+  const eDate = `${ym}-${String(lastDay).padStart(2, '0')}`;
+  const mEl = document.getElementById('salesMonthInput');
+  const startEl = document.getElementById('salesStart');
+  const endEl = document.getElementById('salesEnd');
+  const yrBtn = document.getElementById('salesYearBtn');
+  if (mEl) mEl.value = ym;
+  if (startEl) startEl.value = s;
+  if (endEl) endEl.value = eDate;
+  if (yrBtn) {
+    yrBtn.dataset.year = String(y);
+    yrBtn.textContent = String(y);
+  }
+  loadSalesSummary(false);
+}
+
+function setSalesYearRange(yearNum) {
+  const y = Math.max(2020, Math.min(2099, Number(yearNum) || Number(todayStr.slice(0, 4))));
+  const startEl = document.getElementById('salesStart');
+  const endEl = document.getElementById('salesEnd');
+  const yrBtn = document.getElementById('salesYearBtn');
+  if (startEl) startEl.value = `${y}-01-01`;
+  if (endEl) endEl.value = String(y) === todayStr.slice(0, 4) ? todayStr : `${y}-12-31`;
+  if (yrBtn) {
+    yrBtn.dataset.year = String(y);
+    yrBtn.textContent = String(y);
+  }
+  loadSalesSummary(false);
+}
+
+document.getElementById('salesPrevMonthBtn')?.addEventListener('click', () => {
+  const cur = document.getElementById('salesMonthInput')?.value || todayStr.slice(0, 7);
+  const [y, m] = cur.split('-').map(Number);
+  const d = new Date(y, m - 2, 1);
+  setSalesMonthRange(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+});
+document.getElementById('salesNextMonthBtn')?.addEventListener('click', () => {
+  const cur = document.getElementById('salesMonthInput')?.value || todayStr.slice(0, 7);
+  const [y, m] = cur.split('-').map(Number);
+  const d = new Date(y, m, 1);
+  setSalesMonthRange(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+});
+document.getElementById('salesPrevYearBtn')?.addEventListener('click', () => {
+  const y = Number(document.getElementById('salesYearBtn')?.dataset.year || todayStr.slice(0, 4));
+  setSalesYearRange(y - 1);
+});
+document.getElementById('salesNextYearBtn')?.addEventListener('click', () => {
+  const y = Number(document.getElementById('salesYearBtn')?.dataset.year || todayStr.slice(0, 4));
+  setSalesYearRange(y + 1);
+});
+document.getElementById('salesYearBtn')?.addEventListener('click', () => {
+  const y = Number(document.getElementById('salesYearBtn')?.dataset.year || todayStr.slice(0, 4));
+  setSalesYearRange(y);
+});
+
 document.querySelectorAll('.sales-tool-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
     const target = btn.dataset.salestool;
@@ -5518,9 +5787,10 @@ document.querySelectorAll('.sales-tool-btn').forEach((btn) => {
       b.classList.toggle('active', isAct);
       b.classList.toggle('secondary', !isAct);
     });
-    ['summary', 'cashpnl', 'installment', 'consolidated'].forEach((t) => {
+    ['summary', 'cashpnl', 'installment', 'consolidated', 'charts'].forEach((t) => {
       document.getElementById(`salesTool-${t}`)?.classList.toggle('hidden', t !== target);
     });
+    if (target === 'charts') renderSalesChartsTool();
   });
 });
 document.getElementById('accrualBadDebtPct')?.addEventListener('input', renderSalesInstallmentAccrualTool);
@@ -5768,8 +6038,8 @@ document.getElementById('salesMonthInput')?.addEventListener('change', (e) => {
   if (endEl) endEl.value = eDate;
   loadSalesSummary();
 });
-document.getElementById('salesApplyBtn')?.addEventListener('click', loadSalesSummary);
-document.getElementById('salesRefreshBtn')?.addEventListener('click', loadSalesSummary);
+document.getElementById('salesApplyBtn')?.addEventListener('click', () => loadSalesSummary(false));
+document.getElementById('salesRefreshBtn')?.addEventListener('click', () => loadSalesSummary(true));
 document.getElementById('salesTypeFilter')?.addEventListener('change', renderSalesSummary);
 
 setInterval(() => {
