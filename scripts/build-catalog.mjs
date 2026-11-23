@@ -204,20 +204,25 @@ async function loginAndFetchPortal(username, password) {
       }
     } catch {}
 
-    try {
-      const expRes = await fetch(`${PORTAL_BASE}/panel/franchise/expenses/${b.portalId}/${year}/${month}`, { headers: { Cookie: cookieHeader(jar) } });
-      if (expRes.ok) {
-        const expHtml = await expRes.text();
-        for (const tr of expHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
-          const tds = extractCells(tr[1]);
-          if (tds.length < 4 || !/^\d{4}-\d{2}-\d{2}/.test(tds[0])) continue;
-          liveExpenses.push({
-            branch_id: b.id, branch_name: b.name, expense_date: tds[0].slice(0, 10),
-            expense_type: tds[1] || 'OTHER EXPENSES', particular: tds[2] || '', amount: parseNum(tds[3]),
-          });
+    for (let mOffset = 0; mOffset < 6; mOffset++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - mOffset, 1);
+      const ey = d.getFullYear();
+      const em = String(d.getMonth() + 1).padStart(2, '0');
+      try {
+        const expRes = await fetch(`${PORTAL_BASE}/panel/franchise/expenses/${b.portalId}/${ey}/${em}`, { headers: { Cookie: cookieHeader(jar) } });
+        if (expRes.ok) {
+          const expHtml = await expRes.text();
+          for (const tr of expHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
+            const tds = extractCells(tr[1]);
+            if (tds.length < 4 || !/^\d{4}-\d{2}-\d{2}/.test(tds[0])) continue;
+            liveExpenses.push({
+              branch_id: b.id, branch_name: b.name, expense_date: tds[0].slice(0, 10),
+              expense_type: tds[1] || 'OTHER EXPENSES', particular: tds[2] || '', amount: parseNum(tds[3]),
+            });
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
 
     try {
       const pdRes = await fetch(`${PORTAL_BASE}/panel/pastdues/${b.portalId}/all`, { headers: { Cookie: cookieHeader(jar) } });
@@ -606,9 +611,9 @@ async function main() {
     allMovements: allMovements.slice(0, 3500),
     allInstallments: allInstallments.slice(0, 1200),
     portal_transactions: seedSnapshot.portal_transactions || [],
-    allPayments: allPayments.slice(0, 1500),
-    allExpenses: allExpenses.slice(0, 1000),
-    allPastDues: allPastDues.slice(0, 800),
+    allPayments: allPayments.slice(0, 2500),
+    allExpenses: allExpenses.slice(0, 3000),
+    allPastDues: allPastDues.slice(0, 1000),
     syncedAt: syncedAtIso,
     liveSynced,
     liveSyncNote,
