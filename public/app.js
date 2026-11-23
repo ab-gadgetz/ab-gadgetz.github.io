@@ -569,8 +569,8 @@ async function staticGhApi(url, opts = {}) {
       totals,
       byBranch: Array.from(branchStats.values()),
       expensesByType: Array.from(expByTypeMap.entries()).map(([expenseType, amount]) => ({ expenseType, amount })).sort((a, b) => b.amount - a.amount),
-      recentPayments: payRows.slice(0, 500),
-      recentExpenses: expRows.slice(0, 2000),
+      recentPayments: payRows,
+      recentExpenses: expRows,
     };
   }
   if (pathname === '/api/receivables/summary') {
@@ -593,7 +593,7 @@ async function staticGhApi(url, opts = {}) {
       totals: { installmentCount: instRows.length, totalPortfolio, totalPrincipal, totalDeposits, totalMonthlyExpected, dueAccountsCount: dueRows.length },
       byBranch: Array.from(branchMap.values()),
       pastDues: dueRows,
-      installments: instRows.slice(0, 1200),
+      installments: instRows,
     };
   }
   return {};
@@ -4777,12 +4777,8 @@ async function loadSalesSummary() {
   initSalesDateInputs();
   const start = document.getElementById('salesStart')?.value || `${todayStr.slice(0, 7)}-01`;
   const end = document.getElementById('salesEnd')?.value || todayStr;
-  // Fetch selected range + last 6 months for monthly accumulated view
-  const sixMoStartDate = new Date();
-  sixMoStartDate.setMonth(sixMoStartDate.getMonth() - 5);
-  sixMoStartDate.setDate(1);
-  const sixMoStart = sixMoStartDate.toISOString().slice(0, 10);
-  const fetchStart = start < sixMoStart ? start : sixMoStart;
+  // Fetch full endless history (all years) for monthly & annual accumulated views
+  const fetchStart = '2020-01-01';
   const fetchEnd = end > todayStr ? end : todayStr;
 
   const [txRes, actRes, finRes, histFinRes, recRes] = await Promise.all([
@@ -5323,22 +5319,30 @@ function renderHistoricalRestatedNetIncome() {
   const tbody = document.querySelector('#salesHistoricalRestatedTable tbody');
   if (!sd || !tbody) return;
 
+  const groupMode = document.getElementById('restatedGroupMode')?.value || 'MONTHLY';
   const branchFilter = document.getElementById('restatedBranchFilter')?.value || 'ALL';
   const spreadMode = document.getElementById('restatedSpreadMode')?.value || 'VINTAGE';
   const matchBranch = (bid) => branchFilter === 'ALL' || bid === branchFilter;
 
-  // Build last 6 months keys YYYY-MM (newest first)
-  const months = [];
-  const now = new Date();
-  for (let i = 0; i < 6; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
-  }
-  const monthSet = new Set(months);
+  const periodHdr = document.getElementById('restatedPeriodHeader');
+  if (periodHdr) periodHdr.textContent = groupMode === 'ANNUAL' ? 'Year' : 'Month';
 
-  const mkRow = (mo) => ({ month: mo, cashGp: 0, instIncome: 0, expenses: 0, spreadBadDebt: 0 });
+  // Collect ALL historical months endlessly across transactions, installments, expenses, and past dues
+  const monthSet = new Set([todayStr.slice(0, 7)]);
+  const addMo = (dStr) => {
+    const mo = String(dStr || '').slice(0, 7);
+    if (/^\d{4}-\d{2}$/.test(mo)) monthSet.add(mo);
+  };
+  for (const tx of sd.transactions || []) if (matchBranch(tx.branch_id)) addMo(tx.tx_date);
+  for (const inst of sd.receivables?.installments || []) if (matchBranch(inst.branch_id)) addMo(inst.sale_date);
+  const allExps = sd.histFinance?.recentExpenses || sd.finance?.recentExpenses || [];
+  for (const e of allExps) if (matchBranch(e.branch_id)) addMo(e.expense_date);
+  const pds = (sd.receivables?.pastDues || []).filter((pd) => matchBranch(pd.branch_id));
+  for (const pd of pds) addMo(pd.release_date);
+
+  const months = [...monthSet].sort((a, b) => b.localeCompare(a));
+  const mkRow = (period) => ({ period, cashGp: 0, instIncome: 0, expenses: 0, spreadBadDebt: 0 });
   const rowMap = new Map(months.map((m) => [m, mkRow(m)]));
-  const priorRow = mkRow('Prior Months (< 6 mos)');
 
   // 1. Cash Sales Gross Profit per month
   for (const tx of sd.transactions || []) {
@@ -5382,30 +5386,41 @@ function renderHistoricalRestatedNetIncome() {
   }
 
   // 3. Operating Expenses per month
-  const allExps = sd.histFinance?.recentExpenses || sd.finance?.recentExpenses || [];
   for (const e of allExps) {
     if (!matchBranch(e.branch_id)) continue;
     const mo = String(e.expense_date || '').slice(0, 7);
     if (rowMap.has(mo)) rowMap.get(mo).expenses += Number(e.amount) || 0;
   }
 
-  // 4. Spread One-Time Opening Allowance back to historical months
-  const pds = (sd.receivables?.pastDues || []).filter((pd) => matchBranch(pd.branch_id));
+  // 4. Spread One-Time Opening Allowance across all historical months
   if (spreadMode === 'EVEN') {
     const totalAllow = computeAgingAllowance(pds).requiredAllowance;
-    const perMo = totalAllow / months.length;
+    const perMo = months.length ? totalAllow / months.length : 0;
     for (const mo of months) rowMap.get(mo).spreadBadDebt += perMo;
   } else {
     for (const pd of pds) {
       const allow = (Number(pd.balance) || 0) * getAgingTier(pd.days_due).rate;
       const relMo = String(pd.release_date || '').slice(0, 7);
-      if (monthSet.has(relMo)) rowMap.get(relMo).spreadBadDebt += allow;
-      else priorRow.spreadBadDebt += allow;
+      if (rowMap.has(relMo)) rowMap.get(relMo).spreadBadDebt += allow;
     }
   }
 
-  const displayRows = [...months.map((m) => rowMap.get(m))];
-  if (spreadMode === 'VINTAGE' && priorRow.spreadBadDebt > 0) displayRows.push(priorRow);
+  let displayRows = months.map((m) => rowMap.get(m));
+
+  // Annual roll-up by YYYY if Annual view is selected
+  if (groupMode === 'ANNUAL') {
+    const yearMap = new Map();
+    for (const r of displayRows) {
+      const yr = r.period.slice(0, 4);
+      if (!yearMap.has(yr)) yearMap.set(yr, mkRow(yr));
+      const yRow = yearMap.get(yr);
+      yRow.cashGp += r.cashGp;
+      yRow.instIncome += r.instIncome;
+      yRow.expenses += r.expenses;
+      yRow.spreadBadDebt += r.spreadBadDebt;
+    }
+    displayRows = [...yearMap.values()].sort((a, b) => b.period.localeCompare(a.period));
+  }
 
   let tCash = 0, tInst = 0, tExp = 0, tUnadj = 0, tBd = 0, tCorr = 0;
   tbody.innerHTML =
@@ -5417,7 +5432,7 @@ function renderHistoricalRestatedNetIncome() {
         tUnadj += unadj; tBd += r.spreadBadDebt; tCorr += corr;
         return `
           <tr>
-            <td><strong>${r.month}</strong></td>
+            <td><strong>${r.period}</strong></td>
             <td>${fmtCurrency(r.cashGp)}</td>
             <td>${fmtCurrency(r.instIncome)}</td>
             <td style="color:var(--danger);">${fmtCurrency(-r.expenses)}</td>
@@ -5428,7 +5443,7 @@ function renderHistoricalRestatedNetIncome() {
       })
       .join('') +
     `<tr style="background:rgba(255,255,255,0.05);font-weight:700;">
-      <td>TOTAL RESTATED</td>
+      <td>ALL-TIME TOTAL RESTATED</td>
       <td>${fmtCurrency(tCash)}</td>
       <td>${fmtCurrency(tInst)}</td>
       <td style="color:var(--danger);">${fmtCurrency(-tExp)}</td>
@@ -5438,6 +5453,7 @@ function renderHistoricalRestatedNetIncome() {
     </tr>`;
 }
 
+document.getElementById('restatedGroupMode')?.addEventListener('change', renderHistoricalRestatedNetIncome);
 document.getElementById('restatedBranchFilter')?.addEventListener('change', renderHistoricalRestatedNetIncome);
 document.getElementById('restatedSpreadMode')?.addEventListener('change', renderHistoricalRestatedNetIncome);
 

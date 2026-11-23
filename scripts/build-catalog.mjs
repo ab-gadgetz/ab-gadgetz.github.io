@@ -204,7 +204,8 @@ async function loginAndFetchPortal(username, password) {
       }
     } catch {}
 
-    for (let mOffset = 0; mOffset < 6; mOffset++) {
+    let emptyExpStreak = 0;
+    for (let mOffset = 0; mOffset < 60; mOffset++) {
       const d = new Date(now.getFullYear(), now.getMonth() - mOffset, 1);
       const ey = d.getFullYear();
       const em = String(d.getMonth() + 1).padStart(2, '0');
@@ -212,16 +213,22 @@ async function loginAndFetchPortal(username, password) {
         const expRes = await fetch(`${PORTAL_BASE}/panel/franchise/expenses/${b.portalId}/${ey}/${em}`, { headers: { Cookie: cookieHeader(jar) } });
         if (expRes.ok) {
           const expHtml = await expRes.text();
+          let found = 0;
           for (const tr of expHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
             const tds = extractCells(tr[1]);
             if (tds.length < 4 || !/^\d{4}-\d{2}-\d{2}/.test(tds[0])) continue;
+            found++;
             liveExpenses.push({
               branch_id: b.id, branch_name: b.name, expense_date: tds[0].slice(0, 10),
               expense_type: tds[1] || 'OTHER EXPENSES', particular: tds[2] || '', amount: parseNum(tds[3]),
             });
           }
-        }
-      } catch {}
+          if (found > 0) emptyExpStreak = 0;
+          else if (mOffset >= 2 && ++emptyExpStreak >= 3) break;
+        } else if (mOffset >= 2 && ++emptyExpStreak >= 3) break;
+      } catch {
+        if (mOffset >= 2 && ++emptyExpStreak >= 3) break;
+      }
     }
 
     try {
@@ -609,11 +616,11 @@ async function main() {
     staffPinHashes: seedSnapshot.staff_pin_hashes || null,
     catalogViews: { byBranch: catalogViewsByBranch, total: viewsTotal, weekly: viewsWeekly, monthly: viewsMonthly },
     allMovements: allMovements.slice(0, 3500),
-    allInstallments: allInstallments.slice(0, 1200),
+    allInstallments,
     portal_transactions: seedSnapshot.portal_transactions || [],
-    allPayments: allPayments.slice(0, 2500),
-    allExpenses: allExpenses.slice(0, 3000),
-    allPastDues: allPastDues.slice(0, 1000),
+    allPayments,
+    allExpenses,
+    allPastDues,
     syncedAt: syncedAtIso,
     liveSynced,
     liveSyncNote,

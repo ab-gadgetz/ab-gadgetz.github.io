@@ -659,6 +659,10 @@
                 <p class="muted small" style="margin:2px 0 0;">Spreads the One-Time Opening Bad Debt Allowance back to historical months as if it had been recorded from the beginning.</p>
               </div>
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <select id="restatedGroupMode" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="MONTHLY">Monthly (All History)</option>
+                  <option value="ANNUAL">Annual (By Year)</option>
+                </select>
                 <select id="restatedBranchFilter" style="width:auto;padding:5px 9px;font-size:12px;">
                   <option value="ALL">All Branches</option>
                   <option value="br-bonifacio">Bonifacio</option>
@@ -666,8 +670,8 @@
                   <option value="br-tambulig">Tambulig</option>
                 </select>
                 <select id="restatedSpreadMode" style="width:auto;padding:5px 9px;font-size:12px;">
-                  <option value="VINTAGE">Spread by Origination Month (Exact Vintage)</option>
-                  <option value="EVEN">Spread Evenly Across Last 6 Months</option>
+                  <option value="VINTAGE">Spread by Origination Period (Exact Vintage)</option>
+                  <option value="EVEN">Spread Evenly Across All Periods</option>
                 </select>
               </div>
             </div>
@@ -675,7 +679,7 @@
               <table class="data-table" id="salesHistoricalRestatedTable">
                 <thead>
                   <tr>
-                    <th>Month</th>
+                    <th id="restatedPeriodHeader">Month</th>
                     <th>Cash GP</th>
                     <th>Inst. GP + Accrued Int.</th>
                     <th>Operating Expenses</th>
