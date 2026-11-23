@@ -230,6 +230,8 @@ async function loginAndFetchPortal(username, password) {
             branch_id: b.id, branch_name: b.name, release_date: tds[0].slice(0, 10),
             account_no: tds[1] || '', unit: tds[2] || '', customer_name: tds[3] || '',
             contact_no: tds[4] || '', barangay: tds[5] || '',
+            balance: parseNum(tds[12] || tds[10] || 0),
+            days_due: parseInt(String(tds[9] || '0').replace(/[^0-9]/g, ''), 10) || 0,
           });
         }
       }

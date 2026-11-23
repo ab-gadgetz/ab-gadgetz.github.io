@@ -592,8 +592,8 @@ async function staticGhApi(url, opts = {}) {
     return {
       totals: { installmentCount: instRows.length, totalPortfolio, totalPrincipal, totalDeposits, totalMonthlyExpected, dueAccountsCount: dueRows.length },
       byBranch: Array.from(branchMap.values()),
-      pastDues: dueRows.slice(0, 120),
-      installments: instRows.slice(0, 100),
+      pastDues: dueRows,
+      installments: instRows.slice(0, 1200),
     };
   }
   return {};
