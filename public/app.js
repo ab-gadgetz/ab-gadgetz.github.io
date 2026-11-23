@@ -4125,55 +4125,57 @@ async function loadSyncLogs() {
       </tr>`).join('');
 }
 
+function isFreebieMovement(m) {
+  if (!m) return false;
+  if (typeof isFreebieAccessory === 'function' && isFreebieAccessory(m)) return true;
+  if (state.inventory?.items && m.product_id) {
+    const prod = state.inventory.items.find((i) => i.id === m.product_id);
+    if (prod && typeof isFreebieAccessory === 'function' && isFreebieAccessory(prod)) return true;
+  }
+  const nm = String(m.product_name || m.name || m.model || '');
+  return /\b(freebie|freebies|eco\s*bag|gift\s*box|free\s+sim|free\s+bundle|magbadge)\b/i.test(nm);
+}
+
+let activeActivityReqSeq = 0;
+
 async function loadActivity() {
   const start = document.getElementById('actStart').value;
   const end = document.getElementById('actEnd').value;
   const globalBranch = document.getElementById('globalBranch').value;
   if (globalBranch) state.actBranchFilter = globalBranch;
-  const [activity, catalogViews] = await Promise.all([
-    api(`/api/activity?start=${start}&end=${end}`),
-    api(`/api/catalog/views?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`).catch(() => null),
-  ]);
+  const seq = ++activeActivityReqSeq;
+
+  // 1. Load and render Activity Log IMMEDIATELY without waiting on external view counters
+  const activity = await api(`/api/activity?start=${start}&end=${end}`);
+  if (seq !== activeActivityReqSeq) return;
   state.activity = activity;
-  state.catalogViews = catalogViews;
   renderActivity();
+
+  // 2. Load Catalog Views in the background with 60s per-range cache
+  if (!state.viewsCache) state.viewsCache = new Map();
+  const cacheKey = `${start}::${end}`;
+  const cached = state.viewsCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < 60000) {
+    state.catalogViews = cached.data;
+    renderActivityViewsOnly();
+    return;
+  }
+  api(`/api/catalog/views?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`)
+    .then((catalogViews) => {
+      if (catalogViews) state.viewsCache.set(cacheKey, { ts: Date.now(), data: catalogViews });
+      if (seq !== activeActivityReqSeq) return;
+      state.catalogViews = catalogViews;
+      renderActivityViewsOnly();
+    })
+    .catch(() => {});
 }
 
-function renderActivity() {
-  const data = state.activity;
-  if (!data) return;
-
-  const pType = state.actProductType;
-  const mode = state.actSaleMode;
-  const branchFilter = state.actBranchFilter;
-
-  const filterMovementType = (m) => pType === 'ALL' || (m.product_type || 'Cellphones') === pType;
-  const isCashSale = (m) => m.delta_qty < 0 && m.movement_type.includes('SALE') && !m.movement_type.includes('INSTALLMENT');
-  const isAnySale = (m) => m.delta_qty < 0 && m.movement_type.includes('SALE');
-
-  // Compute clickable branch sold totals (Installment mode counts installment sales; Cash mode counts cash sales; All counts all sales)
-  const soldByBranch = { 'br-molave': 0, 'br-tambulig': 0, 'br-bonifacio': 0 };
-  if (mode === 'INSTALLMENT') {
-    if (pType !== 'Accessories') {
-      for (const i of data.allInstallments || []) {
-        if (soldByBranch[i.branch_id] !== undefined) soldByBranch[i.branch_id] += 1;
-      }
-    }
-  } else {
-    const matchSale = mode === 'CASH' ? isCashSale : isAnySale;
-    for (const m of data.allMovements || []) {
-      if (matchSale(m) && filterMovementType(m) && soldByBranch[m.branch_id] !== undefined) {
-        soldByBranch[m.branch_id] += Math.abs(m.delta_qty);
-      }
-    }
-  }
-
-  const totalSold = Object.values(soldByBranch).reduce((a, b) => a + b, 0);
+function renderActivityViewsOnly() {
   const views = state.catalogViews?.byBranch || {};
-  const vMol = views['br-molave'] || { total: 0, weekly: 0, monthly: 0 };
-  const vTam = views['br-tambulig'] || { total: 0, weekly: 0, monthly: 0 };
-  const vBon = views['br-bonifacio'] || { total: 0, weekly: 0, monthly: 0 };
-  const vTot = state.catalogViews || { total: 0, weekly: 0, monthly: 0 };
+  const vMol = views['br-molave'] || { total: 0 };
+  const vTam = views['br-tambulig'] || { total: 0 };
+  const vBon = views['br-bonifacio'] || { total: 0 };
+  const vTot = state.catalogViews || { total: 0 };
   const viewsGrid = document.getElementById('activityViewsGrid');
   const viewsLbl = document.getElementById('catalogViewsToggleLabel');
   if (viewsLbl) {
@@ -4195,6 +4197,39 @@ function renderActivity() {
       </div>
     `;
   }
+}
+
+function renderActivity() {
+  const data = state.activity;
+  if (!data) return;
+
+  const pType = state.actProductType;
+  const mode = state.actSaleMode;
+  const branchFilter = state.actBranchFilter;
+
+  const filterMovementType = (m) => pType === 'ALL' || (m.product_type || 'Cellphones') === pType;
+  const isCashSale = (m) => m.delta_qty < 0 && m.movement_type.includes('SALE') && !m.movement_type.includes('INSTALLMENT') && !isFreebieMovement(m);
+  const isAnySale = (m) => m.delta_qty < 0 && m.movement_type.includes('SALE') && !isFreebieMovement(m);
+
+  // Compute clickable branch sold totals (excluding freebies)
+  const soldByBranch = { 'br-molave': 0, 'br-tambulig': 0, 'br-bonifacio': 0 };
+  if (mode === 'INSTALLMENT') {
+    if (pType !== 'Accessories') {
+      for (const i of data.allInstallments || []) {
+        if (soldByBranch[i.branch_id] !== undefined) soldByBranch[i.branch_id] += 1;
+      }
+    }
+  } else {
+    const matchSale = mode === 'CASH' ? isCashSale : isAnySale;
+    for (const m of data.allMovements || []) {
+      if (matchSale(m) && filterMovementType(m) && soldByBranch[m.branch_id] !== undefined) {
+        soldByBranch[m.branch_id] += Math.abs(m.delta_qty);
+      }
+    }
+  }
+
+  const totalSold = Object.values(soldByBranch).reduce((a, b) => a + b, 0);
+  renderActivityViewsOnly();
   document.getElementById('activitySalesGrid').innerHTML = `
     <button type="button" class="summary-box compact-act-box act-summary-btn ${branchFilter === 'br-molave' ? 'active' : ''}" data-branch="br-molave">
       Molave<strong>${fmtNum(soldByBranch['br-molave'] || 0)} pcs</strong>
@@ -4262,6 +4297,7 @@ function renderActivity() {
     const movList = (data.allMovements || []).filter((m) => {
       if (branchFilter && m.branch_id !== branchFilter) return false;
       if (!filterMovementType(m)) return false;
+      if (m.movement_type.includes('SALE') && isFreebieMovement(m)) return false;
       if (mode === 'CASH') return isCashSale(m);
       return true;
     });
