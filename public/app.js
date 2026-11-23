@@ -4608,6 +4608,23 @@ async function loadReceivables() {
   renderReceivables();
 }
 
+function getEffectiveDaysDue(pd) {
+  let days = Number(pd?.days_due) || 0;
+  const relDate = String(pd?.release_date || '').slice(0, 10);
+  const acct = String(pd?.account_no || '').trim();
+  const unit = String(pd?.unit || '').toUpperCase();
+  const is2023 = relDate.startsWith('2023-') || /-23$/.test(acct) || unit.includes('INSTALLMENT PHONE SAMPLE');
+  if (is2023 && days < 180) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(relDate)) {
+      const ageDays = Math.max(0, Math.floor((Date.now() - new Date(`${relDate}T00:00:00Z`).getTime()) / 86400000));
+      days = Math.max(days, Math.max(365, ageDays - 30));
+    } else {
+      days = Math.max(days, 1000);
+    }
+  }
+  return days;
+}
+
 function getAgingTier(daysDue) {
   const d = Number(daysDue) || 0;
   if (d <= 30) return { key: '1-30', label: '1 – 30 Days Past Due', rate: 0.05, action: 'SMS / Call Reminder' };
@@ -4630,7 +4647,7 @@ function computeAgingAllowance(pastDues = []) {
   let requiredAllowance = 0;
   for (const pd of pastDues) {
     const bal = Number(pd.balance) || 0;
-    const tier = getAgingTier(pd.days_due);
+    const tier = getAgingTier(getEffectiveDaysDue(pd));
     const b = byKey.get(tier.key);
     b.count++;
     b.balance += bal;
@@ -5399,7 +5416,7 @@ function renderHistoricalRestatedNetIncome() {
     for (const mo of months) rowMap.get(mo).spreadBadDebt += perMo;
   } else {
     for (const pd of pds) {
-      const allow = (Number(pd.balance) || 0) * getAgingTier(pd.days_due).rate;
+      const allow = (Number(pd.balance) || 0) * getAgingTier(getEffectiveDaysDue(pd)).rate;
       const relMo = String(pd.release_date || '').slice(0, 7);
       if (rowMap.has(relMo)) rowMap.get(relMo).spreadBadDebt += allow;
     }
@@ -5588,7 +5605,7 @@ function openSalesDrilldown(kind, branchId, label) {
         ? pds
             .map((pd) => {
               const bal = Number(pd.balance) || 0;
-              const days = Number(pd.days_due) || 0;
+              const days = getEffectiveDaysDue(pd);
               const tier = getAgingTier(days);
               const allow = bal * tier.rate;
               sBal += bal; sAllow += allow;
@@ -5636,11 +5653,13 @@ function openReceivablesAllowanceModal(bucketKey = 'ALL', branchFilter = 'ALL') 
   const activeBranch = branchFilter || 'ALL';
 
   const allPds = rec.pastDues || [];
-  const filtered = allPds.filter((pd) => {
-    if (activeBranch !== 'ALL' && pd.branch_id !== activeBranch) return false;
-    if (bucketKey === 'ALL') return true;
-    return getAgingTier(pd.days_due).key === bucketKey;
-  });
+  const filtered = allPds
+    .filter((pd) => {
+      if (activeBranch !== 'ALL' && pd.branch_id !== activeBranch) return false;
+      if (bucketKey === 'ALL') return true;
+      return getAgingTier(getEffectiveDaysDue(pd)).key === bucketKey;
+    })
+    .sort((a, b) => getEffectiveDaysDue(b) - getEffectiveDaysDue(a));
 
   document.getElementById('salesDrilldownTitle').textContent = `Opening Allowance Audit — ${bNames[activeBranch] || activeBranch}`;
   document.getElementById('salesDrilldownSub').textContent = `Bucket: ${bucketLabels[bucketKey] || bucketKey} • ${filtered.length} customer account(s)`;
@@ -5664,7 +5683,7 @@ function openReceivablesAllowanceModal(bucketKey = 'ALL', branchFilter = 'ALL') 
       ? filtered
           .map((pd) => {
             const bal = Number(pd.balance) || 0;
-            const days = Number(pd.days_due) || 0;
+            const days = getEffectiveDaysDue(pd);
             const tier = getAgingTier(days);
             const allow = bal * tier.rate;
             sBal += bal;
