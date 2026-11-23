@@ -5606,6 +5606,12 @@ function renderSalesChartsTool() {
       if (!validKey(k) || !['br-molave', 'br-tambulig', 'br-bonifacio'].includes(e.branch_id)) continue;
       ensure(k)[e.branch_id].exp += Number(e.amount) || 0;
     }
+    for (const p of sd.histFinance?.recentPayments || []) {
+      const k = keyOf(p.payment_date);
+      if (!validKey(k) || !['br-molave', 'br-tambulig', 'br-bonifacio'].includes(p.branch_id)) continue;
+      const finInc = (Number(p.interest) || 0) + (Number(p.penalties) || 0) - (Number(p.rebates) || 0);
+      ensure(k)[p.branch_id].inst += finInc;
+    }
     for (const inst of sd.receivables?.installments || []) {
       const k = keyOf(inst.sale_date);
       if (!validKey(k) || !['br-molave', 'br-tambulig', 'br-bonifacio'].includes(inst.branch_id)) continue;
@@ -5715,6 +5721,84 @@ function renderSalesChartsTool() {
     .join('');
 
   container.innerHTML = `<svg width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}" style="display:block;max-width:none;">${gridLines}${barsSvg}</svg>`;
+
+  // Auto-generated plain-English Chart Analysis right below the graph
+  const analysisBox = document.getElementById('salesChartAnalysisBox');
+  if (analysisBox) {
+    const metricLabels = {
+      NET_CASH: 'Net Cash Sales',
+      GROSS_CASH: 'Gross Cash Sales (SRP)',
+      CASH_GP: 'True Cash Sales Profit',
+      CONSOLIDATED_NET: 'Consolidated Net Income',
+    };
+    const mLabel = metricLabels[metric] || 'Sales';
+    const periodTotals = periods.map((p) => {
+      const row = dataMap.get(p);
+      let tot = 0;
+      const byBr = {};
+      for (const s of series) {
+        const v =
+          s.id === 'TOTAL'
+            ? getMetricVal(row['br-molave']) + getMetricVal(row['br-tambulig']) + getMetricVal(row['br-bonifacio'])
+            : getMetricVal(row[s.id]);
+        byBr[s.name] = v;
+        tot += v;
+      }
+      return { period: p, tot, byBr };
+    });
+
+    const grandTotal = periodTotals.reduce((a, b) => a + b.tot, 0);
+    const avgPerPeriod = grandTotal / Math.max(1, periodTotals.length);
+    const bestPeriod = [...periodTotals].sort((a, b) => b.tot - a.tot)[0];
+    const latest = periodTotals[periodTotals.length - 1];
+    const prev = periodTotals.length >= 2 ? periodTotals[periodTotals.length - 2] : null;
+    const isCurrentMonthInProgress = periodMode === 'MONTHLY' && latest?.period === todayStr.slice(0, 7);
+
+    // Branch totals ranking
+    const seriesTotals = series
+      .map((s) => {
+        const sum = periodTotals.reduce((acc, pt) => acc + (pt.byBr[s.name] || 0), 0);
+        return { name: s.name, color: s.color, sum, avg: sum / Math.max(1, periodTotals.length) };
+      })
+      .sort((a, b) => b.sum - a.sum);
+
+    // Negative / dip alerts
+    const dips = [];
+    for (const pt of periodTotals) {
+      for (const [bName, val] of Object.entries(pt.byBr)) {
+        if (val < 0) dips.push(`${bName} (${pt.period}: ${fmtCurrency(val)})`);
+      }
+    }
+
+    let trendHtml = '';
+    if (prev && latest) {
+      const diff = latest.tot - prev.tot;
+      const pct = Math.abs(prev.tot) > 0 ? ((diff / Math.abs(prev.tot)) * 100).toFixed(1) : '0.0';
+      const up = diff >= 0;
+      trendHtml = `<li><strong>Latest Trend (${latest.period} vs ${prev.period}):</strong> <strong style="color:${up ? 'var(--green)' : '#f59e0b'};">${up ? '▲' : '▼'} ${up ? '+' : ''}${fmtCurrency(diff)} (${up ? '+' : ''}${pct}%)</strong> — ${latest.period} is at <strong>${fmtCurrency(latest.tot)}</strong>${isCurrentMonthInProgress ? ' <span class="muted">(month still in progress)</span>' : ''}.</li>`;
+    }
+
+    const rankingHtml = seriesTotals
+      .map((s) => {
+        const share = grandTotal > 0 ? ` (${((s.sum / grandTotal) * 100).toFixed(1)}% share)` : '';
+        return `<strong style="color:${s.color};">${s.name}</strong>: ${fmtCurrency(s.sum)}${share} <span class="muted">[avg ${fmtCurrency(s.avg)}/${periodMode === 'YEARLY' ? 'yr' : 'mo'}]</span>`;
+      })
+      .join(' &nbsp;•&nbsp; ');
+
+    const dipHtml = dips.length
+      ? `<li><strong style="color:#f59e0b;">Watchlist (${dips.length} negative ${periodMode === 'YEARLY' ? 'year' : 'month'}s):</strong> ${dips.slice(-4).join(', ')}${dips.length > 4 ? ` (+${dips.length - 4} more)` : ''} — review operating expenses or low-margin sales in those periods.</li>`
+      : `<li><strong style="color:var(--green);">Healthy Consistency:</strong> No negative ${periodMode === 'YEARLY' ? 'years' : 'months'} detected across the shown ${mLabel.toLowerCase()} periods.</li>`;
+
+    analysisBox.innerHTML = `
+      <div style="font-weight:800;color:var(--gold-bright);margin-bottom:6px;letter-spacing:0.4px;">QUICK GRAPH ANALYSIS — ${mLabel.toUpperCase()} (${periodMode})</div>
+      <ul style="margin:0 0 0 18px;padding:0;display:flex;flex-direction:column;gap:4px;">
+        <li><strong>Peak Performance:</strong> <strong>${bestPeriod.period}</strong> was the strongest ${periodMode === 'YEARLY' ? 'year' : 'month'} at <strong style="color:var(--green);">${fmtCurrency(bestPeriod.tot)}</strong> (overall average: <strong>${fmtCurrency(avgPerPeriod)}</strong> per ${periodMode === 'YEARLY' ? 'year' : 'month'}).</li>
+        ${trendHtml}
+        <li><strong>Branch Ranking (${periods.length} ${periodMode === 'YEARLY' ? 'year' : 'month'}s):</strong> ${rankingHtml}</li>
+        ${dipHtml}
+      </ul>
+    `;
+  }
 }
 
 document.getElementById('salesChartPeriod')?.addEventListener('change', renderSalesChartsTool);
