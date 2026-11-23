@@ -4608,19 +4608,30 @@ async function loadReceivables() {
   renderReceivables();
 }
 
+function getAgingTier(daysDue) {
+  const d = Number(daysDue) || 0;
+  if (d <= 30) return { key: '1-30', label: '1 – 30 Days Past Due', rate: 0.05, action: 'SMS / Call Reminder' };
+  if (d <= 60) return { key: '31-60', label: '31 – 60 Days Past Due', rate: 0.20, action: 'CI Field Visit & Follow-Up' };
+  if (d <= 90) return { key: '61-90', label: '61 – 90 Days Past Due', rate: 0.50, action: 'Final Demand • Stop Accruing Interest' };
+  if (d <= 180) return { key: '91-180', label: '91 – 180 Days Past Due', rate: 0.80, action: 'Priority Repo / Unit Pull-Out' };
+  return { key: '180+', label: '180+ Days Past Due', rate: 0.95, action: 'Write-Off / Legal Recovery' };
+}
+
 function computeAgingAllowance(pastDues = []) {
   const buckets = [
-    { key: '1-30', label: '1 – 30 Days Past Due', rate: 0.05, count: 0, balance: 0, allowance: 0 },
-    { key: '31-60', label: '31 – 60 Days Past Due', rate: 0.20, count: 0, balance: 0, allowance: 0 },
-    { key: '61-90', label: '61 – 90 Days Past Due', rate: 0.50, count: 0, balance: 0, allowance: 0 },
-    { key: '90+', label: '90+ Days Past Due (Net of Est. Repo)', rate: 0.85, count: 0, balance: 0, allowance: 0 },
+    { key: '1-30', label: '1 – 30 Days Past Due', rate: 0.05, action: 'SMS / Call Reminder', count: 0, balance: 0, allowance: 0 },
+    { key: '31-60', label: '31 – 60 Days Past Due', rate: 0.20, action: 'CI Field Visit & Follow-Up', count: 0, balance: 0, allowance: 0 },
+    { key: '61-90', label: '61 – 90 Days Past Due', rate: 0.50, action: 'Final Demand • Stop Accruing Interest', count: 0, balance: 0, allowance: 0 },
+    { key: '91-180', label: '91 – 180 Days Past Due', rate: 0.80, action: 'Priority Repo / Unit Pull-Out', count: 0, balance: 0, allowance: 0 },
+    { key: '180+', label: '180+ Days Past Due', rate: 0.95, action: 'Write-Off / Legal Recovery', count: 0, balance: 0, allowance: 0 },
   ];
+  const byKey = new Map(buckets.map((b) => [b.key, b]));
   let totalPastDue = 0;
   let requiredAllowance = 0;
   for (const pd of pastDues) {
     const bal = Number(pd.balance) || 0;
-    const days = Number(pd.days_due) || 0;
-    const b = days <= 30 ? buckets[0] : days <= 60 ? buckets[1] : days <= 90 ? buckets[2] : buckets[3];
+    const tier = getAgingTier(pd.days_due);
+    const b = byKey.get(tier.key);
     b.count++;
     b.balance += bal;
     const allow = bal * b.rate;
@@ -4669,6 +4680,7 @@ function renderReceivables() {
   }
   const agingTbody = document.querySelector('#receivablesAgingTable tbody');
   if (agingTbody) {
+    const parPct = t.totalPortfolio > 0 ? ((aging.totalPastDue / t.totalPortfolio) * 100).toFixed(1) : '0.0';
     agingTbody.innerHTML =
       aging.buckets
         .map(
@@ -4679,15 +4691,17 @@ function renderReceivables() {
           <td>${fmtNum(b.count)}</td>
           <td>${fmtCurrency(b.balance)}</td>
           <td style="color:#f59e0b;"><strong>${fmtCurrency(b.allowance)}</strong></td>
+          <td class="small muted">${b.action}</td>
         </tr>`
         )
         .join('') +
       `<tr class="rec-aging-click" data-bucket="ALL" style="background:rgba(255,255,255,0.04);font-weight:700;cursor:pointer;" title="Click to inspect all past-due customers by branch">
-        <td style="text-decoration:underline dotted;">TOTAL OPENING ALLOWANCE (Prior-Period Catch-Up)</td>
+        <td style="text-decoration:underline dotted;">TOTAL OPENING ALLOWANCE (PAR: ${parPct}%)</td>
         <td>—</td>
         <td>${fmtNum(aging.buckets.reduce((s, x) => s + x.count, 0))}</td>
         <td><strong>${fmtCurrency(aging.totalPastDue)}</strong></td>
         <td style="color:var(--gold-bright);"><strong>${fmtCurrency(aging.requiredAllowance)}</strong></td>
+        <td class="small" style="color:var(--gold-bright);">Click any row to audit customers</td>
       </tr>`;
 
     document.querySelectorAll('#tab-receivables .rec-aging-click').forEach((el) => {
@@ -5433,15 +5447,15 @@ function openSalesDrilldown(kind, branchId, label) {
             .map((pd) => {
               const bal = Number(pd.balance) || 0;
               const days = Number(pd.days_due) || 0;
-              const rate = days <= 30 ? 0.05 : days <= 60 ? 0.2 : days <= 90 ? 0.5 : 0.85;
-              const allow = bal * rate;
+              const tier = getAgingTier(days);
+              const allow = bal * tier.rate;
               sBal += bal; sAllow += allow;
-              return `<tr><td>${bNames[pd.branch_id] || pd.branch_name || ''}</td><td><strong>${pd.customer_name}</strong><div class="small muted">${pd.account_no}</div></td><td>${pd.unit}</td><td>${days}d</td><td>${fmtCurrency(bal)}</td><td>${Math.round(rate * 100)}%</td><td style="color:#f59e0b;"><strong>${fmtCurrency(allow)}</strong></td></tr>`;
+              return `<tr><td>${bNames[pd.branch_id] || pd.branch_name || ''}</td><td><strong>${pd.customer_name}</strong><div class="small muted">${pd.account_no}</div></td><td>${pd.unit}</td><td>${days}d</td><td>${fmtCurrency(bal)}</td><td>${Math.round(tier.rate * 100)}%</td><td style="color:#f59e0b;"><strong>${fmtCurrency(allow)}</strong></td></tr>`;
             })
             .join('')
         : '<tr><td colspan="7" class="muted">No past-due accounts found.</td></tr>') +
       `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="4">TOTAL (${pds.length} past-due accounts)</td><td>${fmtCurrency(sBal)}</td><td>—</td><td style="color:#f59e0b;">${fmtCurrency(sAllow)}</td></tr>`;
-    formulaEl.innerHTML = `<strong>Aging Tiers:</strong> 1–30d (5%), 31–60d (20%), 61–90d (50%), 90+d (85% net of repo). Total Opening Allowance = <strong>${fmtCurrency(sAllow)}</strong>.`;
+    formulaEl.innerHTML = `<strong>5-Tier Risk Matrix:</strong> 1–30d (5%), 31–60d (20%), 61–90d (50%), 91–180d (80% Repo), 180+d (95% Write-Off). Total Opening Allowance = <strong>${fmtCurrency(sAllow)}</strong>.`;
   } else if (kind === 'cash_interest') {
     const pays = (sd.finance?.recentPayments || []).filter((p) => matchBranch(p.branch_id));
     let sAmt = 0, sFin = 0;
@@ -5469,18 +5483,21 @@ function openReceivablesAllowanceModal(bucketKey = 'ALL', branchFilter = 'ALL') 
   const modal = document.getElementById('salesDrilldownModal');
   if (!rec || !modal) return;
   const bNames = { ALL: 'All Branches', 'br-bonifacio': 'Bonifacio', 'br-molave': 'Molave', 'br-tambulig': 'Tambulig' };
-  const bucketLabels = { ALL: 'All Past-Due Buckets', '1-30': '1–30 Days (5%)', '31-60': '31–60 Days (20%)', '61-90': '61–90 Days (50%)', '90+': '90+ Days (85%)' };
+  const bucketLabels = {
+    ALL: 'All Past-Due Buckets',
+    '1-30': '1–30 Days (5% • Remind)',
+    '31-60': '31–60 Days (20% • CI Visit)',
+    '61-90': '61–90 Days (50% • Final Demand)',
+    '91-180': '91–180 Days (80% • Repo Priority)',
+    '180+': '180+ Days (95% • Write-Off / Legal)',
+  };
   const activeBranch = branchFilter || 'ALL';
 
   const allPds = rec.pastDues || [];
   const filtered = allPds.filter((pd) => {
     if (activeBranch !== 'ALL' && pd.branch_id !== activeBranch) return false;
-    const days = Number(pd.days_due) || 0;
-    if (bucketKey === '1-30') return days <= 30;
-    if (bucketKey === '31-60') return days > 30 && days <= 60;
-    if (bucketKey === '61-90') return days > 60 && days <= 90;
-    if (bucketKey === '90+') return days > 90;
-    return true;
+    if (bucketKey === 'ALL') return true;
+    return getAgingTier(pd.days_due).key === bucketKey;
   });
 
   document.getElementById('salesDrilldownTitle').textContent = `Opening Allowance Audit — ${bNames[activeBranch] || activeBranch}`;
@@ -5506,11 +5523,11 @@ function openReceivablesAllowanceModal(bucketKey = 'ALL', branchFilter = 'ALL') 
           .map((pd) => {
             const bal = Number(pd.balance) || 0;
             const days = Number(pd.days_due) || 0;
-            const rate = days <= 30 ? 0.05 : days <= 60 ? 0.2 : days <= 90 ? 0.5 : 0.85;
-            const allow = bal * rate;
+            const tier = getAgingTier(days);
+            const allow = bal * tier.rate;
             sBal += bal;
             sAllow += allow;
-            return `<tr><td>${bNames[pd.branch_id] || pd.branch_name || ''}</td><td><strong>${pd.customer_name}</strong><div class="small muted">${pd.account_no}</div></td><td>${pd.unit || ''}</td><td><strong>${days}d</strong></td><td>${fmtCurrency(bal)}</td><td>${Math.round(rate * 100)}%</td><td style="color:#f59e0b;"><strong>${fmtCurrency(allow)}</strong></td></tr>`;
+            return `<tr><td>${bNames[pd.branch_id] || pd.branch_name || ''}</td><td><strong>${pd.customer_name}</strong><div class="small muted">${pd.account_no}</div></td><td>${pd.unit || ''}</td><td><strong>${days}d</strong></td><td>${fmtCurrency(bal)}</td><td>${Math.round(tier.rate * 100)}%</td><td style="color:#f59e0b;"><strong>${fmtCurrency(allow)}</strong></td></tr>`;
           })
           .join('')
       : '<tr><td colspan="7" class="muted">No past-due customer accounts in this bucket/branch.</td></tr>') +

@@ -691,8 +691,8 @@
       <div class="sub-panel" id="receivablesAgingPanel">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
           <div>
-            <h3 style="margin:0;">Past-Due Aging &amp; Allowance for Doubtful Accounts (Synced with Sales P&amp;L)</h3>
-            <p class="muted small" style="margin:3px 0 0;">Tiered PFRS 9 allowance rates: 1–30d (5%), 31–60d (20%), 61–90d (50%), 90+d (85% net of est. repo recovery). One-time opening allowance kept separate from monthly bad debt expense.</p>
+            <h3 style="margin:0;">Past-Due Aging, Risk Exposure &amp; Bad Debt Allowance (Synced with Sales P&amp;L)</h3>
+            <p class="muted small" style="margin:3px 0 0;">5-tier PFRS 9 risk matrix: 1–30d (5% Remind), 31–60d (20% CI Visit), 61–90d (50% Demand / Non-Accrual), 91–180d (80% Repo Priority), 180+d (95% Write-Off).</p>
           </div>
           <div id="receivablesAgingSummaryPill" class="badge badge-warn" style="font-size:11.5px;"></div>
         </div>
@@ -700,11 +700,12 @@
           <table class="data-table" id="receivablesAgingTable">
             <thead>
               <tr>
-                <th>Aging Bucket</th>
-                <th>Allowance Rate</th>
+                <th>Aging Risk Tier</th>
+                <th>Provision Rate</th>
                 <th>Accounts</th>
                 <th>Past-Due Balance</th>
                 <th>Required Allowance</th>
+                <th>Risk Management Action</th>
               </tr>
             </thead>
             <tbody></tbody>
