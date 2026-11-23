@@ -4608,17 +4608,41 @@ async function loadReceivables() {
   renderReceivables();
 }
 
+function computeAgingAllowance(pastDues = []) {
+  const buckets = [
+    { key: '1-30', label: '1 – 30 Days Past Due', rate: 0.05, count: 0, balance: 0, allowance: 0 },
+    { key: '31-60', label: '31 – 60 Days Past Due', rate: 0.20, count: 0, balance: 0, allowance: 0 },
+    { key: '61-90', label: '61 – 90 Days Past Due', rate: 0.50, count: 0, balance: 0, allowance: 0 },
+    { key: '90+', label: '90+ Days Past Due (Net of Est. Repo)', rate: 0.85, count: 0, balance: 0, allowance: 0 },
+  ];
+  let totalPastDue = 0;
+  let requiredAllowance = 0;
+  for (const pd of pastDues) {
+    const bal = Number(pd.balance) || 0;
+    const days = Number(pd.days_due) || 0;
+    const b = days <= 30 ? buckets[0] : days <= 60 ? buckets[1] : days <= 90 ? buckets[2] : buckets[3];
+    b.count++;
+    b.balance += bal;
+    const allow = bal * b.rate;
+    b.allowance += allow;
+    totalPastDue += bal;
+    requiredAllowance += allow;
+  }
+  return { buckets, totalPastDue, requiredAllowance };
+}
+
 function renderReceivables() {
   const data = state.receivables;
   if (!data) return;
   const t = data.totals;
   const q = document.getElementById('recSearchInput').value.trim().toLowerCase();
+  const aging = computeAgingAllowance(data.pastDues || []);
 
   document.getElementById('receivablesKpiGrid').innerHTML = `
     <div class="summary-box">
       INSTALLMENT PORTFOLIO
       <strong>${fmtCurrency(t.totalPortfolio)}</strong>
-      <span class="summary-note">${fmtNum(t.installmentCount)} active contract(s)</span>
+      <span class="summary-note">Net Realizable: ${fmtCurrency(Math.max(0, t.totalPortfolio - aging.requiredAllowance))}</span>
     </div>
     <div class="summary-box">
       PRINCIPAL FINANCED
@@ -4628,14 +4652,42 @@ function renderReceivables() {
     <div class="summary-box">
       EXPECTED MONTHLY
       <strong style="color:var(--green);">${fmtCurrency(t.totalMonthlyExpected)}</strong>
-      <span class="summary-note">Combined monthly billing</span>
+      <span class="summary-note">${fmtNum(t.installmentCount)} active contract(s)</span>
     </div>
     <div class="summary-box">
-      OVERALL PAST-DUE ACCOUNTS
-      <strong style="color:var(--gold-bright);">${fmtNum(t.dueAccountsCount)}</strong>
-      <span class="summary-note">Tracked across branches</span>
+      OPENING ALLOWANCE (AGING)
+      <strong style="color:#f59e0b;">${fmtCurrency(aging.requiredAllowance)}</strong>
+      <span class="summary-note">${fmtNum(t.dueAccountsCount)} past-due (${fmtCurrency(aging.totalPastDue)})</span>
     </div>
   `;
+
+  const agingPill = document.getElementById('receivablesAgingSummaryPill');
+  if (agingPill) {
+    agingPill.textContent = `Target Opening Allowance: ${fmtCurrency(aging.requiredAllowance)}`;
+  }
+  const agingTbody = document.querySelector('#receivablesAgingTable tbody');
+  if (agingTbody) {
+    agingTbody.innerHTML =
+      aging.buckets
+        .map(
+          (b) => `
+        <tr>
+          <td><strong>${b.label}</strong></td>
+          <td>${Math.round(b.rate * 100)}%</td>
+          <td>${fmtNum(b.count)}</td>
+          <td>${fmtCurrency(b.balance)}</td>
+          <td style="color:#f59e0b;"><strong>${fmtCurrency(b.allowance)}</strong></td>
+        </tr>`
+        )
+        .join('') +
+      `<tr style="background:rgba(255,255,255,0.04);font-weight:700;">
+        <td>TOTAL OPENING ALLOWANCE (Prior-Period Catch-Up)</td>
+        <td>—</td>
+        <td>${fmtNum(aging.buckets.reduce((s, x) => s + x.count, 0))}</td>
+        <td><strong>${fmtCurrency(aging.totalPastDue)}</strong></td>
+        <td style="color:var(--gold-bright);"><strong>${fmtCurrency(aging.requiredAllowance)}</strong></td>
+      </tr>`;
+  }
 
   document.querySelector('#receivablesBranchTable tbody').innerHTML = data.byBranch
     .map((b) => `
@@ -5030,7 +5082,7 @@ function renderSalesInstallmentAccrualTool() {
   const guide = document.getElementById('installmentAccrualGuide');
   if (!sd || !tbody) return;
 
-  const badDebtPct = Math.max(0, Math.min(50, Number(document.getElementById('accrualBadDebtPct')?.value) || 5)) / 100;
+  const badDebtPct = Math.max(0, Math.min(30, Number(document.getElementById('accrualBadDebtPct')?.value) || 3)) / 100;
   const branchIds = ['br-bonifacio', 'br-molave', 'br-tambulig'];
   const finByBranch = new Map((sd.finance?.byBranch || []).map((b) => [b.branchId, b]));
   const allInst = sd.receivables?.installments || [];
@@ -5044,13 +5096,17 @@ function renderSalesInstallmentAccrualTool() {
 
   const stats = {};
   for (const bid of branchIds) {
+    const branchPds = allPastDues.filter((pd) => pd.branch_id === bid);
+    const ag = computeAgingAllowance(branchPds);
     stats[bid] = {
       newCount: 0,
+      newPrincipal: 0,
       contractSales: 0,
       estCogs: 0,
       merchGp: 0,
       accruedInterest: 0,
-      pastDueBalance: 0,
+      pastDueBalance: ag.totalPastDue,
+      openingAllowance: ag.requiredAllowance,
       badDebtProvision: 0,
       expenses: Number(finByBranch.get(bid)?.expenses) || 0,
       accrualNetIncome: 0,
@@ -5072,6 +5128,7 @@ function renderSalesInstallmentAccrualTool() {
     // 1. Merchandising Revenue & Gross Profit recognized at Point of Sale (in selected range)
     if (saleDate >= sd.start && saleDate <= sd.end) {
       s.newCount++;
+      s.newPrincipal += principal;
       s.contractSales += cashEquivSrp;
       const matchedCost = estimateProductCostByName(inst.unit);
       const unitCogs = matchedCost > 0 ? matchedCost : cashEquivSrp * 0.85;
@@ -5091,19 +5148,14 @@ function renderSalesInstallmentAccrualTool() {
     }
   }
 
-  for (const pd of allPastDues) {
-    const bid = pd.branch_id;
-    if (!stats[bid]) continue;
-    stats[bid].pastDueBalance += Number(pd.balance) || 0;
-  }
-
   const tot = {
-    newCount: 0, contractSales: 0, estCogs: 0, merchGp: 0, accruedInterest: 0,
-    pastDueBalance: 0, badDebtProvision: 0, expenses: 0, accrualNetIncome: 0, abWebCashInterest: 0,
+    newCount: 0, newPrincipal: 0, contractSales: 0, estCogs: 0, merchGp: 0, accruedInterest: 0,
+    pastDueBalance: 0, openingAllowance: 0, badDebtProvision: 0, expenses: 0, accrualNetIncome: 0, abWebCashInterest: 0,
   };
   for (const bid of branchIds) {
     const s = stats[bid];
-    s.badDebtProvision = s.pastDueBalance * badDebtPct;
+    // Prospective Monthly Bad Debt Expense = % of New Installment Principal
+    s.badDebtProvision = s.newPrincipal * badDebtPct;
     s.accrualNetIncome = s.merchGp + s.accruedInterest - s.badDebtProvision - s.expenses;
     for (const k of Object.keys(tot)) tot[k] += s[k];
   }
@@ -5126,8 +5178,9 @@ function renderSalesInstallmentAccrualTool() {
     row('= Installment Merchandising Gross Profit (Earned at Release)', (c) => c.merchGp, { bold: true, color: 'var(--green)' }),
     row('Add: Accrued Interest Income (Earned Over Term, Accrual Basis)', (c) => c.accruedInterest, { color: 'var(--green)' }),
     row('= Total Accrual Installment Gross Income', (c) => c.merchGp + c.accruedInterest, { bold: true }),
-    row(`Less: Bad Debt Provision (${Math.round(badDebtPct * 100)}% of Past-Due Portfolio)`, (c) => -c.badDebtProvision, { color: '#f59e0b' }),
+    row(`Less: Prospective Monthly Bad Debt Expense (${(badDebtPct * 100).toFixed(1)}% of New Principal)`, (c) => -c.badDebtProvision, { color: '#f59e0b' }),
     row('= Net Installment & Financing Contribution (Before Shared OpEx)', (c) => c.merchGp + c.accruedInterest - c.badDebtProvision, { bold: true, auto: true }),
+    row('Memo: One-Time Opening Allowance (Aging-Based on Past-Due Accounts — Synced w/ Receivables)', (c) => c.openingAllowance, { color: '#f59e0b' }),
     row('Compare: AB Web Cash-Basis Interest Collected (Payments)', (c) => c.abWebCashInterest, { color: 'var(--muted)' }),
     row('Accrual vs Cash-Basis Interest Variance', (c) => c.accruedInterest - c.abWebCashInterest, { color: 'var(--gold-bright)' }),
   ].join('');
@@ -5176,6 +5229,7 @@ function renderSalesConsolidatedTool() {
       instGp: i.merchGp,
       accruedInt: i.accruedInterest,
       badDebt: i.badDebtProvision,
+      openingAllowance: i.openingAllowance || 0,
       instContrib,
       totalGrossContrib,
       expenses: exp,
@@ -5212,11 +5266,12 @@ function renderSalesConsolidatedTool() {
     row('   Less: Est. Installment Unit COGS', (c) => -c.instCogs, { color: 'var(--danger)' }),
     row('   = Installment Merchandising Gross Profit', (c) => c.instGp, { color: 'var(--green)' }),
     row('   Add: Accrued Interest Income (Monthly Earned)', (c) => c.accruedInt, { color: 'var(--green)' }),
-    row(`   Less: Bad Debt Provision (${Math.round((instData.badDebtPct || 0.05) * 100)}% Past Due)`, (c) => -c.badDebt, { color: '#f59e0b' }),
+    row(`   Less: Prospective Monthly Bad Debt (${((instData.badDebtPct || 0.03) * 100).toFixed(1)}% of New Principal)`, (c) => -c.badDebt, { color: '#f59e0b' }),
     row('   = Net Installment & Financing Contribution', (c) => c.instContrib, { bold: true, color: 'var(--green)' }),
     row('C. Total Consolidated Gross Contribution (A + B)', (c) => c.totalGrossContrib, { bold: true }),
     row('D. Less: Shared Branch Operating Expenses (Deducted ONCE)', (c) => -c.expenses, { color: 'var(--danger)' }),
     row('E. REAL CONSOLIDATED NET INCOME (Accrual Method)', (c) => c.realAccrualNet, { bold: true, auto: true }),
+    row('Memo: One-Time Opening Allowance (Aging-Based — Synced w/ Receivables Tab)', (c) => c.openingAllowance, { color: '#f59e0b' }),
     row('Reference: Consolidated Net Income (Using Cash-Collected Interest, No Double-Discount)', (c) => c.realCashInterestNet, { bold: true, color: 'var(--gold-bright)' }),
   ].join('');
 
