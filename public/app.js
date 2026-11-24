@@ -10654,7 +10654,7 @@ function applyRolePermissions() {
 
   // Toggle admin-only & cashier-only elements
   document.querySelectorAll('.admin-only-el, .publish-github-btn').forEach((el) => {
-    el.classList.toggle('hidden', !isAdmin);
+    el.classList.toggle('hidden', !isAdmin || (IS_STATIC_GH && el.classList.contains('publish-github-btn')));
   });
   document.querySelectorAll('.cashier-only-el').forEach((el) => {
     el.classList.toggle('hidden', role !== 'CASHIER');
