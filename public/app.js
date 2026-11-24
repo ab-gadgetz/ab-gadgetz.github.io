@@ -2433,9 +2433,10 @@ function buildRestockDraftPlan() {
         ? Math.max(baseFloor, demandTarget, reorderPoint + (avail === 0 ? 1 : 0))
         : Math.max(baseFloor, avail === 0 ? baseFloor : reorderPoint + 1);
 
+      const minOrderQty = tier.key === 'LOW_END' ? 2 : 1;
       const coveredByPending = deductPending && pendingQty > 0 && effectiveAvail > reorderPoint;
       const excludedUnavailable = Boolean(state.restockExcludedKeys?.has(`${item.id}::${b.id}`));
-      const suggestedQty = coveredByPending ? 0 : Math.max(1, targetQty - effectiveAvail);
+      const suggestedQty = coveredByPending ? 0 : Math.max(minOrderQty, targetQty - effectiveAvail);
       const rawNeededWithoutPending = Math.max(0, targetQty - avail);
       const savedByPendingQty = deductPending ? Math.max(0, rawNeededWithoutPending - suggestedQty) : 0;
 
@@ -2538,13 +2539,14 @@ function buildRestockDraftPlan() {
         c.selected = false;
         continue;
       }
-      if (spent + c.unitCost > budgetVal) {
+      const minOrderQty = c.tierKey === 'LOW_END' ? 2 : 1;
+      if (spent + c.unitCost * minOrderQty > budgetVal) {
         c.selected = false;
         continue;
       }
       const maxAffordable = Math.floor((budgetVal - spent) / c.unitCost);
       if (maxAffordable < c.qty) {
-        c.qty = Math.max(1, maxAffordable);
+        c.qty = Math.max(minOrderQty, maxAffordable);
       }
       spent += c.qty * c.unitCost;
     }
