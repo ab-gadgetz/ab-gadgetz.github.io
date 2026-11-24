@@ -1602,8 +1602,10 @@
       <div id="reorderPreviewStatus" style="font-size:12px;font-weight:600;color:#1d6f42;margin-bottom:8px;"></div>
       <div id="reorderPreviewBody" style="max-height:55vh;overflow-y:auto;padding-right:4px;"></div>
 
-      <div style="display:flex;gap:10px;margin-top:14px;">
-        <button type="button" id="reorderBackToEditBtn" style="flex:1;background:#e5e7eb;color:#1b1913;border:1px solid #cbd5e1;">BACK TO EDIT</button>
+      <div id="reorderPreviewFooter" style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
+        <button type="button" id="reorderRebuildPlanBtn" style="flex:2;min-width:210px;background:#b45309;color:#fff;border:1px solid #92400e;font-weight:700;">BUILD PLAN AGAIN</button>
+        <button type="button" id="reorderResetExcludedBtn" class="hidden" style="padding:8px 12px;background:#fff;color:#6b6351;border:1px solid #d5ceb8;font-size:12px;font-weight:600;">RESET EXCLUDED</button>
+        <button type="button" id="reorderBackToEditBtn" style="flex:1;min-width:130px;background:#e5e7eb;color:#1b1913;border:1px solid #cbd5e1;">BACK TO EDIT</button>
       </div>
     </div>
   </div>

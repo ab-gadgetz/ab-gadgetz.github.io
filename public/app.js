@@ -423,7 +423,12 @@ async function staticGhApi(url, opts = {}) {
         }
       }
     }
-    return { reorderSuggestions: reorderSuggestions.slice(0, 60), transferSuggestions: [] };
+    return {
+      demandByProductBranch: bundle.planning?.demandByProductBranch || undefined,
+      demandByProduct: bundle.planning?.demandByProduct || undefined,
+      reorderSuggestions: reorderSuggestions.slice(0, 60),
+      transferSuggestions: [],
+    };
   }
   if (pathname === '/api/budget') {
     const items = bundle.orderBudgetItems || [];
@@ -1914,8 +1919,8 @@ function buildRestockDemandIndex() {
   }
 
   const nowMs = Date.now();
-  const since30 = new Date(nowMs - 30 * 86400000).toISOString().slice(0, 10);
-  const since90 = new Date(nowMs - 90 * 86400000).toISOString().slice(0, 10);
+  const since30 = new Date(nowMs - 30 * 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+  const since90 = new Date(nowMs - 90 * 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
 
   const rawPB = new Map();
   const ensurePB = (pid, bid) => {
@@ -2231,6 +2236,7 @@ function buildRestockDraftPlan() {
         : Math.max(baseFloor, avail === 0 ? baseFloor : reorderPoint + 1);
 
       const coveredByPending = deductPending && pendingQty > 0 && effectiveAvail > reorderPoint;
+      const excludedUnavailable = Boolean(state.restockExcludedKeys?.has(`${item.id}::${b.id}`));
       const suggestedQty = coveredByPending ? 0 : Math.max(1, targetQty - effectiveAvail);
       const rawNeededWithoutPending = Math.max(0, targetQty - avail);
       const savedByPendingQty = deductPending ? Math.max(0, rawNeededWithoutPending - suggestedQty) : 0;
@@ -2263,6 +2269,7 @@ function buildRestockDraftPlan() {
         pendingRefs,
         effectiveAvail,
         coveredByPending,
+        excludedUnavailable,
         savedByPendingQty,
         reorderPoint,
         branchDemand30,
@@ -2272,15 +2279,15 @@ function buildRestockDraftPlan() {
         storewideDemand90,
         storewideAllSold,
         qty: suggestedQty,
-        selected: !coveredByPending && suggestedQty > 0,
+        selected: !coveredByPending && !excludedUnavailable && suggestedQty > 0,
       });
     }
   }
 
-  // Sort by selected priority strategy (push fully-covered-by-pending rows after actionable rows)
+  // Sort by selected priority strategy (push fully-covered-by-pending & supplier-unavailable excluded rows after actionable rows)
   candidates.sort((a, b) => {
-    const aNeed = a.coveredByPending || a.qty <= 0 ? 1 : 0;
-    const bNeed = b.coveredByPending || b.qty <= 0 ? 1 : 0;
+    const aNeed = a.coveredByPending || a.excludedUnavailable || a.qty <= 0 ? 1 : 0;
+    const bNeed = b.coveredByPending || b.excludedUnavailable || b.qty <= 0 ? 1 : 0;
     if (aNeed !== bNeed) return aNeed - bNeed;
 
     const aHasDemand = a.branchDemand90 > 0 || a.storewideDemand90 > 0 || a.storewideAllSold > 0 ? 1 : 0;
@@ -2296,7 +2303,7 @@ function buildRestockDraftPlan() {
       if (a.savingsVsWebsite !== b.savingsVsWebsite) return b.savingsVsWebsite - a.savingsVsWebsite;
       if (a.branchDemand90 !== b.branchDemand90) return b.branchDemand90 - a.branchDemand90;
       if (a.tierRank !== b.tierRank) return a.tierRank - b.tierRank;
-      return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel);
+      return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel) || a.key.localeCompare(b.key);
     }
 
     if (priorityMode === 'DEMAND_FIRST') {
@@ -2306,7 +2313,7 @@ function buildRestockDraftPlan() {
       if (a.storewideDemand90 !== b.storewideDemand90) return b.storewideDemand90 - a.storewideDemand90;
       if (a.tierRank !== b.tierRank) return a.tierRank - b.tierRank;
       if (a.effectiveAvail !== b.effectiveAvail) return a.effectiveAvail - b.effectiveAvail;
-      return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel);
+      return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel) || a.key.localeCompare(b.key);
     }
 
     // DEFAULT: LOW_END_DEMAND — Prioritize Active-Demand Low-End Cellphones (SRP <= ₱10k), Out-of-Stock (after pending) first, then Store Demand
@@ -2319,13 +2326,13 @@ function buildRestockDraftPlan() {
     if (a.storewideAllSold !== b.storewideAllSold) return b.storewideAllSold - a.storewideAllSold;
     if (a.savingsVsWebsite !== b.savingsVsWebsite) return b.savingsVsWebsite - a.savingsVsWebsite;
     if (a.effectiveAvail !== b.effectiveAvail) return a.effectiveAvail - b.effectiveAvail;
-    return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel);
+    return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel) || a.key.localeCompare(b.key);
   });
 
   if (budgetVal > 0) {
     let spent = 0;
     for (const c of candidates) {
-      if (c.coveredByPending || c.qty <= 0) {
+      if (c.coveredByPending || c.excludedUnavailable || c.qty <= 0) {
         c.selected = false;
         continue;
       }
@@ -2402,6 +2409,7 @@ function renderRestockCards() {
   const totalZeroLines = plan.filter((r) => r.avail === 0 && !r.coveredByPending).length;
   const pendingSavedPcs = plan.reduce((s, r) => s + (Number(r.savedByPendingQty) || 0), 0);
   const pendingLineCount = plan.filter((r) => r.pendingQty > 0).length;
+  const excludedCount = state.restockExcludedKeys?.size || 0;
   if (sumEl) {
     const tierNote =
       lowEndUnits + midUnits + highUnits > 0
@@ -2411,7 +2419,17 @@ function renderRestockCards() {
       pendingSavedPcs > 0
         ? ` • <span style="color:#60a5fa;">Pending On-Order deducted: <strong>${fmtNum(pendingSavedPcs)} pcs</strong> (${pendingLineCount} branch line${pendingLineCount === 1 ? '' : 's'})</span>`
         : '';
-    sumEl.innerHTML = `Selected <strong>${fmtNum(selected.length)}</strong> line(s) (<strong>${fmtNum(zeroLines)}/${fmtNum(totalZeroLines)}</strong> out-of-stock) • <strong>${fmtNum(totalUnits)} pcs</strong>${tierNote}${pendNote} • Est. Total: <strong style="color:var(--gold-bright);">${fmtCurrency(totalCost)}</strong>`;
+    const exclNote =
+      excludedCount > 0
+        ? ` • <span style="color:#f59e0b;">Unavailable excluded: <strong>${fmtNum(excludedCount)}</strong> <button type="button" id="clearRestockExcludedBtn" class="secondary" style="padding:1px 6px;font-size:10.5px;min-height:0;margin-left:3px;">Reset</button></span>`
+        : '';
+    sumEl.innerHTML = `Selected <strong>${fmtNum(selected.length)}</strong> line(s) (<strong>${fmtNum(zeroLines)}/${fmtNum(totalZeroLines)}</strong> out-of-stock) • <strong>${fmtNum(totalUnits)} pcs</strong>${tierNote}${pendNote}${exclNote} • Est. Total: <strong style="color:var(--gold-bright);">${fmtCurrency(totalCost)}</strong>`;
+    sumEl.querySelector('#clearRestockExcludedBtn')?.addEventListener('click', () => {
+      state.restockExcludedKeys = new Set();
+      state.previewUncheckedKeys = new Set();
+      buildRestockDraftPlan();
+      renderRestockCards();
+    });
   }
 
   const visible = getFilteredRestockRows();
@@ -4147,6 +4165,8 @@ async function createSavedOrderFromDraft() {
   }
 
   if (createdOrder) {
+    state.restockExcludedKeys = new Set();
+    state.previewUncheckedKeys = new Set();
     openSavedOrderInlineEditor(createdOrder);
     renderSavedOrdersPanel();
     buildRestockDraftPlan();
@@ -4155,7 +4175,7 @@ async function createSavedOrderFromDraft() {
   }
 }
 
-function getGroupedReorderPlan(overrideOrder = null) {
+function getGroupedReorderPlan(overrideOrder = null, filterPreviewUnchecked = false) {
   const activeOrd = overrideOrder && Array.isArray(overrideOrder.items)
     ? overrideOrder
     : state.previewOrderOverride && Array.isArray(state.previewOrderOverride.items)
@@ -4164,7 +4184,9 @@ function getGroupedReorderPlan(overrideOrder = null) {
 
   const selected = activeOrd
     ? activeOrd.items.filter((r) => r.approved !== false && Number(r.qty) > 0)
-    : (state.restockPlan || []).filter((r) => r.selected && Number(r.qty) > 0);
+    : (state.restockPlan || []).filter(
+        (r) => r.selected && Number(r.qty) > 0 && (!filterPreviewUnchecked || !state.previewUncheckedKeys?.has(r.key))
+      );
 
   const bySupplier = new Map();
   for (const sup of SUPPLIER_ORDER) bySupplier.set(sup, new Map());
@@ -4196,7 +4218,7 @@ function getGroupedReorderPlan(overrideOrder = null) {
 }
 
 function buildReorderCopyText(overrideOrder = null) {
-  const { grouped } = getGroupedReorderPlan(overrideOrder);
+  const { grouped } = getGroupedReorderPlan(overrideOrder, true);
   if (!grouped.length) return '';
   const parts = ['Reorder request'];
   for (const supGroup of grouped) {
@@ -4212,11 +4234,14 @@ function buildReorderCopyText(overrideOrder = null) {
   return parts.join('\n\n');
 }
 
-function renderReorderPreviewModal() {
+function renderReorderPreviewModal(statusNote = '') {
   const modal = document.getElementById('reorderPreviewModal');
   if (!modal) return;
+  if (!state.previewUncheckedKeys) state.previewUncheckedKeys = new Set();
+  if (!state.restockExcludedKeys) state.restockExcludedKeys = new Set();
   const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked);
-  const { selected, grouped } = getGroupedReorderPlan();
+  const { selected, grouped, isSaved } = getGroupedReorderPlan(null, false);
+  const activeSelected = isSaved ? selected : selected.filter((r) => !state.previewUncheckedKeys.has(r.key));
 
   const prepEl = document.getElementById('reorderPreviewPrepared');
   if (prepEl) {
@@ -4229,10 +4254,10 @@ function renderReorderPreviewModal() {
     })}`;
   }
 
-  const totalUnits = selected.reduce((s, r) => s + (Number(r.qty) || 0), 0);
-  const totalCost = selected.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.unitCost) || 0), 0);
+  const totalUnits = activeSelected.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+  const totalCost = activeSelected.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.unitCost) || 0), 0);
   const branchTotals = new Map(BRANCH_ORDER.map((b) => [b, { qty: 0, cost: 0 }]));
-  for (const r of selected) {
+  for (const r of activeSelected) {
     if (!branchTotals.has(r.branchName)) branchTotals.set(r.branchName, { qty: 0, cost: 0 });
     const bt = branchTotals.get(r.branchName);
     bt.qty += Number(r.qty) || 0;
@@ -4269,6 +4294,7 @@ function renderReorderPreviewModal() {
   }
 
   const bodyEl = document.getElementById('reorderPreviewBody');
+  const prevScrollTop = bodyEl ? bodyEl.scrollTop : 0;
   if (bodyEl) {
     if (!grouped.length) {
       bodyEl.innerHTML = '<div style="padding:16px;text-align:center;color:#6b6351;">No products selected in this reorder plan.</div>';
@@ -4290,10 +4316,19 @@ function renderReorderPreviewModal() {
                     const nameLabel = r.brand && !String(r.model || '').toLowerCase().startsWith(String(r.brand || '').toLowerCase())
                       ? `${r.brand} · ${r.model}`
                       : r.model || r.displayModel;
+                    const rowKey = r.key || `${r.productId}::${r.branchId}`;
+                    const isChecked = isSaved || !state.previewUncheckedKeys.has(rowKey);
                     return `
-                    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid #e6e0ce;font-size:12.5px;">
-                      <span>${nameLabel}</span>
-                      <span style="display:flex;align-items:center;gap:12px;white-space:nowrap;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid #e6e0ce;font-size:12.5px;">
+                      ${
+                        isSaved
+                          ? `<span>${nameLabel}</span>`
+                          : `<label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer;flex:1;min-width:0;font-weight:400;">
+                              <input type="checkbox" class="reorder-preview-item-chk" data-key="${String(rowKey).replace(/"/g, '&quot;')}" ${isChecked ? 'checked' : ''} style="width:16px;height:16px;margin:0;accent-color:#b45309;flex-shrink:0;" />
+                              <span style="${isChecked ? '' : 'text-decoration:line-through;opacity:0.45;color:#6b6351;'}">${nameLabel}</span>
+                            </label>`
+                      }
+                      <span style="display:flex;align-items:center;gap:12px;white-space:nowrap;${isChecked ? '' : 'opacity:0.45;'}">
                         ${showCosts ? `<span style="color:#4f493a;font-size:11.5px;">${fmtCurrency(r.unitCost)} × ${r.qty} = <strong>${fmtCurrency(r.unitCost * r.qty)}</strong></span>` : ''}
                         <strong style="color:#b45309;">${r.qty} ${r.qty === 1 ? 'pc' : 'pcs'}</strong>
                       </span>
@@ -4306,10 +4341,52 @@ function renderReorderPreviewModal() {
           </div>`
         )
         .join('');
+      bodyEl.scrollTop = prevScrollTop;
+
+      if (!isSaved) {
+        bodyEl.querySelectorAll('.reorder-preview-item-chk').forEach((chk) => {
+          chk.addEventListener('change', (e) => {
+            const key = e.target.dataset.key;
+            if (!key) return;
+            if (e.target.checked) state.previewUncheckedKeys.delete(key);
+            else state.previewUncheckedKeys.add(key);
+            renderReorderPreviewModal();
+          });
+        });
+      }
     }
   }
+
+  const rebuildBtn = document.getElementById('reorderRebuildPlanBtn');
+  if (rebuildBtn) {
+    rebuildBtn.classList.toggle('hidden', isSaved);
+    const uncnt = state.previewUncheckedKeys.size;
+    rebuildBtn.textContent = uncnt > 0 ? `BUILD PLAN AGAIN (EXCLUDE ${uncnt} UNAVAILABLE)` : 'BUILD PLAN AGAIN';
+  }
+  const resetBtn = document.getElementById('reorderResetExcludedBtn');
+  if (resetBtn) {
+    const exCnt = state.restockExcludedKeys.size;
+    resetBtn.classList.toggle('hidden', isSaved || exCnt === 0);
+    if (exCnt > 0) resetBtn.textContent = `RESET EXCLUDED (${exCnt})`;
+  }
+
   const stEl = document.getElementById('reorderPreviewStatus');
-  if (stEl) stEl.textContent = '';
+  if (stEl) {
+    const uncnt = isSaved ? 0 : state.previewUncheckedKeys.size;
+    const exCnt = isSaved ? 0 : state.restockExcludedKeys.size;
+    if (statusNote) {
+      stEl.style.color = '#1d6f42';
+      stEl.textContent = statusNote;
+    } else if (uncnt > 0) {
+      stEl.style.color = '#b45309';
+      stEl.textContent = `${uncnt} unit(s) unchecked as unavailable — click BUILD PLAN AGAIN to refill budget with next available units.`;
+    } else if (exCnt > 0) {
+      stEl.style.color = '#6b6351';
+      stEl.textContent = `${exCnt} unavailable unit(s) currently excluded from this plan. Uncheck more or click RESET EXCLUDED to restore.`;
+    } else {
+      stEl.textContent = '';
+    }
+  }
 }
 
 function downloadReorderPlanPdf(overrideOrder = null) {
@@ -4318,7 +4395,7 @@ function downloadReorderPlanPdf(overrideOrder = null) {
     alert('PDF generator library is still loading. Please try again.');
     return;
   }
-  const { selected, grouped, isSaved, order } = getGroupedReorderPlan(overrideOrder, false);
+  const { selected, grouped, isSaved, order } = getGroupedReorderPlan(overrideOrder, true);
   if (!selected.length) {
     alert('No approved products selected to download.');
     return;
@@ -4419,7 +4496,7 @@ async function downloadReorderPlanExcel(overrideOrder = null) {
     alert('Excel library is still loading. Please try again in a second.');
     return;
   }
-  const { selected, grouped, isSaved, order } = getGroupedReorderPlan(overrideOrder, false);
+  const { selected, grouped, isSaved, order } = getGroupedReorderPlan(overrideOrder, true);
   if (!selected.length) {
     alert('No approved products selected to export.');
     return;
@@ -4871,6 +4948,7 @@ document.getElementById('addDeductionBtn')?.addEventListener('click', () => {
 
 document.getElementById('buildRestockPlanBtn')?.addEventListener('click', () => {
   state.previewOrderOverride = null;
+  state.previewUncheckedKeys = new Set();
   buildRestockDraftPlan();
   renderRestockCards();
   renderReorderPreviewModal();
@@ -4879,6 +4957,7 @@ document.getElementById('buildRestockPlanBtn')?.addEventListener('click', () => 
 
 document.getElementById('previewRestockPlanBtn')?.addEventListener('click', () => {
   state.previewOrderOverride = null;
+  state.previewUncheckedKeys = new Set();
   if (!state.restockPlan) buildRestockDraftPlan();
   renderReorderPreviewModal();
   document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
@@ -4898,6 +4977,8 @@ document.getElementById('restockTypeFilter')?.addEventListener('change', () => {
 
 document.querySelectorAll('input[name="restockSupplierMode"]').forEach((r) => {
   r.addEventListener('change', () => {
+    state.restockExcludedKeys = new Set();
+    state.previewUncheckedKeys = new Set();
     buildRestockDraftPlan();
     renderRestockCards();
   });
@@ -4928,7 +5009,40 @@ document.getElementById('reorderSelectAllChk')?.addEventListener('change', (e) =
   renderRestockCards();
 });
 
-document.getElementById('reorderShowCostsChk')?.addEventListener('change', renderReorderPreviewModal);
+document.getElementById('reorderShowCostsChk')?.addEventListener('change', () => renderReorderPreviewModal());
+document.getElementById('reorderRebuildPlanBtn')?.addEventListener('click', () => {
+  if (!state.restockExcludedKeys) state.restockExcludedKeys = new Set();
+  if (!state.previewUncheckedKeys) state.previewUncheckedKeys = new Set();
+  if (state.previewUncheckedKeys.size === 0 && state.restockExcludedKeys.size === 0) {
+    const stEl = document.getElementById('reorderPreviewStatus');
+    if (stEl) {
+      stEl.style.color = '#b45309';
+      stEl.textContent = 'Uncheck item(s) not available at supplier first, then click BUILD PLAN AGAIN.';
+    }
+    return;
+  }
+  const newlyExcluded = state.previewUncheckedKeys.size;
+  for (const key of state.previewUncheckedKeys) {
+    state.restockExcludedKeys.add(key);
+  }
+  state.previewUncheckedKeys.clear();
+  state.previewOrderOverride = null;
+  buildRestockDraftPlan();
+  renderRestockCards();
+  renderReorderPreviewModal(
+    newlyExcluded > 0
+      ? `Rebuilt plan excluding ${newlyExcluded} unavailable item(s) — budget refilled with next available units ✓`
+      : 'Rebuilt plan with updated exclusions ✓'
+  );
+});
+document.getElementById('reorderResetExcludedBtn')?.addEventListener('click', () => {
+  state.restockExcludedKeys = new Set();
+  state.previewUncheckedKeys = new Set();
+  state.previewOrderOverride = null;
+  buildRestockDraftPlan();
+  renderRestockCards();
+  renderReorderPreviewModal('Restored all previously excluded units ✓');
+});
 document.getElementById('closeReorderPreviewBtn')?.addEventListener('click', () => {
   document.getElementById('reorderPreviewModal')?.classList.add('hidden');
 });

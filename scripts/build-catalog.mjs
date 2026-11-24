@@ -15,6 +15,30 @@ const BRANCHES = [
 
 const PORTAL_BASE = 'https://app.abgadgetz.com.ph';
 
+async function fetchWithRetry(url, options = {}, attempts = 3) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(url, options);
+      if ((res.status >= 500 || res.status === 429) && i < attempts - 1) {
+        await new Promise((r) => setTimeout(r, 350 * (i + 1)));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts - 1) {
+        await new Promise((r) => setTimeout(r, 350 * (i + 1)));
+      }
+    }
+  }
+  throw lastErr;
+}
+
+function manilaDateDaysAgo(days = 0) {
+  return new Date(Date.now() - days * 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+}
+
 function collectCookies(res, jar) {
   for (const raw of res.headers.getSetCookie?.() || []) {
     const pair = raw.split(';')[0];
@@ -28,7 +52,7 @@ const cookieHeader = (jar) => Array.from(jar.entries()).map(([k, v]) => `${k}=${
 // Same login flow as the Admin Portal's working adapter: load the login page,
 // read the form action + CSRF token, then POST the credentials.
 async function portalLogin(username, password, jar) {
-  const pageRes = await fetch(`${PORTAL_BASE}/`, { redirect: 'manual' });
+  const pageRes = await fetchWithRetry(`${PORTAL_BASE}/`, { redirect: 'manual' });
   collectCookies(pageRes, jar);
   const html = await pageRes.text();
 
@@ -41,7 +65,7 @@ async function portalLogin(username, password, jar) {
   form.set('password', password);
   if (csrfMatch) form.set(csrfMatch[1], csrfMatch[2]);
 
-  const postRes = await fetch(postUrl, {
+  const postRes = await fetchWithRetry(postUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookieHeader(jar) },
     body: form.toString(),
@@ -115,6 +139,7 @@ async function loginAndFetchPortal(username, password) {
 
   const result = new Map();
   const stockCardsByBranch = new Map();
+  const succeededCodesByBranch = new Map();
   const liveInstallments = [];
   const livePayments = [];
   const liveExpenses = [];
@@ -126,7 +151,7 @@ async function loginAndFetchPortal(username, password) {
 
   for (const b of BRANCHES) {
     const url = `${PORTAL_BASE}/panel/stocks/branch_monthly_inventory/${b.portalId}/${year}/${month}`;
-    const res = await fetch(url, { headers: { Cookie: cookieHeader(jar) }, redirect: 'manual' });
+    const res = await fetchWithRetry(url, { headers: { Cookie: cookieHeader(jar) }, redirect: 'manual' });
     if (!res.ok) throw new Error(`Portal fetch failed for ${b.name}: HTTP ${res.status}`);
     const html = await res.text();
     if (html.includes('Sign In to AB GADGETZ')) {
@@ -144,33 +169,53 @@ async function loginAndFetchPortal(username, password) {
       if (r.hasMonthlyMove && r.viewLink) linkToRow.set(r.viewLink, r);
     }
     try {
-      const prevRes = await fetch(`${PORTAL_BASE}/panel/stocks/branch_monthly_inventory/${b.portalId}/${prevY}/${prevM}`, { headers: { Cookie: cookieHeader(jar) } });
+      const prevRes = await fetchWithRetry(`${PORTAL_BASE}/panel/stocks/branch_monthly_inventory/${b.portalId}/${prevY}/${prevM}`, { headers: { Cookie: cookieHeader(jar) } });
       if (prevRes.ok) {
-        for (const r of parseMonthlyRows(await prevRes.text())) {
-          if (r.hasMonthlyMove && r.viewLink && !linkToRow.has(r.viewLink)) linkToRow.set(r.viewLink, r);
+        const prevHtml = await prevRes.text();
+        if (!prevHtml.includes('Sign In to AB GADGETZ')) {
+          for (const r of parseMonthlyRows(prevHtml)) {
+            if (r.hasMonthlyMove && r.viewLink && !linkToRow.has(r.viewLink)) linkToRow.set(r.viewLink, r);
+          }
         }
       }
     } catch {}
 
     const cardItems = Array.from(linkToRow.values());
     const branchCardEntries = [];
-    const batchSize = 8;
+    const succeededCodes = new Set();
+    const failedCardRows = [];
+    const batchSize = 4;
+    const fetchOneCard = async (r) => {
+      const cRes = await fetchWithRetry(`${PORTAL_BASE}${r.viewLink}`, { headers: { Cookie: cookieHeader(jar) } });
+      if (!cRes.ok) throw new Error(`HTTP ${cRes.status}`);
+      const cHtml = await cRes.text();
+      if (cHtml.includes('Sign In to AB GADGETZ')) throw new Error('Session expired');
+      const entries = parseStockCardTable(cHtml);
+      succeededCodes.add(String(r.itemCode || '').trim().toUpperCase());
+      for (const e of entries) {
+        branchCardEntries.push({ ...e, itemCode: r.itemCode, itemName: r.itemName, category: r.category, unitPrice: r.unitPrice });
+      }
+    };
     for (let i = 0; i < cardItems.length; i += batchSize) {
       const batch = cardItems.slice(i, i + batchSize);
       await Promise.all(
         batch.map(async (r) => {
           try {
-            const cRes = await fetch(`${PORTAL_BASE}${r.viewLink}`, { headers: { Cookie: cookieHeader(jar) } });
-            if (!cRes.ok) return;
-            const entries = parseStockCardTable(await cRes.text());
-            for (const e of entries) {
-              branchCardEntries.push({ ...e, itemCode: r.itemCode, itemName: r.itemName, category: r.category, unitPrice: r.unitPrice });
-            }
-          } catch {}
+            await fetchOneCard(r);
+          } catch {
+            failedCardRows.push(r);
+          }
         })
       );
     }
+    for (const r of failedCardRows) {
+      try {
+        await new Promise((resDelay) => setTimeout(resDelay, 250));
+        await fetchOneCard(r);
+      } catch {}
+    }
     stockCardsByBranch.set(b.id, branchCardEntries);
+    succeededCodesByBranch.set(b.id, succeededCodes);
 
     try {
       const instRes = await fetch(`${PORTAL_BASE}/panel/franchise/installments/${b.portalId}`, { headers: { Cookie: cookieHeader(jar) } });
@@ -250,10 +295,10 @@ async function loginAndFetchPortal(username, password) {
     } catch {}
   }
 
-  // Fetch latest deliveries from /panel/deliveries (+ latest 35 delivery views)
+  // Fetch latest deliveries from /panel/deliveries (+ latest 40 delivery views)
   const liveDeliveries = [];
   try {
-    const dListRes = await fetch(`${PORTAL_BASE}/panel/deliveries`, { headers: { Cookie: cookieHeader(jar) } });
+    const dListRes = await fetchWithRetry(`${PORTAL_BASE}/panel/deliveries`, { headers: { Cookie: cookieHeader(jar) } });
     if (dListRes.ok) {
       const dHtml = await dListRes.text();
       const brMap = { MOLAVE: 'br-molave', TAMBULIG: 'br-tambulig', BONIFACIO: 'br-bonifacio' };
@@ -274,12 +319,12 @@ async function loginAndFetchPortal(username, password) {
         });
       }
       const targetHeaders = dHeaders.slice(0, 40);
-      for (let i = 0; i < targetHeaders.length; i += 6) {
-        const chunk = targetHeaders.slice(i, i + 6);
+      for (let i = 0; i < targetHeaders.length; i += 4) {
+        const chunk = targetHeaders.slice(i, i + 4);
         const done = await Promise.all(
           chunk.map(async (h) => {
             try {
-              const vRes = await fetch(`${PORTAL_BASE}/panel/deliveries/view/${h.portalDeliveryId}`, { headers: { Cookie: cookieHeader(jar) } });
+              const vRes = await fetchWithRetry(`${PORTAL_BASE}/panel/deliveries/view/${h.portalDeliveryId}`, { headers: { Cookie: cookieHeader(jar) } });
               if (!vRes.ok) return { ...h, totalDeliveredQty: 0, totalReceivedQty: 0, totalAmount: 0, items: [] };
               const vHtml = await vRes.text();
               const items = [];
@@ -318,7 +363,7 @@ async function loginAndFetchPortal(username, password) {
     }
   } catch {}
 
-  return { inventoryByBranch: result, stockCardsByBranch, liveInstallments, livePayments, liveExpenses, livePastDues, liveDeliveries };
+  return { inventoryByBranch: result, stockCardsByBranch, succeededCodesByBranch, liveInstallments, livePayments, liveExpenses, livePastDues, liveDeliveries };
 }
 
 const PHONE_CATEGORIES = new Set(['CELLPHONES', 'REPO', 'KEYPAD CELLPHONES']);
@@ -425,6 +470,7 @@ async function main() {
       const {
         inventoryByBranch: liveData,
         stockCardsByBranch: fetchedStockCards,
+        succeededCodesByBranch,
         liveInstallments: fetchedInstallments,
         livePayments: fetchedPayments,
         liveExpenses: fetchedExpenses,
@@ -458,12 +504,20 @@ async function main() {
       }
       const nowIso = new Date().toISOString();
       const liveCardMovements = [];
+      const replacedProdBranchKeys = new Set();
       for (const [branchId, rows] of liveData.entries()) {
         const bObj = BRANCHES.find((x) => x.id === branchId);
-        // Live portal is the source of truth for stock: zero out this branch first,
-        // then apply the counts the portal reports.
+        // Live portal is the source of truth for stock: preserve thresholds, zero out available, then apply portal counts.
         for (const p of products) {
-          invMap.set(`${branchId}::${p.id}`, { branch_id: branchId, product_id: p.id, qty_on_hand: 0, qty_reserved: 0 });
+          const prevCell = invMap.get(`${branchId}::${p.id}`);
+          invMap.set(`${branchId}::${p.id}`, {
+            branch_id: branchId,
+            product_id: p.id,
+            qty_on_hand: 0,
+            qty_reserved: 0,
+            reorder_point: prevCell?.reorder_point ?? 2,
+            max_stock: prevCell?.max_stock ?? 6,
+          });
         }
         const totals = new Map();
         for (const row of rows) {
@@ -486,7 +540,21 @@ async function main() {
           }
         }
         for (const [pid, qty] of totals.entries()) {
-          invMap.set(`${branchId}::${pid}`, { branch_id: branchId, product_id: pid, qty_on_hand: qty, qty_reserved: 0 });
+          const prevCell = invMap.get(`${branchId}::${pid}`);
+          invMap.set(`${branchId}::${pid}`, {
+            branch_id: branchId,
+            product_id: pid,
+            qty_on_hand: qty,
+            qty_reserved: 0,
+            reorder_point: prevCell?.reorder_point ?? 2,
+            max_stock: prevCell?.max_stock ?? 6,
+          });
+        }
+
+        // Track only products whose Stock Card fetch actually succeeded so we never wipe failed/older products
+        for (const codeUpper of succeededCodesByBranch?.get(branchId) || []) {
+          const prod = codeToProduct.get(codeUpper);
+          if (prod) replacedProdBranchKeys.add(`${branchId}::${prod.id}`);
         }
 
         // Convert actual portal Stock Card daily entries into movements for Activity Log & Daily Inventory PDF
@@ -501,6 +569,7 @@ async function main() {
             newProducts.add(prod.id);
           }
           if (!prod) continue;
+          replacedProdBranchKeys.add(`${branchId}::${prod.id}`);
           const isSale = ce.txType === 'ORDER' || ce.txType === 'INSTALLMENT';
           const mType = isSale ? `STOCKCARD_SALE_${ce.txType}` : `STOCKCARD_${ce.txType}`;
           liveCardMovements.push({
@@ -521,7 +590,10 @@ async function main() {
         }
       }
       if (liveCardMovements.length > 0) {
-        allMovements = liveCardMovements.sort((a, b) => String(b.recorded_at).localeCompare(String(a.recorded_at)));
+        const preservedPrev = allMovements.filter((m) => !replacedProdBranchKeys.has(`${m.branch_id}::${m.product_id}`));
+        allMovements = [...liveCardMovements, ...preservedPrev].sort((a, b) =>
+          String(b.recorded_at).localeCompare(String(a.recorded_at))
+        );
       }
       liveSynced = true;
       liveSyncNote = `Live stock & prices synced from app.abgadgetz.com.ph (${newProducts.size} new item(s) auto-added)`;
@@ -694,6 +766,88 @@ async function main() {
     })
   );
 
+  // Compute exact 30-day/90-day/all-time demand identical to server.js getPlanningPayload()
+  let planningSummary = null;
+  if (!liveSynced && seedSnapshot.planning_demand?.demandByProductBranch) {
+    planningSummary = seedSnapshot.planning_demand;
+  } else {
+    const since30Date = manilaDateDaysAgo(30);
+    const since90Date = manilaDateDaysAgo(90);
+    const normUnit = (s) =>
+      String(s || '')
+        .toLowerCase()
+        .replace(/\bplus\b/g, '+')
+        .replace(/\bgalaxy\b/g, '')
+        .replace(/gb\b/g, '')
+        .replace(/\b4g\b/g, '')
+        .replace(/[^a-z0-9+]/g, '');
+    const prodByNorm = new Map();
+    for (const p of products) {
+      if ((p.is_active ?? 1) === 0) continue;
+      for (const k of [normUnit(p.name), normUnit(`${p.brand || ''} ${p.model || ''}`)].filter(Boolean)) {
+        const ex = prodByNorm.get(k);
+        if (!ex || ((ex.lifecycle_status || 'Active') !== 'Active' && (p.lifecycle_status || 'Active') === 'Active')) {
+          prodByNorm.set(k, p);
+        }
+      }
+    }
+    const demandPB = new Map();
+    const ensureD = (pid, bid) => {
+      const k = `${pid}::${bid}`;
+      if (!demandPB.has(k)) {
+        demandPB.set(k, { cash30: 0, instMv30: 0, instPt30: 0, cash90: 0, instMv90: 0, instPt90: 0, allTimeSold: 0, allTimeRestocked: 0 });
+      }
+      return demandPB.get(k);
+    };
+    for (const m of allMovements) {
+      const mt = String(m.movement_type || '').toUpperCase();
+      if (mt.includes('TRANSFER') || mt.includes('FREE')) continue;
+      if (!m.product_id || !m.branch_id) continue;
+      const d = ensureD(m.product_id, m.branch_id);
+      const dt = String(m.recorded_at || '').slice(0, 10);
+      const q = Math.abs(Number(m.delta_qty) || 0);
+      if (Number(m.delta_qty) < 0) {
+        d.allTimeSold += q;
+        const isInst = mt.includes('INSTALLMENT');
+        if (dt >= since90Date) {
+          if (isInst) d.instMv90 += q;
+          else d.cash90 += q;
+        }
+        if (dt >= since30Date) {
+          if (isInst) d.instMv30 += q;
+          else d.cash30 += q;
+        }
+      } else if (Number(m.delta_qty) > 0 && (mt.includes('DELIVERY') || mt.includes('STOCK'))) {
+        d.allTimeRestocked += q;
+      }
+    }
+    for (const ir of allInstallments) {
+      const dt = String(ir.sale_date || '').slice(0, 10);
+      if (dt < since90Date) continue;
+      const p = prodByNorm.get(normUnit(ir.unit));
+      if (!p || !ir.branch_id) continue;
+      const d = ensureD(p.id, ir.branch_id);
+      d.instPt90 += 1;
+      if (dt >= since30Date) d.instPt30 += 1;
+      d.allTimeSold = Math.max(d.allTimeSold, d.cash90 + Math.max(d.instMv90, d.instPt90));
+    }
+    const demandByProductBranch = {};
+    const demandByProduct = {};
+    for (const [k, d] of demandPB.entries()) {
+      const [pid] = k.split('::');
+      const sold30 = d.cash30 + Math.max(d.instMv30, d.instPt30);
+      const sold90 = d.cash90 + Math.max(d.instMv90, d.instPt90);
+      const allSold = Math.max(d.allTimeSold, sold90);
+      demandByProductBranch[k] = { sold30, sold90, allSold, restocked: d.allTimeRestocked };
+      if (!demandByProduct[pid]) demandByProduct[pid] = { sold30: 0, sold90: 0, allSold: 0, restocked: 0 };
+      demandByProduct[pid].sold30 += sold30;
+      demandByProduct[pid].sold90 += sold90;
+      demandByProduct[pid].allSold += allSold;
+      demandByProduct[pid].restocked += d.allTimeRestocked;
+    }
+    planningSummary = { demandByProductBranch, demandByProduct };
+  }
+
   const adminBundle = {
     inventory: {
       branches: BRANCHES.map((b) => ({ id: b.id, name: b.name, code: b.slug.toUpperCase(), cash_discount_pct: b.cash_discount_pct, is_active: 1 })),
@@ -706,19 +860,39 @@ async function main() {
         outOfStockCount,
       },
     },
+    planning: planningSummary,
     catalogRules: seedSnapshot.customer_catalog_rules || [],
     installmentRates: seedSnapshot.installment_settings || [],
     orderBudgetItems: seedSnapshot.order_budget_items || [],
     staffPinHashes: seedSnapshot.staff_pin_hashes || null,
     catalogViews: { byBranch: catalogViewsByBranch, total: viewsTotal, weekly: viewsWeekly, monthly: viewsMonthly },
-    allMovements: allMovements.slice(0, 3500),
+    allMovements: allMovements.slice(0, 6000),
     allInstallments,
     portal_transactions: seedSnapshot.portal_transactions || [],
     allPayments,
     allExpenses,
     allPastDues,
     allDeliveries,
-    purchaseOrders: seedSnapshot.purchase_orders || [],
+    purchaseOrders: (seedSnapshot.purchase_orders || []).map((o) => {
+      let parsedItems = [];
+      try {
+        parsedItems = typeof o.items_json === 'string' ? JSON.parse(o.items_json || '[]') : Array.isArray(o.items) ? o.items : [];
+      } catch {
+        parsedItems = [];
+      }
+      return {
+        id: o.id,
+        title: o.title,
+        status: o.status,
+        supplierFilter: o.supplier_filter || o.supplierFilter || 'LOWEST',
+        notes: o.notes || '',
+        expectedDate: o.expected_date || o.expectedDate || '',
+        abDeliveryRefs: o.ab_delivery_refs || o.abDeliveryRefs || '',
+        items: parsedItems,
+        createdAt: o.created_at || o.createdAt || '',
+        updatedAt: o.updated_at || o.updatedAt || '',
+      };
+    }),
     syncedAt: syncedAtIso,
     liveSynced,
     liveSyncNote,
