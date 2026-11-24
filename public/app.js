@@ -2685,6 +2685,7 @@ function renderSavedOrdersPanel() {
           </div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;">
             <button type="button" class="saved-po-edit-btn" data-poid="${o.id}" style="padding:5px 10px;font-size:11px;min-height:0;">EDIT PRICES &amp; QTY</button>
+            <button type="button" class="secondary saved-po-preview-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">PREVIEW</button>
             <button type="button" class="secondary saved-po-copy-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">COPY</button>
             <button type="button" class="secondary saved-po-pdf-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">PDF</button>
             <button type="button" class="secondary saved-po-del-btn" data-poid="${o.id}" style="padding:5px 8px;font-size:11px;min-height:0;color:var(--danger);">✕</button>
@@ -2697,7 +2698,17 @@ function renderSavedOrdersPanel() {
     btn.addEventListener('click', () => {
       const ord = (state.savedOrders || []).find((o) => o.id === btn.dataset.poid);
       if (!ord) return;
-      openSavedOrderEditor(ord);
+      openSavedOrderInlineEditor(ord);
+    });
+  });
+
+  listEl.querySelectorAll('.saved-po-preview-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const ord = (state.savedOrders || []).find((o) => o.id === btn.dataset.poid);
+      if (!ord) return;
+      state.previewOrderOverride = ord;
+      renderReorderPreviewModal();
+      document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
     });
   });
 
@@ -2732,376 +2743,310 @@ function renderSavedOrdersPanel() {
         await api(`/api/purchase-orders/${encodeURIComponent(poId)}`, { method: 'DELETE' });
         await loadSavedPurchaseOrders();
       }
-      if (state.activeSavedOrder?.id === poId) state.activeSavedOrder = null;
+      if (state.editingSavedOrder?.id === poId) {
+        state.editingSavedOrder = null;
+        renderSavedOrderInlineEditor();
+      }
+      if (state.previewOrderOverride?.id === poId) state.previewOrderOverride = null;
       renderSavedOrdersPanel();
     });
   });
+
+  renderSavedOrderInlineEditor();
 }
 
-function openSavedOrderEditor(order) {
-  state.activeSavedOrder = JSON.parse(JSON.stringify(order));
-  const titleInp = document.getElementById('reorderOrderTitleInp');
-  const statusSel = document.getElementById('reorderOrderStatusSel');
-  const notesInp = document.getElementById('reorderOrderNotesInp');
-  const showCostsChk = document.getElementById('reorderShowCostsChk');
-  if (titleInp) titleInp.value = state.activeSavedOrder.title || '';
-  if (statusSel) statusSel.value = state.activeSavedOrder.status || 'Supplier Approved';
-  if (notesInp) notesInp.value = state.activeSavedOrder.notes || '';
-  if (showCostsChk) showCostsChk.checked = true;
-  populateReorderAddProductSelect();
-  renderReorderPreviewModal();
-  document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
+function openSavedOrderInlineEditor(order) {
+  state.editingSavedOrder = JSON.parse(JSON.stringify(order));
+  const body = document.getElementById('savedOrdersBody');
+  const caret = document.getElementById('savedOrdersCaret');
+  if (body) body.classList.remove('hidden');
+  if (caret) caret.textContent = '−';
+  renderSavedOrderInlineEditor();
+  document.getElementById('savedOrderInlineEditor')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-function populateReorderAddProductSelect() {
-  const sel = document.getElementById('reorderAddProdSel');
-  if (!sel || !state.inventory?.items) return;
-  const active = state.inventory.items
+function renderSavedOrderInlineEditor(statusMsg = '') {
+  const wrap = document.getElementById('savedOrderInlineEditor');
+  if (!wrap) return;
+  const po = state.editingSavedOrder;
+  if (!po) {
+    wrap.classList.add('hidden');
+    wrap.innerHTML = '';
+    return;
+  }
+
+  wrap.classList.remove('hidden');
+  const m = computeOrderSummaryMetrics(po.items);
+  const qtyVar = m.approvedUnits - m.requestedUnits;
+  const costVar = m.approvedTotal - m.requestedTotal;
+  const activeProds = (state.inventory?.items || [])
     .filter((i) => (i.lifecycle_status || 'Active') === 'Active' && !isNonOrderablePromoOrRepo(i))
     .sort((a, b) => formatSwapModelName({ brand: a.brand || '', model: a.model || a.name }).localeCompare(formatSwapModelName({ brand: b.brand || '', model: b.model || b.name })));
-  sel.innerHTML =
-    '<option value="">+ Add another unit to this order...</option>' +
-    active
-      .map((i) => {
-        const nm = formatSwapModelName({ brand: i.brand || '', model: i.model || i.name });
-        return `<option value="${i.id}">${nm} (SRP ${fmtCurrency(i.base_price)})</option>`;
-      })
-      .join('');
-}
 
-function getActiveOrderSource(overrideOrder = null) {
-  if (overrideOrder && Array.isArray(overrideOrder.items)) {
-    return {
-      isSaved: true,
-      order: overrideOrder,
-      allRows: (overrideOrder.items || []).map((r, idx) => ({ ...r, _editIdx: idx })),
-    };
-  }
-  if (state.activeSavedOrder) {
-    return {
-      isSaved: true,
-      order: state.activeSavedOrder,
-      allRows: (state.activeSavedOrder.items || []).map((r, idx) => ({ ...r, _editIdx: idx })),
-    };
-  }
-  return {
-    isSaved: false,
-    order: null,
-    allRows: (state.restockPlan || [])
-      .map((r, idx) => ({ ...r, _editIdx: idx }))
-      .filter((r) => r.selected || r._modalTouched),
-  };
-}
-
-function getGroupedReorderPlan(overrideOrder = null, includeUnapproved = false) {
-  const src = getActiveOrderSource(overrideOrder);
-  const rows = includeUnapproved
-    ? src.allRows
-    : src.allRows.filter((r) => (src.isSaved ? r.approved !== false : r.selected !== false) && Number(r.qty) > 0);
-
-  const bySupplier = new Map();
-  for (const sup of SUPPLIER_ORDER) bySupplier.set(sup, new Map());
-
-  for (const r of rows) {
+  // Group items by supplier -> branch while keeping original index
+  const indexed = (po.items || []).map((r, idx) => ({ ...r, _idx: idx }));
+  const bySup = new Map();
+  for (const sup of SUPPLIER_ORDER) bySup.set(sup, new Map());
+  for (const r of indexed) {
     const supName = r.supplier || 'AB Main Supplier';
-    if (!bySupplier.has(supName)) bySupplier.set(supName, new Map());
-    const branchMap = bySupplier.get(supName);
+    if (!bySup.has(supName)) bySup.set(supName, new Map());
+    const bMap = bySup.get(supName);
     const brName = r.branchName || 'Molave';
-    if (!branchMap.has(brName)) branchMap.set(brName, []);
-    branchMap.get(brName).push(r);
+    if (!bMap.has(brName)) bMap.set(brName, []);
+    bMap.get(brName).push(r);
   }
 
-  const ordered = [];
-  for (const [supplier, branchMap] of bySupplier.entries()) {
-    if (!branchMap.size) continue;
-    const branchesOut = [];
-    const sortedBranchNames = [...branchMap.keys()].sort((a, b) => {
-      const ia = BRANCH_ORDER.indexOf(a);
-      const ib = BRANCH_ORDER.indexOf(b);
-      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b);
+  const groupsHtml = [...bySup.entries()]
+    .filter(([, bMap]) => bMap.size > 0)
+    .map(([supName, bMap]) => {
+      const sortedBranches = [...bMap.keys()].sort((a, b) => {
+        const ia = BRANCH_ORDER.indexOf(a);
+        const ib = BRANCH_ORDER.indexOf(b);
+        return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b);
+      });
+      return `
+        <div style="margin-bottom:10px;">
+          <div style="padding:5px 9px;border-radius:6px;background:rgba(231,197,95,0.14);color:var(--gold-bright);font-weight:700;font-size:12px;">${supName}</div>
+          ${sortedBranches
+            .map((bName) => {
+              const rows = bMap.get(bName);
+              return `
+                <div style="margin-top:6px;padding:0 4px;">
+                  <div style="font-weight:700;font-size:11.5px;color:var(--muted);margin-bottom:4px;">${bName}</div>
+                  ${rows
+                    .map((r) => {
+                      const isApp = r.approved !== false;
+                      const reqQty = Number(r.requestedQty ?? r.qty) || 0;
+                      const reqCost = Number(r.requestedCost ?? r.unitCost) || 0;
+                      const curQty = Number(r.qty) || 0;
+                      const curCost = Number(r.unitCost) || 0;
+                      const lineSub = isApp ? curQty * curCost : 0;
+                      const diffBadges = [];
+                      if (curQty !== reqQty || !isApp) {
+                        diffBadges.push(`<span style="color:#f59e0b;font-size:10.5px;font-weight:700;">Req ${reqQty}→${isApp ? curQty : 0}</span>`);
+                      }
+                      if (Math.abs(curCost - reqCost) >= 0.01) {
+                        const d = curCost - reqCost;
+                        diffBadges.push(`<span style="color:${d < 0 ? 'var(--green)' : '#f59e0b'};font-size:10.5px;font-weight:700;">${d < 0 ? '' : '+'}${fmtCurrency(d)}/pc</span>`);
+                      }
+                      return `
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.06);font-size:12px;${isApp ? '' : 'opacity:0.48;'}">
+                          <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer;flex:1;min-width:180px;flex-wrap:wrap;">
+                            <input type="checkbox" class="main-po-chk" data-idx="${r._idx}" ${isApp ? 'checked' : ''} style="width:15px;height:15px;margin:0;accent-color:var(--gold);" />
+                            <span style="${isApp ? '' : 'text-decoration:line-through;'}font-weight:600;">${r.displayModel || r.model}</span>
+                            ${diffBadges.join(' ')}
+                          </label>
+                          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                            <span class="small muted">Price ₱</span>
+                            <input type="number" class="main-po-price" data-idx="${r._idx}" value="${curCost}" min="0" step="0.01" style="width:86px;padding:3px 6px;font-size:12px;text-align:right;" title="Approved supplier unit price" />
+                            <span class="small muted">×</span>
+                            <input type="number" class="main-po-qty" data-idx="${r._idx}" value="${curQty}" min="0" max="999" style="width:56px;padding:3px 5px;font-size:12px;text-align:center;" title="Approved quantity" />
+                            <span class="small muted">pcs</span>
+                            <strong style="min-width:86px;text-align:right;color:var(--gold-bright);">${fmtCurrency(lineSub)}</strong>
+                          </div>
+                        </div>`;
+                    })
+                    .join('')}
+                </div>`;
+            })
+            .join('')}
+        </div>`;
+    })
+    .join('');
+
+  wrap.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+      <div>
+        <strong style="color:var(--gold-bright);font-size:13.5px;">EDIT ORDER ${po.id} — SUPPLIER-APPROVED PRICES &amp; QUANTITIES</strong>
+        <div class="small muted">
+          Requested: <strong>${fmtNum(m.requestedUnits)} pcs</strong> (${fmtCurrency(m.requestedTotal)}) →
+          Approved: <strong style="color:var(--text);">${fmtNum(m.approvedUnits)} pcs</strong> (<strong style="color:var(--green);">${fmtCurrency(m.approvedTotal)}</strong>)
+          ${qtyVar !== 0 || Math.abs(costVar) >= 0.01 ? `<span style="color:${costVar <= 0 ? 'var(--green)' : '#f59e0b'};font-weight:700;">(${qtyVar >= 0 ? '+' : ''}${qtyVar} pcs • ${costVar >= 0 ? '+' : ''}${fmtCurrency(costVar)})</span>` : ''}
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button type="button" id="mainPoPreviewBtn" class="secondary" style="padding:5px 10px;font-size:11px;min-height:0;">PREVIEW</button>
+        <button type="button" id="mainPoCopyBtn" class="secondary" style="padding:5px 10px;font-size:11px;min-height:0;">COPY</button>
+        <button type="button" id="mainPoCloseBtn" class="secondary" style="padding:5px 10px;font-size:11px;min-height:0;">CLOSE</button>
+      </div>
+    </div>
+
+    <div class="grid-3" style="gap:8px;margin-bottom:10px;">
+      <div>
+        <label for="mainPoTitleInp" style="font-size:10.5px;">ORDER NAME</label>
+        <input type="text" id="mainPoTitleInp" value="${String(po.title || '').replace(/"/g, '&quot;')}" style="padding:5px 8px;font-size:12px;" />
+      </div>
+      <div>
+        <label for="mainPoStatusSel" style="font-size:10.5px;">SUPPLIER APPROVAL STATUS</label>
+        <select id="mainPoStatusSel" style="padding:5px 8px;font-size:12px;">
+          ${['Draft', 'Sent to Supplier', 'Supplier Approved', 'Received', 'Cancelled']
+            .map((st) => `<option value="${st}" ${po.status === st ? 'selected' : ''}>${st}</option>`)
+            .join('')}
+        </select>
+      </div>
+      <div>
+        <label for="mainPoNotesInp" style="font-size:10.5px;">SUPPLIER NOTES</label>
+        <input type="text" id="mainPoNotesInp" value="${String(po.notes || '').replace(/"/g, '&quot;')}" placeholder="Approved adjustments, ETA..." style="padding:5px 8px;font-size:12px;" />
+      </div>
+    </div>
+
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:6px 8px;border-radius:6px;background:rgba(255,255,255,0.03);border:1px dashed var(--border);margin-bottom:10px;">
+      <select id="mainPoAddProdSel" style="flex:2;min-width:180px;padding:5px 8px;font-size:12px;">
+        <option value="">+ Add another unit approved by supplier...</option>
+        ${activeProds
+          .map((i) => {
+            const nm = formatSwapModelName({ brand: i.brand || '', model: i.model || i.name });
+            return `<option value="${i.id}">${nm} (SRP ${fmtCurrency(i.base_price)})</option>`;
+          })
+          .join('')}
+      </select>
+      <select id="mainPoAddBranchSel" style="width:auto;padding:5px 8px;font-size:12px;">
+        <option value="br-molave">Molave</option>
+        <option value="br-tambulig">Tambulig</option>
+        <option value="br-bonifacio">Bonifacio</option>
+      </select>
+      <select id="mainPoAddSupSel" style="width:auto;padding:5px 8px;font-size:12px;">
+        <option value="AB Main Supplier">AB Main Supplier</option>
+        <option value="A&K">A&amp;K</option>
+        <option value="Online Purchase">Online Purchase</option>
+      </select>
+      <input type="number" id="mainPoAddPriceInp" placeholder="Price ₱" min="0" step="0.01" style="width:88px;padding:5px 6px;font-size:12px;" />
+      <input type="number" id="mainPoAddQtyInp" value="1" min="1" max="999" style="width:56px;padding:5px 6px;font-size:12px;text-align:center;" />
+      <button type="button" id="mainPoAddBtn" class="secondary" style="padding:5px 10px;font-size:11.5px;min-height:0;">+ ADD</button>
+    </div>
+
+    <div style="max-height:360px;overflow-y:auto;padding-right:4px;">${groupsHtml || '<div class="muted small">No items in this order.</div>'}</div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border-soft);">
+      <label style="display:flex;align-items:center;gap:6px;margin:0;font-size:12px;cursor:pointer;">
+        <input type="checkbox" id="mainPoSyncCostsChk" checked style="width:15px;height:15px;margin:0;accent-color:var(--gold);" />
+        <span>Also update Product Supplier Costs from edited prices</span>
+      </label>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span id="mainPoSaveStatus" class="small" style="color:var(--green);font-weight:700;">${statusMsg}</span>
+        <button type="button" id="mainPoSaveBtn" style="padding:7px 16px;font-size:12px;">SAVE APPROVED CHANGES</button>
+      </div>
+    </div>
+  `;
+
+  wrap.querySelector('#mainPoTitleInp')?.addEventListener('input', (e) => { po.title = e.target.value; });
+  wrap.querySelector('#mainPoStatusSel')?.addEventListener('change', (e) => { po.status = e.target.value; });
+  wrap.querySelector('#mainPoNotesInp')?.addEventListener('input', (e) => { po.notes = e.target.value; });
+
+  wrap.querySelectorAll('.main-po-chk').forEach((chk) => {
+    chk.addEventListener('change', () => {
+      const idx = Number(chk.dataset.idx);
+      if (po.items[idx]) po.items[idx].approved = chk.checked;
+      renderSavedOrderInlineEditor();
     });
-    for (const bName of sortedBranchNames) {
-      branchesOut.push({ branchName: bName, rows: branchMap.get(bName) });
-    }
-    ordered.push({ supplier, branches: branchesOut });
-  }
-  return { selected: rows, grouped: ordered, isSaved: src.isSaved, order: src.order };
-}
-
-function buildReorderCopyText(overrideOrder = null) {
-  const { grouped, isSaved, order } = getGroupedReorderPlan(overrideOrder, false);
-  if (!grouped.length) return '';
-  const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked);
-  const header = isSaved && order ? `${order.id} — ${order.title} (${order.status})` : 'Reorder request';
-  const parts = [header];
-  for (const supGroup of grouped) {
-    parts.push(supGroup.supplier);
-    for (const bGroup of supGroup.branches) {
-      const lines = [bGroup.branchName];
-      for (const r of bGroup.rows) {
-        const costPart = showCosts && Number(r.unitCost) > 0 ? ` @ ${fmtCurrency(r.unitCost)}` : '';
-        lines.push(`${r.displayModel} — ${r.qty} ${r.qty === 1 ? 'pc' : 'pcs'}${costPart}`);
+  });
+  wrap.querySelectorAll('.main-po-price').forEach((inp) => {
+    inp.addEventListener('change', () => {
+      const idx = Number(inp.dataset.idx);
+      if (po.items[idx]) {
+        po.items[idx].unitCost = Math.max(0, Number(inp.value) || 0);
+        po.items[idx].isEstimatedCost = false;
       }
-      parts.push(lines.join('\n'));
-    }
-  }
-  return parts.join('\n\n');
-}
-
-function renderReorderPreviewModal() {
-  const modal = document.getElementById('reorderPreviewModal');
-  if (!modal) return;
-  const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked);
-  const { isSaved, order, grouped } = getGroupedReorderPlan(null, true);
-  const approvedOnly = getGroupedReorderPlan(null, false).selected;
-
-  const headingEl = document.getElementById('reorderPreviewHeading');
-  const saveBtn = document.getElementById('reorderSaveOrderBtn');
-  const backBtn = document.getElementById('reorderBackToEditBtn');
-  const titleInp = document.getElementById('reorderOrderTitleInp');
-  const statusSel = document.getElementById('reorderOrderStatusSel');
-  const notesInp = document.getElementById('reorderOrderNotesInp');
-
-  if (isSaved && order) {
-    if (headingEl) headingEl.textContent = `AB-GADGETZ · ${order.id} (${order.status})`;
-    if (saveBtn) saveBtn.textContent = 'SAVE APPROVED CHANGES';
-    if (backBtn) backBtn.textContent = 'CLOSE EDITOR';
-  } else {
-    if (headingEl) headingEl.textContent = 'AB-GADGETZ · REORDER PLAN';
-    if (saveBtn) saveBtn.textContent = 'SAVE AS ORDER MADE';
-    if (backBtn) backBtn.textContent = 'BACK TO CARDS';
-    if (titleInp && !titleInp.value.trim()) {
-      titleInp.value = `Restock Order • ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
-    }
-    if (statusSel && !statusSel.dataset.touched) statusSel.value = 'Sent to Supplier';
-    if (notesInp && !notesInp.dataset.touched) notesInp.value = '';
-  }
-
-  const prepEl = document.getElementById('reorderPreviewPrepared');
-  if (prepEl) {
-    const dtStr = isSaved && order?.updatedAt ? new Date(order.updatedAt) : new Date();
-    prepEl.textContent = `${isSaved ? 'Last Updated' : 'Prepared'} ${dtStr.toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    })}`;
-  }
-
-  const allEditableRows = isSaved && order ? order.items : (state.restockPlan || []).filter((r) => r.selected || r._modalTouched);
-  const metrics = computeOrderSummaryMetrics(allEditableRows);
-  const totalUnits = approvedOnly.reduce((s, r) => s + (Number(r.qty) || 0), 0);
-  const totalCost = approvedOnly.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.unitCost) || 0), 0);
-  const qtyVariance = totalUnits - metrics.requestedUnits;
-  const costVariance = totalCost - metrics.requestedTotal;
-
-  const branchTotals = new Map(BRANCH_ORDER.map((b) => [b, { qty: 0, cost: 0 }]));
-  for (const r of approvedOnly) {
-    if (!branchTotals.has(r.branchName)) branchTotals.set(r.branchName, { qty: 0, cost: 0 });
-    const bt = branchTotals.get(r.branchName);
-    bt.qty += Number(r.qty) || 0;
-    bt.cost += (Number(r.qty) || 0) * (Number(r.unitCost) || 0);
-  }
-
-  const metricsEl = document.getElementById('reorderPreviewMetrics');
-  if (metricsEl) {
-    const branchPills = [...branchTotals.entries()]
-      .filter(([, v]) => v.qty > 0)
-      .map(
-        ([b, v]) =>
-          `<span style="display:inline-block;padding:4px 8px;border-radius:6px;background:#fff;border:1px solid #d5ceb8;font-size:12px;"><strong>${b}:</strong> ${v.qty} pcs${showCosts ? ` (${fmtCurrency(v.cost)})` : ''}</span>`
-      )
-      .join(' ');
-    const varBadge =
-      isSaved && (qtyVariance !== 0 || Math.abs(costVariance) >= 0.01)
-        ? `<div style="font-size:10.5px;color:${costVariance <= 0 ? '#137333' : '#b45309'};font-weight:700;">vs Req: ${qtyVariance >= 0 ? '+' : ''}${qtyVariance} pcs / ${costVariance >= 0 ? '+' : ''}${fmtCurrency(costVariance)}</div>`
-        : '';
-    metricsEl.innerHTML = `
-      <div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:130px;">
-        <div style="font-size:10px;font-weight:700;color:#6b6351;">${isSaved ? 'APPROVED UNITS' : 'ORDER UNITS'}</div>
-        <div style="font-size:18px;font-weight:800;color:#1b1913;">${fmtNum(totalUnits)}</div>
-        ${isSaved ? `<div style="font-size:10px;color:#6b6351;">Requested: ${fmtNum(metrics.requestedUnits)} pcs</div>` : ''}
-      </div>
-      ${
-        showCosts
-          ? `<div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:165px;">
-              <div style="font-size:10px;font-weight:700;color:#6b6351;">${isSaved ? 'APPROVED TOTAL' : 'EST. TOTAL COST'}</div>
-              <div style="font-size:18px;font-weight:800;color:#1d6f42;">${fmtCurrency(totalCost)}</div>
-              ${varBadge}
-            </div>`
-          : ''
+      renderSavedOrderInlineEditor();
+    });
+  });
+  wrap.querySelectorAll('.main-po-qty').forEach((inp) => {
+    inp.addEventListener('change', () => {
+      const idx = Number(inp.dataset.idx);
+      const v = Math.max(0, parseInt(inp.value, 10) || 0);
+      if (po.items[idx]) {
+        po.items[idx].qty = v;
+        po.items[idx].approved = v > 0;
       }
-      <div style="flex:1;min-width:220px;">
-        <div style="font-size:10px;font-weight:700;color:#6b6351;margin-bottom:4px;">BRANCH SUBTOTALS</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;">${branchPills || '<span style="font-size:12px;color:#6b6351;">None</span>'}</div>
-      </div>
-    `;
-  }
+      renderSavedOrderInlineEditor();
+    });
+  });
 
-  const bodyEl = document.getElementById('reorderPreviewBody');
-  if (bodyEl) {
-    if (!grouped.length) {
-      bodyEl.innerHTML = '<div style="padding:16px;text-align:center;color:#6b6351;">No products in this order yet. Use "+ ADD UNIT" above or select items in Restock cards.</div>';
-    } else {
-      bodyEl.innerHTML = grouped
-        .map(
-          (sup) => `
-          <div style="margin-bottom:12px;">
-            <div style="background:#ebe2be;color:#1b1913;font-weight:700;font-size:12px;padding:6px 10px;border-radius:6px;">
-              ${sup.supplier}
-            </div>
-            ${sup.branches
-              .map(
-                (b) => `
-              <div style="margin-top:8px;padding:0 4px;">
-                <div style="font-weight:700;font-size:12px;color:#1b1913;margin-bottom:4px;">${b.branchName}</div>
-                ${b.rows
-                  .map((r) => {
-                    const isApp = isSaved ? r.approved !== false : r.selected !== false;
-                    const nameLabel = r.brand && !String(r.model || '').toLowerCase().startsWith(String(r.brand || '').toLowerCase())
-                      ? `${r.brand} · ${r.model}`
-                      : r.model || r.displayModel;
-                    const metaTags = [];
-                    if (r.tierKey === 'LOW_END') metaTags.push('<span style="background:#e6f4ea;color:#137333;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700;">Low-End</span>');
-                    if (r.avail === 0) metaTags.push('<span style="background:#fce8e6;color:#c5221f;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700;">0 stock</span>');
-                    if (r.branchDemand90 > 0) metaTags.push(`<span style="color:#6b6351;font-size:10px;">${r.branchDemand90} sold/90d</span>`);
+  wrap.querySelector('#mainPoAddProdSel')?.addEventListener('change', (e) => {
+    const pid = e.target.value;
+    const item = (state.inventory?.items || []).find((i) => i.id === pid);
+    if (!item) return;
+    const sup = resolveSupplierForProduct(item, 'LOWEST');
+    const pVal = Number(sup?.unitCost) > 0 ? sup.unitCost : Math.round((Number(item.base_price) || 0) * 0.85);
+    const pInp = wrap.querySelector('#mainPoAddPriceInp');
+    const sSel = wrap.querySelector('#mainPoAddSupSel');
+    if (pInp) pInp.value = pVal > 0 ? pVal : '';
+    if (sSel && sup?.supplier) sSel.value = sup.supplier;
+  });
 
-                    const reqQty = Number(r.requestedQty ?? r.qty) || 0;
-                    const reqCost = Number(r.requestedCost ?? r.unitCost) || 0;
-                    const curQty = Number(r.qty) || 0;
-                    const curCost = Number(r.unitCost) || 0;
-                    const diffTags = [];
-                    if (isSaved && curQty !== reqQty) {
-                      diffTags.push(`<span style="color:#b45309;font-size:10px;font-weight:700;">Req ${reqQty}→${isApp ? curQty : 0}</span>`);
-                    }
-                    if (isSaved && Math.abs(curCost - reqCost) >= 0.01) {
-                      const d = curCost - reqCost;
-                      diffTags.push(`<span style="color:${d < 0 ? '#137333' : '#b45309'};font-size:10px;font-weight:700;">${d < 0 ? '' : '+'}${fmtCurrency(d)}/pc</span>`);
-                    }
-                    const lineSub = isApp ? curQty * curCost : 0;
-                    return `
-                    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #e6e0ce;font-size:12px;${isApp ? '' : 'opacity:0.48;'}">
-                      <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer;flex:1;min-width:170px;flex-wrap:wrap;">
-                        <input type="checkbox" class="po-edit-chk" data-eidx="${r._editIdx}" ${isApp ? 'checked' : ''} style="width:15px;height:15px;margin:0;accent-color:#1d6f42;flex-shrink:0;" title="Uncheck if supplier did not approve this item" />
-                        <span style="${isApp ? '' : 'text-decoration:line-through;'}font-weight:600;">${nameLabel}</span>
-                        ${metaTags.join('')}
-                        ${diffTags.join('')}
-                      </label>
-                      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
-                        ${
-                          showCosts
-                            ? `<div style="display:flex;align-items:center;gap:3px;">
-                                 <span style="font-size:11px;color:#6b6351;">₱</span>
-                                 <input type="number" class="po-edit-price" data-eidx="${r._editIdx}" value="${curCost}" min="0" step="0.01" style="width:80px;padding:3px 5px;font-size:11.5px;text-align:right;background:#fff;color:#1b1913;border:1px solid #ccc4ad;border-radius:4px;" title="Edit approved supplier unit price" />
-                               </div>`
-                            : ''
-                        }
-                        <div style="display:flex;align-items:center;gap:3px;">
-                          <span style="font-size:11px;color:#6b6351;">×</span>
-                          <input type="number" class="po-edit-qty" data-eidx="${r._editIdx}" value="${curQty}" min="0" max="999" style="width:52px;padding:3px 4px;font-size:11.5px;text-align:center;font-weight:700;color:#b45309;background:#fff;border:1px solid #ccc4ad;border-radius:4px;" title="Edit approved quantity" />
-                          <span style="font-size:10.5px;color:#6b6351;">pcs</span>
-                        </div>
-                        ${
-                          showCosts
-                            ? `<strong style="min-width:80px;text-align:right;color:#1d6f42;font-size:12px;">${fmtCurrency(lineSub)}</strong>`
-                            : ''
-                        }
-                      </div>
-                    </div>`;
-                  })
-                  .join('')}
-              </div>`
-              )
-              .join('')}
-          </div>`
-        )
-        .join('');
+  wrap.querySelector('#mainPoAddBtn')?.addEventListener('click', () => {
+    const pid = wrap.querySelector('#mainPoAddProdSel')?.value;
+    const branchId = wrap.querySelector('#mainPoAddBranchSel')?.value || 'br-molave';
+    const supplier = wrap.querySelector('#mainPoAddSupSel')?.value || 'AB Main Supplier';
+    const unitCost = Math.max(0, Number(wrap.querySelector('#mainPoAddPriceInp')?.value) || 0);
+    const qty = Math.max(1, parseInt(wrap.querySelector('#mainPoAddQtyInp')?.value, 10) || 1);
+    const item = (state.inventory?.items || []).find((i) => i.id === pid);
+    if (!item) return;
+    const branchName = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' }[branchId] || branchId;
+    const tier = getCellphonePriceTier(item);
+    po.items.push({
+      key: `${item.id}::${branchId}`,
+      productId: item.id,
+      brand: item.brand || '',
+      model: item.model || item.name,
+      displayModel: formatSwapModelName({ brand: item.brand || '', model: item.model || item.name }),
+      sku: item.website_codes || item.sku || '',
+      branchId,
+      branchName,
+      supplier,
+      tierKey: tier.key,
+      tierLabel: tier.label,
+      avail: Number(item.byBranch?.[branchId]?.qtyAvailable) || 0,
+      branchDemand90: 0,
+      storewideDemand90: 0,
+      requestedQty: qty,
+      qty,
+      requestedCost: unitCost,
+      unitCost,
+      approved: true,
+    });
+    renderSavedOrderInlineEditor();
+  });
 
-      // Attach live inline edit handlers for Price, Qty, and Approval checkbox
-      bodyEl.querySelectorAll('.po-edit-chk').forEach((chk) => {
-        chk.addEventListener('change', () => {
-          const idx = Number(chk.dataset.eidx);
-          if (state.activeSavedOrder?.items?.[idx]) {
-            state.activeSavedOrder.items[idx].approved = chk.checked;
-          } else if (state.restockPlan?.[idx]) {
-            state.restockPlan[idx].selected = chk.checked;
-            state.restockPlan[idx]._modalTouched = true;
-            renderRestockCards();
-          }
-          renderReorderPreviewModal();
-        });
-      });
+  wrap.querySelector('#mainPoPreviewBtn')?.addEventListener('click', () => {
+    state.previewOrderOverride = po;
+    renderReorderPreviewModal();
+    document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
+  });
 
-      bodyEl.querySelectorAll('.po-edit-price').forEach((inp) => {
-        inp.addEventListener('change', () => {
-          const idx = Number(inp.dataset.eidx);
-          const val = Math.max(0, Number(inp.value) || 0);
-          if (state.activeSavedOrder?.items?.[idx]) {
-            state.activeSavedOrder.items[idx].unitCost = val;
-            state.activeSavedOrder.items[idx].isEstimatedCost = false;
-          } else if (state.restockPlan?.[idx]) {
-            state.restockPlan[idx].unitCost = val;
-            state.restockPlan[idx].isEstimatedCost = false;
-            state.restockPlan[idx]._modalTouched = true;
-            renderRestockCards();
-          }
-          renderReorderPreviewModal();
-        });
-      });
+  wrap.querySelector('#mainPoCopyBtn')?.addEventListener('click', async (e) => {
+    const ok = await copyTextToClipboard(buildReorderCopyText(po));
+    e.target.textContent = ok ? 'COPIED ✓' : 'ERR';
+    setTimeout(() => { e.target.textContent = 'COPY'; }, 1400);
+  });
 
-      bodyEl.querySelectorAll('.po-edit-qty').forEach((inp) => {
-        inp.addEventListener('change', () => {
-          const idx = Number(inp.dataset.eidx);
-          const val = Math.max(0, parseInt(inp.value, 10) || 0);
-          if (state.activeSavedOrder?.items?.[idx]) {
-            state.activeSavedOrder.items[idx].qty = val;
-            state.activeSavedOrder.items[idx].approved = val > 0;
-          } else if (state.restockPlan?.[idx]) {
-            state.restockPlan[idx].qty = val;
-            state.restockPlan[idx].selected = val > 0;
-            state.restockPlan[idx]._modalTouched = true;
-            renderRestockCards();
-          }
-          renderReorderPreviewModal();
-        });
-      });
-    }
-  }
-}
+  wrap.querySelector('#mainPoCloseBtn')?.addEventListener('click', () => {
+    state.editingSavedOrder = null;
+    renderSavedOrderInlineEditor();
+  });
 
-async function saveCurrentOrderFromModal() {
-  const stEl = document.getElementById('reorderPreviewStatus');
-  const title = (document.getElementById('reorderOrderTitleInp')?.value || '').trim() || `Restock Order • ${todayStr}`;
-  const status = document.getElementById('reorderOrderStatusSel')?.value || 'Sent to Supplier';
-  const notes = (document.getElementById('reorderOrderNotesInp')?.value || '').trim();
-  const syncSupplierCosts = Boolean(document.getElementById('reorderSyncSupplierCostsChk')?.checked);
-  const mode = document.querySelector('input[name="restockSupplierMode"]:checked')?.value || 'LOWEST';
-
-  if (state.activeSavedOrder) {
-    // Update existing saved order
-    const po = state.activeSavedOrder;
-    po.title = title;
-    po.status = status;
-    po.notes = notes;
+  wrap.querySelector('#mainPoSaveBtn')?.addEventListener('click', async () => {
+    const syncSupplierCosts = Boolean(wrap.querySelector('#mainPoSyncCostsChk')?.checked);
+    const title = (po.title || '').trim() || `Restock Order • ${todayStr}`;
+    const status = po.status || 'Supplier Approved';
+    const notes = (po.notes || '').trim();
     if (IS_STATIC_GH) {
       const now = new Date().toISOString();
-      po.updatedAt = now;
+      const updatedObj = { ...po, title, status, notes, updatedAt: now, ...computeOrderSummaryMetrics(po.items) };
       const all = getLocalSavedOrders();
       const idx = all.findIndex((o) => o.id === po.id);
-      const savedObj = { ...po, ...computeOrderSummaryMetrics(po.items) };
-      if (idx >= 0) all[idx] = savedObj;
-      else all.unshift(savedObj);
+      if (idx >= 0) all[idx] = updatedObj;
+      else all.unshift(updatedObj);
       setLocalSavedOrders(all);
       state.savedOrders = all;
-      state.activeSavedOrder = JSON.parse(JSON.stringify(savedObj));
+      state.editingSavedOrder = JSON.parse(JSON.stringify(updatedObj));
     } else {
       const res = await api(`/api/purchase-orders/${encodeURIComponent(po.id)}`, {
         method: 'PATCH',
         body: JSON.stringify({ title, status, notes, items: po.items, syncSupplierCosts }),
       });
       await loadSavedPurchaseOrders();
-      if (res?.order) state.activeSavedOrder = JSON.parse(JSON.stringify(res.order));
+      if (res?.order) state.editingSavedOrder = JSON.parse(JSON.stringify(res.order));
     }
     if (syncSupplierCosts) {
       applyEditedPricesToLocalInventory(po.items);
@@ -3109,23 +3054,19 @@ async function saveCurrentOrderFromModal() {
       renderInventory();
     }
     renderSavedOrdersPanel();
-    renderReorderPreviewModal();
-    if (stEl) {
-      stEl.style.color = '#1d6f42';
-      stEl.textContent = `Saved approved prices & quantities for ${po.id}${syncSupplierCosts ? ' (product supplier costs updated)' : ''}.`;
-    }
-    return;
-  }
+    renderSavedOrderInlineEditor(`Saved ${po.id}${syncSupplierCosts ? ' & updated supplier costs' : ''} ✓`);
+  });
+}
 
-  // Create brand-new saved order from current draft plan
+async function createSavedOrderFromDraft() {
+  if (!state.restockPlan) buildRestockDraftPlan();
   const draftSelected = (state.restockPlan || []).filter((r) => r.selected && Number(r.qty) > 0);
   if (!draftSelected.length) {
-    if (stEl) {
-      stEl.style.color = '#b91c1c';
-      stEl.textContent = 'Select at least one product before saving an order.';
-    }
+    alert('Select at least one product in the Restock cards before saving an order.');
     return;
   }
+  const mode = document.querySelector('input[name="restockSupplierMode"]:checked')?.value || 'LOWEST';
+  const title = `Restock Order • ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
   const itemsPayload = draftSelected.map((r) => ({
     key: r.key,
     productId: r.productId,
@@ -3158,9 +3099,9 @@ async function saveCurrentOrderFromModal() {
     createdOrder = {
       id,
       title,
-      status,
+      status: 'Sent to Supplier',
       supplierFilter: mode,
-      notes,
+      notes: '',
       items: itemsPayload,
       ...computeOrderSummaryMetrics(itemsPayload),
       createdAt: now,
@@ -3172,40 +3113,174 @@ async function saveCurrentOrderFromModal() {
   } else {
     const res = await api('/api/purchase-orders', {
       method: 'POST',
-      body: JSON.stringify({ title, status, supplierFilter: mode, notes, items: itemsPayload }),
+      body: JSON.stringify({ title, status: 'Sent to Supplier', supplierFilter: mode, notes: '', items: itemsPayload }),
     });
     createdOrder = res?.order || null;
     await loadSavedPurchaseOrders();
   }
 
-  if (syncSupplierCosts) {
-    applyEditedPricesToLocalInventory(itemsPayload);
-    if (!IS_STATIC_GH) {
-      // Also persist any edited prices in draft to products table
-      await api(`/api/purchase-orders/${encodeURIComponent(createdOrder.id)}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ items: itemsPayload, syncSupplierCosts: true }),
-      }).catch(() => {});
-    }
-    renderRestockCards();
-    renderInventory();
-  }
-
   if (createdOrder) {
-    state.activeSavedOrder = JSON.parse(JSON.stringify(createdOrder));
+    openSavedOrderInlineEditor(createdOrder);
+    renderSavedOrdersPanel();
+    renderSavedOrderInlineEditor(`Order ${createdOrder.id} saved — edit approved prices & qty above anytime ✓`);
   }
-  // Auto-open Saved Orders panel so the user immediately sees their saved order
-  const body = document.getElementById('savedOrdersBody');
-  const caret = document.getElementById('savedOrdersCaret');
-  if (body) body.classList.remove('hidden');
-  if (caret) caret.textContent = '−';
+}
 
-  renderSavedOrdersPanel();
-  renderReorderPreviewModal();
-  if (stEl) {
-    stEl.style.color = '#1d6f42';
-    stEl.textContent = `Order ${createdOrder?.id || ''} saved! You can now edit approved supplier prices & quantities anytime.`;
+function getGroupedReorderPlan(overrideOrder = null) {
+  const activeOrd = overrideOrder && Array.isArray(overrideOrder.items)
+    ? overrideOrder
+    : state.previewOrderOverride && Array.isArray(state.previewOrderOverride.items)
+      ? state.previewOrderOverride
+      : null;
+
+  const selected = activeOrd
+    ? activeOrd.items.filter((r) => r.approved !== false && Number(r.qty) > 0)
+    : (state.restockPlan || []).filter((r) => r.selected && Number(r.qty) > 0);
+
+  const bySupplier = new Map();
+  for (const sup of SUPPLIER_ORDER) bySupplier.set(sup, new Map());
+
+  for (const r of selected) {
+    const supName = r.supplier || 'AB Main Supplier';
+    if (!bySupplier.has(supName)) bySupplier.set(supName, new Map());
+    const branchMap = bySupplier.get(supName);
+    const brName = r.branchName || 'Molave';
+    if (!branchMap.has(brName)) branchMap.set(brName, []);
+    branchMap.get(brName).push(r);
   }
+
+  const ordered = [];
+  for (const [supplier, branchMap] of bySupplier.entries()) {
+    if (!branchMap.size) continue;
+    const branchesOut = [];
+    const sortedBranchNames = [...branchMap.keys()].sort((a, b) => {
+      const ia = BRANCH_ORDER.indexOf(a);
+      const ib = BRANCH_ORDER.indexOf(b);
+      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b);
+    });
+    for (const bName of sortedBranchNames) {
+      branchesOut.push({ branchName: bName, rows: branchMap.get(bName) });
+    }
+    ordered.push({ supplier, branches: branchesOut });
+  }
+  return { selected, grouped: ordered, isSaved: Boolean(activeOrd), order: activeOrd };
+}
+
+function buildReorderCopyText(overrideOrder = null) {
+  const { grouped } = getGroupedReorderPlan(overrideOrder);
+  if (!grouped.length) return '';
+  const parts = ['Reorder request'];
+  for (const supGroup of grouped) {
+    parts.push(supGroup.supplier);
+    for (const bGroup of supGroup.branches) {
+      const lines = [bGroup.branchName];
+      for (const r of bGroup.rows) {
+        lines.push(`${r.displayModel} — ${r.qty} ${r.qty === 1 ? 'pc' : 'pcs'}`);
+      }
+      parts.push(lines.join('\n'));
+    }
+  }
+  return parts.join('\n\n');
+}
+
+function renderReorderPreviewModal() {
+  const modal = document.getElementById('reorderPreviewModal');
+  if (!modal) return;
+  const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked);
+  const { selected, grouped } = getGroupedReorderPlan();
+
+  const prepEl = document.getElementById('reorderPreviewPrepared');
+  if (prepEl) {
+    prepEl.textContent = `Prepared ${new Date().toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    })}`;
+  }
+
+  const totalUnits = selected.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+  const totalCost = selected.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.unitCost) || 0), 0);
+  const branchTotals = new Map(BRANCH_ORDER.map((b) => [b, { qty: 0, cost: 0 }]));
+  for (const r of selected) {
+    if (!branchTotals.has(r.branchName)) branchTotals.set(r.branchName, { qty: 0, cost: 0 });
+    const bt = branchTotals.get(r.branchName);
+    bt.qty += Number(r.qty) || 0;
+    bt.cost += (Number(r.qty) || 0) * (Number(r.unitCost) || 0);
+  }
+
+  const metricsEl = document.getElementById('reorderPreviewMetrics');
+  if (metricsEl) {
+    const branchPills = [...branchTotals.entries()]
+      .filter(([, v]) => v.qty > 0)
+      .map(
+        ([b, v]) =>
+          `<span style="display:inline-block;padding:4px 8px;border-radius:6px;background:#fff;border:1px solid #d5ceb8;font-size:12px;"><strong>${b}:</strong> ${v.qty} pcs${showCosts ? ` (${fmtCurrency(v.cost)})` : ''}</span>`
+      )
+      .join(' ');
+    metricsEl.innerHTML = `
+      <div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:130px;">
+        <div style="font-size:10px;font-weight:700;color:#6b6351;">ORDER UNITS</div>
+        <div style="font-size:18px;font-weight:800;color:#1b1913;">${fmtNum(totalUnits)}</div>
+      </div>
+      ${
+        showCosts
+          ? `<div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:150px;">
+              <div style="font-size:10px;font-weight:700;color:#6b6351;">EST. TOTAL COST</div>
+              <div style="font-size:18px;font-weight:800;color:#1d6f42;">${fmtCurrency(totalCost)}</div>
+            </div>`
+          : ''
+      }
+      <div style="flex:1;min-width:220px;">
+        <div style="font-size:10px;font-weight:700;color:#6b6351;margin-bottom:4px;">BRANCH SUBTOTALS</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">${branchPills || '<span style="font-size:12px;color:#6b6351;">None</span>'}</div>
+      </div>
+    `;
+  }
+
+  const bodyEl = document.getElementById('reorderPreviewBody');
+  if (bodyEl) {
+    if (!grouped.length) {
+      bodyEl.innerHTML = '<div style="padding:16px;text-align:center;color:#6b6351;">No products selected in this reorder plan.</div>';
+    } else {
+      bodyEl.innerHTML = grouped
+        .map(
+          (sup) => `
+          <div style="margin-bottom:12px;">
+            <div style="background:#ebe2be;color:#1b1913;font-weight:700;font-size:12px;padding:6px 10px;border-radius:6px;">
+              ${sup.supplier}
+            </div>
+            ${sup.branches
+              .map(
+                (b) => `
+              <div style="margin-top:8px;padding:0 4px;">
+                <div style="font-weight:700;font-size:12px;color:#1b1913;margin-bottom:4px;">${b.branchName}</div>
+                ${b.rows
+                  .map((r) => {
+                    const nameLabel = r.brand && !String(r.model || '').toLowerCase().startsWith(String(r.brand || '').toLowerCase())
+                      ? `${r.brand} · ${r.model}`
+                      : r.model || r.displayModel;
+                    return `
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid #e6e0ce;font-size:12.5px;">
+                      <span>${nameLabel}</span>
+                      <span style="display:flex;align-items:center;gap:12px;white-space:nowrap;">
+                        ${showCosts ? `<span style="color:#4f493a;font-size:11.5px;">${fmtCurrency(r.unitCost)} × ${r.qty} = <strong>${fmtCurrency(r.unitCost * r.qty)}</strong></span>` : ''}
+                        <strong style="color:#b45309;">${r.qty} ${r.qty === 1 ? 'pc' : 'pcs'}</strong>
+                      </span>
+                    </div>`;
+                  })
+                  .join('')}
+              </div>`
+              )
+              .join('')}
+          </div>`
+        )
+        .join('');
+    }
+  }
+  const stEl = document.getElementById('reorderPreviewStatus');
+  if (stEl) stEl.textContent = '';
 }
 
 function downloadReorderPlanPdf(overrideOrder = null) {
@@ -3721,101 +3796,21 @@ document.getElementById('addDeductionBtn')?.addEventListener('click', () => {
 });
 
 document.getElementById('buildRestockPlanBtn')?.addEventListener('click', () => {
-  state.activeSavedOrder = null;
-  const tInp = document.getElementById('reorderOrderTitleInp');
-  if (tInp) tInp.value = '';
+  state.previewOrderOverride = null;
   buildRestockDraftPlan();
   renderRestockCards();
-  populateReorderAddProductSelect();
   renderReorderPreviewModal();
-  const stEl = document.getElementById('reorderPreviewStatus');
-  if (stEl) stEl.textContent = '';
   document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
 });
 
 document.getElementById('previewRestockPlanBtn')?.addEventListener('click', () => {
-  state.activeSavedOrder = null;
+  state.previewOrderOverride = null;
   if (!state.restockPlan) buildRestockDraftPlan();
-  populateReorderAddProductSelect();
   renderReorderPreviewModal();
-  const stEl = document.getElementById('reorderPreviewStatus');
-  if (stEl) stEl.textContent = '';
   document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
 });
 
-document.getElementById('saveNewRestockOrderBtn')?.addEventListener('click', async () => {
-  state.activeSavedOrder = null;
-  if (!state.restockPlan) buildRestockDraftPlan();
-  const tInp = document.getElementById('reorderOrderTitleInp');
-  if (tInp) {
-    tInp.value = `Restock Order • ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
-  }
-  populateReorderAddProductSelect();
-  document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
-  await saveCurrentOrderFromModal();
-});
-
-document.getElementById('reorderSaveOrderBtn')?.addEventListener('click', saveCurrentOrderFromModal);
-
-document.getElementById('reorderAddProdSel')?.addEventListener('change', (e) => {
-  const pid = e.target.value;
-  const priceInp = document.getElementById('reorderAddPriceInp');
-  const supSel = document.getElementById('reorderAddSupplierSel');
-  if (!pid || !state.inventory?.items) return;
-  const item = state.inventory.items.find((i) => i.id === pid);
-  if (!item) return;
-  const sup = resolveSupplierForProduct(item, 'LOWEST');
-  const price = Number(sup?.unitCost) > 0 ? sup.unitCost : Math.round((Number(item.base_price) || 0) * 0.85);
-  if (priceInp) priceInp.value = price > 0 ? price : '';
-  if (supSel && sup?.supplier) supSel.value = sup.supplier;
-});
-
-document.getElementById('reorderAddLineBtn')?.addEventListener('click', () => {
-  const pid = document.getElementById('reorderAddProdSel')?.value;
-  const branchId = document.getElementById('reorderAddBranchSel')?.value || 'br-molave';
-  const supplier = document.getElementById('reorderAddSupplierSel')?.value || 'AB Main Supplier';
-  const unitCost = Math.max(0, Number(document.getElementById('reorderAddPriceInp')?.value) || 0);
-  const qty = Math.max(1, parseInt(document.getElementById('reorderAddQtyInp')?.value, 10) || 1);
-  if (!pid || !state.inventory?.items) return;
-  const item = state.inventory.items.find((i) => i.id === pid);
-  if (!item) return;
-  const branchName = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' }[branchId] || branchId;
-  const tier = getCellphonePriceTier(item);
-  const displayModel = formatSwapModelName({ brand: item.brand || '', model: item.model || item.name });
-  const newRow = {
-    key: `${item.id}::${branchId}`,
-    productId: item.id,
-    brand: item.brand || '',
-    model: item.model || item.name,
-    displayModel,
-    sku: item.website_codes || item.sku || '',
-    branchId,
-    branchName,
-    supplier,
-    tierKey: tier.key,
-    tierLabel: tier.label,
-    avail: Number(item.byBranch?.[branchId]?.qtyAvailable) || 0,
-    branchDemand90: 0,
-    storewideDemand90: 0,
-    requestedQty: qty,
-    qty,
-    requestedCost: unitCost,
-    unitCost,
-    approved: true,
-    selected: true,
-    _modalTouched: true,
-  };
-  if (state.activeSavedOrder) {
-    state.activeSavedOrder.items.push(newRow);
-  } else {
-    if (!state.restockPlan) state.restockPlan = [];
-    state.restockPlan.push(newRow);
-    renderRestockCards();
-  }
-  const sel = document.getElementById('reorderAddProdSel');
-  if (sel) sel.value = '';
-  renderReorderPreviewModal();
-});
+document.getElementById('saveNewRestockOrderBtn')?.addEventListener('click', createSavedOrderFromDraft);
 
 document.getElementById('restockPriorityMode')?.addEventListener('change', () => {
   buildRestockDraftPlan();
