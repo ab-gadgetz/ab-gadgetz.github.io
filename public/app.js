@@ -2114,14 +2114,13 @@ function buildPendingOrdersLookup() {
   };
 
   const pendingStatuses = new Set(['Sent to Supplier', 'Supplier Approved', 'At Warehouse (AB Web INITIAL)', 'Partially Received']);
-  const linkedAbRefs = new Set();
+  const linkedAbLineKeys = new Set();
   for (const o of state.savedOrders || []) {
     if (!pendingStatuses.has(o.status)) continue;
-    for (const ref of String(o.abDeliveryRefs || '').split(',').map((s) => s.trim()).filter(Boolean)) {
-      linkedAbRefs.add(ref);
-    }
     for (const it of o.items || []) {
-      if (it.abDeliveryNo && it.abDeliveryNo !== 'PENDING IN AB WEB') linkedAbRefs.add(String(it.abDeliveryNo).trim());
+      if (it.abDeliveryNo && it.abDeliveryNo !== 'PENDING IN AB WEB' && it.productId && it.branchId) {
+        linkedAbLineKeys.add(`${String(it.abDeliveryNo).trim()}::${it.branchId}::${it.productId}`);
+      }
       if (it.approved === false || it.isExtraItem) continue;
       const appQty = Math.max(0, Number(it.qty) || 0);
       const recQty =
@@ -2133,12 +2132,15 @@ function buildPendingOrdersLookup() {
     }
   }
 
-  // Also include unlinked AB Web deliveries whose header status is not RECEIVED yet (e.g. INITIAL at warehouse for pick-up)
+  // Also include any unlinked non-RECEIVED, non-CANCELLED AB Web deliveries (e.g. DELIVERY / INITIAL at warehouse for pick-up)
   for (const d of state.abDeliveries || []) {
-    if (String(d.status || '').toUpperCase() === 'RECEIVED') continue;
-    if (d.deliveryNo && linkedAbRefs.has(String(d.deliveryNo).trim())) continue;
+    const dSt = String(d.status || '').toUpperCase();
+    if (dSt === 'RECEIVED' || dSt === 'CANCELLED') continue;
     for (const dl of d.items || []) {
-      if (dl.productId && (Number(dl.deliveredQty) || 0) > (Number(dl.receivedQty) || 0)) {
+      if (!dl.productId) continue;
+      const lineKey = `${String(d.deliveryNo || '').trim()}::${d.branchId}::${dl.productId}`;
+      if (d.deliveryNo && linkedAbLineKeys.has(lineKey)) continue;
+      if ((Number(dl.deliveredQty) || 0) > (Number(dl.receivedQty) || 0)) {
         addPending(dl.productId, d.branchId, (Number(dl.deliveredQty) || 0) - (Number(dl.receivedQty) || 0), d.deliveryNo);
       }
     }
@@ -2828,31 +2830,44 @@ function applyEditedPricesToLocalInventory(items) {
 
 function reconcileStaticOrdersWithDeliveries(onlyPoId = null) {
   const deliveries = (state.abDeliveries || [])
-    .filter((d) => ['INITIAL', 'RECEIVED'].includes(String(d.status || '').toUpperCase()))
+    .filter((d) => String(d.status || '').toUpperCase() !== 'CANCELLED')
     .slice()
     .sort((a, b) => String(a.deliveryDate || '').localeCompare(String(b.deliveryDate || '')) || (Number(a.id || a.portalDeliveryId) || 0) - (Number(b.id || b.portalDeliveryId) || 0));
   if (!deliveries.length) return 0;
-  const orders = getLocalSavedOrders();
-  const claimed = new Set();
+  const orders = getLocalSavedOrders().slice().sort((a, b) => {
+    const aAuto = String(a.id || '').startsWith('PO-AB-') ? 1 : 0;
+    const bAuto = String(b.id || '').startsWith('PO-AB-') ? 1 : 0;
+    return aAuto - bAuto || String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+  });
+  const claimedLines = new Set();
   for (const o of orders) {
-    if (onlyPoId && o.id === onlyPoId) continue;
-    for (const ref of String(o.abDeliveryRefs || '').split(',').map((s) => s.trim()).filter(Boolean)) claimed.add(ref);
+    if (o.status === 'Cancelled') continue;
+    for (const it of o.items || []) {
+      if (it.abDeliveryNo && it.abDeliveryNo !== 'PENDING IN AB WEB' && it.productId && it.branchId) {
+        claimedLines.add(`${it.abDeliveryNo}::${it.branchId}::${it.productId}`);
+      }
+    }
   }
   let updatedOrders = 0;
   const now = new Date().toISOString();
   for (const po of orders) {
     if (onlyPoId && po.id !== onlyPoId) continue;
     if (!['Sent to Supplier', 'Supplier Approved', 'At Warehouse (AB Web INITIAL)', 'Partially Received', 'Received (Pending AB Web)'].includes(po.status)) continue;
+    const isAutoPo = String(po.id || '').startsWith('PO-AB-');
+    const autoDelivId = isAutoPo ? parseInt(String(po.id).replace('PO-AB-', ''), 10) : 0;
     const orderDate = String(po.createdAt || '').slice(0, 10);
     const refs = new Set(String(po.abDeliveryRefs || '').split(',').map((s) => s.trim()).filter(Boolean));
     let changed = false;
     for (const deliv of deliveries) {
-      if (orderDate && deliv.deliveryDate < orderDate) continue;
-      if (claimed.has(deliv.deliveryNo) && !refs.has(deliv.deliveryNo)) continue;
+      const delivIdNum = Number(deliv.id || deliv.portalDeliveryId) || 0;
+      if (isAutoPo && delivIdNum !== autoDelivId) continue;
+      if (!isAutoPo && orderDate && deliv.deliveryDate < orderDate && !refs.has(deliv.deliveryNo)) continue;
       const dStatus = String(deliv.status || '').toUpperCase();
+      const isRecStatus = dStatus === 'RECEIVED';
       let matched = false;
       for (const dl of deliv.items || []) {
         if (!dl.productId) continue;
+        const lineKey = `${deliv.deliveryNo}::${deliv.branchId}::${dl.productId}`;
         const target = (po.items || []).find(
           (it) =>
             it.approved !== false &&
@@ -2861,13 +2876,19 @@ function reconcileStaticOrdersWithDeliveries(onlyPoId = null) {
             (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB' || it.abDeliveryNo === deliv.deliveryNo)
         );
         if (!target) continue;
+        if (claimedLines.has(lineKey) && target.abDeliveryNo !== deliv.deliveryNo) continue;
         matched = true;
-        if (target.abDeliveryNo !== deliv.deliveryNo || target.abDeliveryStatus !== dStatus) {
+        claimedLines.add(lineKey);
+        if (
+          target.abDeliveryNo !== deliv.deliveryNo ||
+          target.abDeliveryStatus !== dStatus ||
+          (isRecStatus && (target.receivedQty === undefined || target.receivedQty === null || target.receivedQty === ''))
+        ) {
           target.abDeliveryNo = deliv.deliveryNo;
           target.abDeliveryStatus = dStatus;
           target.abDeliveryDate = deliv.deliveryDate;
           target.abDeliveredQty = Number(dl.deliveredQty) || 0;
-          if (dStatus === 'RECEIVED') {
+          if (isRecStatus) {
             target.receivedDate = target.receivedDate || deliv.deliveryDate;
             if (target.receivedQty === undefined || target.receivedQty === null || target.receivedQty === '') {
               target.receivedQty = Number(dl.receivedQty ?? dl.deliveredQty) || 0;
@@ -2882,7 +2903,6 @@ function reconcileStaticOrdersWithDeliveries(onlyPoId = null) {
       }
       if (matched && !refs.has(deliv.deliveryNo)) {
         refs.add(deliv.deliveryNo);
-        claimed.add(deliv.deliveryNo);
         changed = true;
       }
     }
@@ -2892,14 +2912,108 @@ function reconcileStaticOrdersWithDeliveries(onlyPoId = null) {
       const appItems = (po.items || []).filter((it) => it.approved !== false && (Number(it.qty) || 0) > 0);
       const anyRec = (po.items || []).some((it) => Number(it.receivedQty) > 0 || (it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== ''));
       const allDone = appItems.length > 0 && appItems.every((it) => it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== '');
-      const anyInitial = (po.items || []).some((it) => String(it.abDeliveryStatus || '').toUpperCase() === 'INITIAL' && it.abDeliveryNo);
+      const anyWarehouse = (po.items || []).some((it) => String(it.abDeliveryStatus || '').toUpperCase() !== 'RECEIVED' && it.abDeliveryNo);
       const hasMissingAb = (po.items || []).some((it) => Number(it.receivedQty) > 0 && (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB'));
       if (allDone) po.status = hasMissingAb ? 'Received (Pending AB Web)' : 'Received';
       else if (anyRec) po.status = 'Partially Received';
-      else if (anyInitial) po.status = 'At Warehouse (AB Web INITIAL)';
+      else if (anyWarehouse) po.status = 'At Warehouse (AB Web INITIAL)';
       updatedOrders++;
     }
   }
+
+  // Auto-create PO-AB-<id> records for active unrecorded AB Web deliveries (non-RECEIVED warehouse deliveries, or new RECEIVED >= 2026-11-24)
+  if (!onlyPoId) {
+    const existingIds = new Set(orders.map((o) => o.id));
+    const deletedIds = getDeletedLocalPoIds();
+    const invItems = state.inventory?.items || [];
+    const prodById = new Map(invItems.map((p) => [p.id, p]));
+    const brNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
+    for (const deliv of deliveries) {
+      const delivId = Number(deliv.id || deliv.portalDeliveryId) || 0;
+      if (!delivId) continue;
+      const autoId = `PO-AB-${delivId}`;
+      if (existingIds.has(autoId) || deletedIds.has(autoId)) continue;
+      const dStatus = String(deliv.status || '').toUpperCase();
+      const isRec = dStatus === 'RECEIVED';
+      const isPendingWarehouse = !isRec && dStatus !== 'CANCELLED' && (Number(deliv.totalDeliveredQty) || 0) > 0;
+      const isNewReceived = isRec && String(deliv.deliveryDate || '') >= '2026-11-24';
+      if (!isPendingWarehouse && !isNewReceived) continue;
+
+      const itemsOut = [];
+      for (const dl of deliv.items || []) {
+        if (!dl.productId) continue;
+        if (/FREE/i.test(String(dl.code || '')) || /FREE\s*BUNDLE/i.test(String(dl.productName || ''))) continue;
+        const qty = Math.max(0, Number(dl.deliveredQty) || 0);
+        if (qty <= 0) continue;
+        const lineKey = `${deliv.deliveryNo}::${deliv.branchId}::${dl.productId}`;
+        if (claimedLines.has(lineKey)) continue;
+
+        const p = prodById.get(dl.productId);
+        const unitCost =
+          Number(p?.cost_ab) ||
+          Number(p?.cost_ak) ||
+          Number(p?.cost_online) ||
+          Number(p?.cost_price) ||
+          (Number(p?.base_price) > 0 ? Math.round(Number(p.base_price) * 0.85) : 0);
+        const srp = Number(p?.base_price) || Number(dl.unitSrp) || 0;
+        const tierKey = srp > 0 && srp <= 10000 ? 'LOW_END' : srp <= 20000 ? 'MID_RANGE' : 'HIGH_END';
+        const tierLabel = tierKey === 'LOW_END' ? 'Low-End' : tierKey === 'MID_RANGE' ? 'Mid-Range' : 'High-End';
+        const brand = p?.brand || '';
+        const model = p?.model || dl.productName || '';
+        const displayModel = brand && !String(model).toLowerCase().startsWith(brand.toLowerCase()) ? `${brand} ${model}` : model;
+        const recQty = isRec ? Number(dl.receivedQty ?? qty) || 0 : null;
+        itemsOut.push({
+          key: `${dl.productId}::${deliv.branchId}`,
+          productId: dl.productId,
+          brand,
+          model,
+          displayModel,
+          sku: dl.code || p?.sku || '',
+          branchId: deliv.branchId,
+          branchName: brNames[deliv.branchId] || deliv.branchId,
+          supplier: p?.supplier && p.supplier !== 'Portal Auto-Import' ? p.supplier : 'AB Main Supplier',
+          tierKey,
+          tierLabel,
+          avail: 0,
+          branchDemand90: 0,
+          storewideDemand90: 0,
+          requestedQty: qty,
+          qty,
+          requestedCost: unitCost,
+          unitCost,
+          approved: true,
+          receivedQty: recQty,
+          receivedCost: unitCost,
+          receivedDate: isRec ? deliv.deliveryDate : '',
+          abDeliveryNo: deliv.deliveryNo,
+          abDeliveryStatus: dStatus,
+          abDeliveryDate: deliv.deliveryDate,
+          abDeliveredQty: qty,
+          abReportedQty: isRec ? Number(dl.receivedQty ?? qty) || 0 : null,
+          isExtraItem: false,
+        });
+        claimedLines.add(lineKey);
+      }
+      if (!itemsOut.length) continue;
+      const poStatus = isRec ? 'Received' : 'At Warehouse (AB Web INITIAL)';
+      orders.unshift({
+        id: autoId,
+        title: `AB Web Delivery • ${deliv.deliveryNo} (${brNames[deliv.branchId] || deliv.branchId})`,
+        status: poStatus,
+        supplierFilter: 'AUTO_AB_WEB',
+        notes: `Auto-synced from AB Web delivery ${deliv.deliveryNo} (${dStatus}) — adjusts Restock automatically.`,
+        expectedDate: '',
+        abDeliveryRefs: deliv.deliveryNo,
+        items: itemsOut,
+        ...computeOrderSummaryMetrics(itemsOut, poStatus),
+        createdAt: `${deliv.deliveryDate}T08:00:00.000Z`,
+        updatedAt: now,
+      });
+      existingIds.add(autoId);
+      updatedOrders++;
+    }
+  }
+
   if (updatedOrders > 0) setLocalSavedOrders(orders);
   return updatedOrders;
 }
@@ -2976,7 +3090,7 @@ function renderSavedOrdersPanel() {
           ? ` → Delivered: <strong style="color:${m.qtyVariance === 0 ? 'var(--green)' : '#f59e0b'};">${fmtNum(m.deliveredUnits)} pcs</strong> (${fmtCurrency(m.deliveredTotal)}${m.qtyVariance !== 0 ? `, Var ${m.qtyVariance >= 0 ? '+' : ''}${m.qtyVariance} pcs` : ''})`
           : '';
       const warehouseUnits = (o.items || [])
-        .filter((it) => String(it.abDeliveryStatus || '').toUpperCase() === 'INITIAL' && it.abDeliveryNo && (it.receivedQty === null || it.receivedQty === undefined || it.receivedQty === ''))
+        .filter((it) => String(it.abDeliveryStatus || 'RECEIVED').toUpperCase() !== 'RECEIVED' && it.abDeliveryNo && it.abDeliveryNo !== 'PENDING IN AB WEB' && (it.receivedQty === null || it.receivedQty === undefined || it.receivedQty === ''))
         .reduce((s, it) => s + (Number(it.abDeliveredQty ?? it.qty) || 0), 0);
       const missingAbCount = (o.items || []).filter(
         (it) => Number(it.receivedQty) > 0 && (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB')
@@ -3413,8 +3527,8 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
                       const recCostRaw = r.receivedCost !== undefined && r.receivedCost !== null && r.receivedCost !== '' ? Number(r.receivedCost) : curCost;
                       const delivQtyNum = recQtyRaw === '' ? 0 : Math.max(0, Number(recQtyRaw) || 0);
                       const hasRec = recQtyRaw !== '';
-                      const abStatusU = String(r.abDeliveryStatus || '').toUpperCase();
-                      const isWhInit = !hasRec && r.abDeliveryNo && r.abDeliveryNo !== 'PENDING IN AB WEB' && abStatusU === 'INITIAL';
+                      const abStatusU = String(r.abDeliveryStatus || 'RECEIVED').toUpperCase();
+                      const isWhInit = !hasRec && r.abDeliveryNo && r.abDeliveryNo !== 'PENDING IN AB WEB' && abStatusU !== 'RECEIVED';
                       const qVar = hasRec ? delivQtyNum - (isApp ? curQty : 0) : 0;
                       const cVar = hasRec ? recCostRaw - curCost : 0;
                       const varTag = hasRec
@@ -3429,7 +3543,7 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
                           ? `<span class="badge badge-ok" style="font-size:9.5px;">${r.abDeliveryNo}</span>`
                           : `<span class="badge badge-danger" style="font-size:9.5px;">Not in AB Web</span>`
                         : isWhInit
-                          ? `<span class="badge badge-warn" style="font-size:9.5px;background:rgba(96,165,250,0.18);color:#93c5fd;">${r.abDeliveryNo} (INITIAL)</span>`
+                          ? `<span class="badge badge-warn" style="font-size:9.5px;background:rgba(96,165,250,0.18);color:#93c5fd;">${r.abDeliveryNo} (${abStatusU})</span>`
                           : '';
                       return `
                         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);font-size:12px;${isApp || isExtra ? '' : 'opacity:0.48;'}">
@@ -3841,7 +3955,7 @@ function buildVarianceReportRows() {
     return o.status !== 'Draft';
   });
 
-  const abList = (state.abDeliveries || []).filter((d) => ['INITIAL', 'RECEIVED'].includes(String(d.status || '').toUpperCase()));
+  const abList = (state.abDeliveries || []).filter((d) => String(d.status || '').toUpperCase() !== 'CANCELLED');
 
   const out = [];
   for (const o of orders) {
@@ -3859,7 +3973,7 @@ function buildVarianceReportRows() {
       const abStatus = String(it.abDeliveryStatus || (abRef && abRef !== 'PENDING IN AB WEB' ? 'RECEIVED' : '')).toUpperCase();
       const hasAbRef = Boolean(abRef && abRef !== 'PENDING IN AB WEB');
       const abQty = hasAbRef ? Number(it.abDeliveredQty ?? it.abReportedQty ?? (hasRec ? delQty : 0)) : 0;
-      const isWarehouseInitial = hasAbRef && abStatus === 'INITIAL' && !hasRec;
+      const isWarehouseInitial = hasAbRef && abStatus !== 'RECEIVED' && !hasRec;
 
       const qtyVar = hasRec ? delQty - appQty : isWarehouseInitial ? abQty - appQty : 0;
       const unitPriceVar = hasRec ? delCost - appCost : 0;
@@ -4038,7 +4152,7 @@ function renderOrderVarianceReport() {
           } else if (r.hasRec) {
             abBadge = `<span class="badge badge-ok" style="font-size:10px;">${r.abRef} (RECEIVED)</span>`;
           } else if (r.isWarehouseInitial) {
-            abBadge = `<span class="badge badge-warn" style="font-size:10px;background:rgba(96,165,250,0.18);color:#93c5fd;border-color:rgba(96,165,250,0.4);">🚚 ${r.abRef} (INITIAL · Pick-Up)</span>`;
+            abBadge = `<span class="badge badge-warn" style="font-size:10px;background:rgba(96,165,250,0.18);color:#93c5fd;border-color:rgba(96,165,250,0.4);">🚚 ${r.abRef} (${r.abStatus || 'DELIVERY'} · Pick-Up)</span>`;
           } else if (r.confirmedMissingInAb) {
             abBadge = `<span class="badge badge-danger" style="font-size:10px;">⚠ MISSING IN AB WEB</span>`;
           }
@@ -4838,6 +4952,9 @@ async function loadPlanning() {
     if (act) state.planningActivity = act;
   } catch {
     await Promise.all([loadSavedPurchaseOrders(), loadAbDeliveries()]);
+  }
+  if (IS_STATIC_GH && reconcileStaticOrdersWithDeliveries() > 0) {
+    await loadSavedPurchaseOrders();
   }
   renderPlanning();
 }
