@@ -784,8 +784,10 @@ async function api(url, opts = {}) {
       eventSource = null;
     }
     state.reauthInPlace = Boolean(state.inventory);
-    await checkAuth('Session expired after server restart — enter your PIN once to stay logged in & save.');
-    throw new Error(data.error || 'Authentication required — please unlock and click Save again.');
+    await checkAuth('Session expired after update — enter your 6-digit PIN once to resume and keep your session saved.');
+    const authErr = new Error(data.error || 'Authentication required — enter your PIN in the unlock box and retry.');
+    authErr.isAuthHandled = true;
+    throw authErr;
   }
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
@@ -2844,8 +2846,8 @@ function renderRestockCards() {
         renderRestockCards();
         renderInventory();
       } catch (err) {
-        btn.textContent = 'Err';
-        alert(err.message);
+        btn.textContent = err?.isAuthHandled ? 'Retry' : 'Err';
+        if (!err?.isAuthHandled) alert(err.message);
       }
     });
   });
@@ -6045,8 +6047,8 @@ function renderCostCompareTool() {
           renderRestockCards();
         }
       } catch (err) {
-        btn.textContent = 'Err';
-        alert(err.message);
+        btn.textContent = err?.isAuthHandled ? 'Retry' : 'Err';
+        if (!err?.isAuthHandled) alert(err.message);
       }
     });
   });
@@ -7358,7 +7360,7 @@ document.querySelectorAll('.publish-github-btn').forEach((btn) => {
       const errText = `Publish failed: ${err.message}`;
       if (catMsg) catMsg.textContent = errText;
       if (photoMsg) photoMsg.textContent = errText;
-      alert(errText);
+      if (!err?.isAuthHandled) alert(errText);
       btn.textContent = origText;
     } finally {
       btn.disabled = false;
