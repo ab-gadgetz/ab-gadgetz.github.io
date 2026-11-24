@@ -11,7 +11,7 @@
   <link rel="icon" href="../ab-logo-square.png" type="image/png" />
   <link rel="apple-touch-icon" href="../ab-logo-square.png" />
   <title>Owner Admin Portal</title>
-  <link rel="stylesheet" href="../styles.css?v=1795487777769" />
+  <link rel="stylesheet" href="../styles.css?v=1795525427811" />
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
@@ -153,7 +153,8 @@
           <label for="stockViewSelect" style="margin:0;color:var(--muted);font-size:11px;">STOCK VIEW</label>
           <select id="stockViewSelect" style="width:auto;padding:7px 10px;font-size:12px;">
             <option value="available">Available phones</option>
-            <option value="phaseout">Phaseout products (include 0)</option>
+            <option value="subject_phaseout">Subject to Phaseout (&lt; 3 mos)</option>
+            <option value="phaseout">Phaseout / Do Not Reorder (incl. 0)</option>
             <option value="all">All products, incl. unavailable</option>
             <option value="unavailable">Unavailable</option>
             <option value="reorder">Reorder suggestions</option>
@@ -391,10 +392,11 @@
                     <option value="ALL">All Orders (Ordered vs Delivered)</option>
                   </select>
                   <select id="varianceTypeFilter" style="width:auto;padding:5px 9px;font-size:12px;">
-                    <option value="ALL">All Line Items</option>
+                    <option value="ALL">All Finalized Order Lines</option>
+                    <option value="NOT_IN_AB">Missing in AB Web Deliveries (Not Recorded)</option>
+                    <option value="AT_WAREHOUSE">At Warehouse · AB Web INITIAL (For Pick-Up)</option>
                     <option value="VARIANCES_ONLY">Variances Only (Short / Over / Price Diff)</option>
-                    <option value="PENDING_ONLY">Still Waiting Delivery</option>
-                    <option value="NOT_IN_AB">Received but NOT Yet in AB Web</option>
+                    <option value="PENDING_ONLY">Still Waiting Receipt / Delivery</option>
                   </select>
                 </div>
                 <div style="display:flex;gap:6px;flex-wrap:wrap;">
@@ -551,62 +553,153 @@
         <div id="reorderCardGrid" class="brand-grid"></div>
       </div>
 
-      <!-- Tool Panel: Website vs 3-Supplier Cost Comparison & Restock Impact -->
+      <!-- Tool Panel: Website vs 3-Supplier Cost Comparison & AB Supplier DP Sheet -->
       <div id="tool-costcompare" class="sub-panel hidden">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
           <div>
-            <h3 style="margin:0;">Website Cost vs 3-Supplier Cost Analysis</h3>
-            <p class="muted small" style="margin:3px 0 0;">Compares AB Website recorded cost against AB Main Supplier, A&amp;K, and Online Purchase (shared across <strong>all branches</strong>)—and highlights which products save money when reordering.</p>
+            <h3 style="margin:0;">Website Cost vs 3-Supplier Cost &amp; AB Stock Prices</h3>
+            <p class="muted small" style="margin:3px 0 0;">Uses <strong>DP (Dealers Price)</strong> as AB Main Supplier cost while keeping <strong>AB Web current prices</strong> as selling prices (ignores supplier SRP).</p>
           </div>
-          <button type="button" id="applyCostPriorityRestockBtn" style="padding:7px 12px;font-size:12px;">OPEN IN RESTOCK PLAN</button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" id="openAbSupplierPasteBtn" class="secondary" style="padding:7px 12px;font-size:12px;border-color:var(--gold);color:var(--gold-bright);">PASTE AB SUPPLIER STOCK / DP</button>
+            <button type="button" id="applyCostPriorityRestockBtn" style="padding:7px 12px;font-size:12px;">OPEN IN RESTOCK PLAN</button>
+          </div>
         </div>
 
-        <div class="summary-grid" id="costCompareSummaryGrid" style="margin-bottom:12px;"></div>
-        <div id="costCompareInsightBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12.5px;border-left:3px solid var(--gold);"></div>
-
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
-          <input type="search" id="costCompareSearch" placeholder="Search model or brand..." style="width:180px;padding:6px 10px;font-size:12px;" />
-          <select id="costCompareType" style="width:auto;padding:6px 10px;font-size:12px;">
-            <option value="Cellphones">Cellphones</option>
-            <option value="Accessories">Accessories</option>
-            <option value="ALL">All Products</option>
-          </select>
-          <select id="costCompareStockFilter" style="width:auto;padding:6px 10px;font-size:12px;">
-            <option value="IN_STOCK">Available / Has Units Left (&gt; 0)</option>
-            <option value="ALL">All Stock Status</option>
-            <option value="OUT_OF_STOCK">Out of Stock (0)</option>
-          </select>
-          <select id="costCompareFilter" style="width:auto;padding:6px 10px;font-size:12px;">
-            <option value="ALL">All Products</option>
-            <option value="SAVINGS">Supplier Cheaper than Website</option>
-            <option value="OVERPAY">Website Cheaper than Suppliers</option>
-            <option value="LOW_STOCK_SAVINGS">Low-Stock + Savings (Priority Order)</option>
-            <option value="MISSING">Missing Supplier Cost</option>
-          </select>
-          <select id="costCompareSort" style="width:auto;padding:6px 10px;font-size:12px;">
-            <option value="SAVINGS_DESC">Sort: Biggest Savings First</option>
-            <option value="MARGIN_DESC">Sort: Highest Margin % First</option>
-            <option value="NEED_SAVINGS">Sort: Restock Priority (Low Stock + Savings)</option>
-            <option value="MODEL_ASC">Sort: Model A–Z</option>
-          </select>
+        <!-- Expandable Paste AB Supplier Stock & DP Importer -->
+        <div id="abSupplierPasteBox" class="hidden" style="margin-bottom:12px;padding:12px;border-radius:8px;border:1px solid var(--gold);background:rgba(255,255,255,0.03);">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;">
+            <strong style="font-size:12px;color:var(--gold-bright);">PASTE AB SUPPLIER STOCK UPDATE (DP -> COST PRICE • KEEPS AB WEB SELLING PRICE)</strong>
+            <button type="button" id="closeAbSupplierPasteBtn" class="secondary" style="padding:3px 8px;font-size:11px;min-height:0;">✕</button>
+          </div>
+          <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:8px;">
+            <div>
+              <label for="abSupplierDateInp" style="font-size:10.5px;">STOCK DATE (OPTIONAL — AUTO-DETECTED FROM MESSAGE)</label>
+              <input type="date" id="abSupplierDateInp" style="padding:5px 8px;font-size:12px;width:auto;" />
+            </div>
+            <div class="small muted" style="flex:1;min-width:220px;">Paste Poco / Oppo / Infinix / Tecno / Itel / Realme / Anker supplier messages. Reads <strong>DP / NEW DP</strong> only and automatically ignores <strong>SRP</strong>.</div>
+          </div>
+          <textarea id="abSupplierPasteText" rows="6" placeholder="Paste full stock update text from AB supplier / Tecnix (with DP &amp; SRP lines)..." style="width:100%;padding:8px;font-size:12px;background:var(--bg-soft);color:var(--text);border:1px solid var(--border);border-radius:6px;"></textarea>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;">
+            <span id="abSupplierPasteStatus" class="small muted">Matched AB Web products update their AB Main Supplier DP automatically without altering AB Web selling prices.</span>
+            <div style="display:flex;gap:8px;">
+              <button type="button" id="previewAbSupplierPasteBtn" class="secondary" style="padding:6px 12px;font-size:12px;">PREVIEW MATCHES</button>
+              <button type="button" id="applyAbSupplierPasteBtn" style="padding:6px 14px;font-size:12px;">APPLY DP COSTS</button>
+            </div>
+          </div>
+          <div id="abSupplierPastePreview" class="hidden" style="margin-top:10px;max-height:240px;overflow:auto;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:8px;font-size:12px;"></div>
         </div>
 
-        <div class="table-wrap">
-          <table class="data-table" id="costCompareTable">
-            <thead>
-              <tr>
-                <th>Model</th>
-                <th>Current Price &amp; Margin</th>
-                <th>AB Website Cost</th>
-                <th>AB Main</th>
-                <th>A&amp;K</th>
-                <th>Online</th>
-                <th>Best Supplier &amp; Diff</th>
-                <th>Restock Analysis</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+          <button type="button" class="cc-subview-btn active" data-ccview="compare" style="padding:6px 12px;font-size:12px;min-height:0;">3-SUPPLIER COST COMPARE</button>
+          <button type="button" class="secondary cc-subview-btn" data-ccview="supplierCatalog" style="padding:6px 12px;font-size:12px;min-height:0;">AB SUPPLIER STOCK &amp; DP <span id="abSupplierCatalogBadge" style="margin-left:4px;color:var(--gold-bright);"></span></button>
+          <button type="button" class="secondary cc-subview-btn" data-ccview="phaseoutTracker" style="padding:6px 12px;font-size:12px;min-height:0;">SUBJECT TO PHASEOUT / 3-MO TRACKER <span id="abPhaseoutTrackerBadge" style="margin-left:4px;color:#f59e0b;"></span></button>
+        </div>
+
+        <div id="ccView-compare">
+          <div class="summary-grid" id="costCompareSummaryGrid" style="margin-bottom:12px;"></div>
+          <div id="costCompareInsightBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12.5px;border-left:3px solid var(--gold);"></div>
+
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+            <input type="search" id="costCompareSearch" placeholder="Search model or brand..." style="width:180px;padding:6px 10px;font-size:12px;" />
+            <select id="costCompareType" style="width:auto;padding:6px 10px;font-size:12px;">
+              <option value="Cellphones">Cellphones</option>
+              <option value="Accessories">Accessories</option>
+              <option value="ALL">All Products</option>
+            </select>
+            <select id="costCompareStockFilter" style="width:auto;padding:6px 10px;font-size:12px;">
+              <option value="IN_STOCK">Available / Has Units Left (&gt; 0)</option>
+              <option value="ALL">All Stock Status</option>
+              <option value="OUT_OF_STOCK">Out of Stock (0)</option>
+            </select>
+            <select id="costCompareFilter" style="width:auto;padding:6px 10px;font-size:12px;">
+              <option value="ALL">All Products</option>
+              <option value="SAVINGS">Supplier Cheaper than Website</option>
+              <option value="OVERPAY">Website Cheaper than Suppliers</option>
+              <option value="LOW_STOCK_SAVINGS">Low-Stock + Savings (Priority Order)</option>
+              <option value="MISSING">Missing Supplier Cost</option>
+            </select>
+            <select id="costCompareSort" style="width:auto;padding:6px 10px;font-size:12px;">
+              <option value="SAVINGS_DESC">Sort: Biggest Savings First</option>
+              <option value="MARGIN_DESC">Sort: Highest Margin % First</option>
+              <option value="NEED_SAVINGS">Sort: Restock Priority (Low Stock + Savings)</option>
+              <option value="MODEL_ASC">Sort: Model A–Z</option>
+            </select>
+          </div>
+
+          <div class="table-wrap">
+            <table class="data-table" id="costCompareTable">
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th>Current Price &amp; Margin</th>
+                  <th>AB Website Cost</th>
+                  <th>AB Main</th>
+                  <th>A&amp;K</th>
+                  <th>Online</th>
+                  <th>Best Supplier &amp; Diff</th>
+                  <th>Restock Analysis</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="ccView-supplierCatalog" class="hidden">
+          <div class="summary-grid" id="abSupplierCatalogSummaryGrid" style="margin-bottom:10px;"></div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+            <input type="search" id="abCatSearch" placeholder="Search supplier model, specs, or color..." style="width:220px;padding:6px 10px;font-size:12px;" />
+            <select id="abCatBrandFilter" style="width:auto;padding:6px 10px;font-size:12px;">
+              <option value="ALL">All Brands</option>
+              <option value="POCO">POCO</option>
+              <option value="OPPO">OPPO</option>
+              <option value="INFINIX">INFINIX</option>
+              <option value="ANKER">ANKER</option>
+            </select>
+            <select id="abCatMatchFilter" style="width:auto;padding:6px 10px;font-size:12px;">
+              <option value="ALL">All Supplier Items</option>
+              <option value="MATCHED">Carried on AB Web (Synced DP)</option>
+              <option value="UNMATCHED">Waiting for AB Web Input (New Stocks)</option>
+            </select>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table" id="abSupplierCatalogTable">
+              <thead>
+                <tr>
+                  <th>Brand &amp; Category</th>
+                  <th>AB Supplier Model &amp; Colors / Notes</th>
+                  <th>AB Supplier DP (Cost)</th>
+                  <th>AB Web Selling Price</th>
+                  <th>Gross Margin vs DP</th>
+                  <th>AB Web Status &amp; Stock</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="ccView-phaseoutTracker" class="hidden">
+          <div class="summary-grid" id="abPhaseoutSummaryGrid" style="margin-bottom:10px;"></div>
+          <div class="sub-panel" style="padding:10px 12px;margin-bottom:10px;font-size:12px;border-left:3px solid #f59e0b;">
+            <strong>Auto-Phaseout Rule:</strong> Active products of covered brands (<strong>POCO, OPPO, INFINIX, ANKER</strong>, plus future uploaded sheets) not found in the supplier's available stock update are flagged <strong>Subject to Phaseout</strong>. If still missing after <strong>3 months</strong>, they automatically move to <strong>Phaseout / Do Not Reorder</strong>.
+          </div>
+          <div class="table-wrap">
+            <table class="data-table" id="abPhaseoutTrackerTable">
+              <thead>
+                <tr>
+                  <th>Product &amp; Brand</th>
+                  <th>On-Hand Stock</th>
+                  <th>AB Web Price &amp; Last Cost</th>
+                  <th>Missing Since &amp; 3-Mo Deadline</th>
+                  <th>Lifecycle Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -629,6 +722,7 @@
             <label for="lifecycleStatus">Lifecycle Status</label>
             <select id="lifecycleStatus">
               <option value="Active">Active</option>
+              <option value="Subject to Phaseout">Subject to Phaseout (&lt; 3 mos)</option>
               <option value="Clearance">Clearance</option>
               <option value="Phaseout / Do Not Reorder">Phaseout / Do Not Reorder</option>
             </select>
@@ -1558,13 +1652,17 @@
     <div class="calc-modal-sheet" style="max-width:740px;background:#faf8f2;color:#1b1913;border:1px solid #d5ceb8;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
         <div>
-          <h3 style="margin:0;color:#1b1913;font-size:17px;letter-spacing:0.4px;">AB-GADGETZ · REORDER PLAN</h3>
+          <h3 id="reorderPreviewTitle" style="margin:0;color:#1b1913;font-size:17px;letter-spacing:0.4px;">AB-GADGETZ · REORDER PLAN</h3>
           <div id="reorderPreviewPrepared" style="font-size:12px;color:#6b6351;margin-top:2px;"></div>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           <label style="display:flex;align-items:center;gap:5px;margin:0;font-size:11px;font-weight:700;color:#1b1913;cursor:pointer;">
             <input type="checkbox" id="reorderShowCostsChk" style="width:15px;height:15px;margin:0;accent-color:#8a6d1b;" />
             SHOW COSTS
+          </label>
+          <label style="display:flex;align-items:center;gap:5px;margin:0;font-size:11px;font-weight:800;color:#b91c1c;cursor:pointer;" title="Check if another supplier has a lower recorded price so you don't proceed at a higher cost">
+            <input type="checkbox" id="reorderCompareSuppliersChk" style="width:15px;height:15px;margin:0;accent-color:#b91c1c;" />
+            COMPARE
           </label>
           <button type="button" id="reorderPrintBtn" style="padding:6px 12px;font-size:11px;background:#fff;color:#1b1913;border:1px solid #ccc4ad;">PRINT</button>
           <button type="button" id="closeReorderPreviewBtn" style="padding:6px 12px;font-size:11px;background:#fff;color:#1b1913;border:1px solid #ccc4ad;">CLOSE</button>
@@ -1572,6 +1670,7 @@
       </div>
 
       <div id="reorderPreviewMetrics" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;"></div>
+      <div id="reorderCompareBanner" class="hidden" style="margin-bottom:10px;padding:10px 12px;border-radius:8px;font-size:12px;"></div>
 
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
         <strong style="font-size:12px;letter-spacing:0.6px;color:#4f493a;">SELECTED PRODUCTS</strong>
@@ -1602,8 +1701,12 @@
       <div id="reorderPreviewStatus" style="font-size:12px;font-weight:600;color:#1d6f42;margin-bottom:8px;"></div>
       <div id="reorderPreviewBody" style="max-height:55vh;overflow-y:auto;padding-right:4px;"></div>
 
-      <div style="display:flex;gap:10px;margin-top:14px;">
-        <button type="button" id="reorderBackToEditBtn" style="flex:1;background:#e5e7eb;color:#1b1913;border:1px solid #cbd5e1;">BACK TO EDIT</button>
+      <div id="reorderPreviewFooter" style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
+        <button type="button" id="reorderRebuildPlanBtn" style="flex:1.4;min-width:170px;background:#b45309;color:#fff;border:1px solid #92400e;font-weight:700;">BUILD PLAN AGAIN</button>
+        <button type="button" id="reorderSavePlanBtn" style="flex:1.2;min-width:140px;background:#1c212b;color:#fff;border:1px solid #2c3442;font-weight:700;">SAVE PLAN</button>
+        <button type="button" id="reorderFinalizeOrderBtn" class="hidden" style="flex:1.6;min-width:180px;background:#1d6f42;color:#fff;border:1px solid #165934;font-weight:700;">FINALIZE AS ORDERED</button>
+        <button type="button" id="reorderResetExcludedBtn" class="hidden" style="padding:8px 12px;background:#fff;color:#6b6351;border:1px solid #d5ceb8;font-size:12px;font-weight:600;">RESET EXCLUDED</button>
+        <button type="button" id="reorderBackToEditBtn" style="flex:1;min-width:120px;background:#e5e7eb;color:#1b1913;border:1px solid #cbd5e1;">BACK TO EDIT</button>
       </div>
     </div>
   </div>
@@ -1628,6 +1731,6 @@
     </div>
   </div>
 
-  <script src="../app.js?v=1795487777769"></script>
+  <script src="../app.js?v=1795525427811"></script>
 </body>
 </html>

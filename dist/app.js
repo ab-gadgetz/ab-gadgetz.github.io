@@ -16,6 +16,8 @@ const state = {
   catalogBranchId: 'ALL',
   catalogData: null,
   expandedCatalogBrands: new Set(),
+  abSupplierCatalog: null,
+  activeCcView: 'compare',
   userRole: 'ADMIN',
   userBranchId: '',
 };
@@ -36,6 +38,30 @@ const fmtTime = (iso) => {
   if (!iso) return '—';
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 };
+
+const manilaTodayClient = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+
+function addMonthsIsoClient(isoDate, months = 3) {
+  const m = String(isoDate || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return '';
+  const y = Number(m[1]), mo = Number(m[2]) - 1, d = Number(m[3]);
+  const tf = new Date(Date.UTC(y, mo + months, 1));
+  const ld = new Date(Date.UTC(tf.getUTCFullYear(), tf.getUTCMonth() + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(tf.getUTCFullYear(), tf.getUTCMonth(), Math.min(d, ld))).toISOString().slice(0, 10);
+}
+
+function hasThreeMonthsPassedClient(sinceDate, todayDate = manilaTodayClient()) {
+  if (!sinceDate || !todayDate) return false;
+  const deadline = addMonthsIsoClient(sinceDate, 3);
+  return Boolean(deadline) && String(todayDate).slice(0, 10) >= deadline;
+}
+
+function daysBetweenIsoClient(startIso, endIso) {
+  const s = Date.parse(`${String(startIso || '').slice(0, 10)}T00:00:00Z`);
+  const e = Date.parse(`${String(endIso || '').slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(s) || !Number.isFinite(e)) return 0;
+  return Math.max(0, Math.round((e - s) / 86400000));
+}
 
 // Hamburger menu toggle + Main Tabs (lazy-load data only when tab is opened)
 const menuToggleBtn = document.getElementById('menuToggleBtn');
@@ -152,7 +178,12 @@ document.querySelectorAll('.inv-tool-btn').forEach((btn) => {
     setInvToolsMenuOpen(false);
     if (state.activeInvTool === 'restock' && !state.planning) loadPlanning();
     if (state.activeInvTool === 'stockswap') renderStockSwapTool();
-    if (state.activeInvTool === 'costcompare') renderCostCompareTool();
+    if (state.activeInvTool === 'costcompare') {
+      renderCostCompareTool();
+      loadSupplierCatalog().then(() => {
+        if (state.activeInvTool === 'costcompare') renderCostCompareTool();
+      });
+    }
   });
 });
 
@@ -377,6 +408,17 @@ async function staticGhApi(url, opts = {}) {
     window.open('https://github.com/ab-gadgetz/ab-gadgetz.github.io/actions/workflows/deploy-catalog.yml', '_blank');
     return { ok: true };
   }
+  if (pathname === '/api/catalog/publish-github' && method === 'POST') {
+    if (localStorage.getItem('bs_gh_pub_token')) {
+      const ok = await pushPhoneOrdersToGh();
+      if (ok) {
+        return {
+          ok: true,
+          message: 'Phone saved plans synced to GitHub for PC import ✓ (Full catalog publish runs from PC localhost:3456).',
+        };
+      }
+    }
+  }
   if (method !== 'GET') {
     throw new Error('Make edits in your Local Admin Portal (http://localhost:3456), then click 🚀 Publish Catalogs.');
   }
@@ -423,7 +465,12 @@ async function staticGhApi(url, opts = {}) {
         }
       }
     }
-    return { reorderSuggestions: reorderSuggestions.slice(0, 60), transferSuggestions: [] };
+    return {
+      demandByProductBranch: bundle.planning?.demandByProductBranch || undefined,
+      demandByProduct: bundle.planning?.demandByProduct || undefined,
+      reorderSuggestions: reorderSuggestions.slice(0, 60),
+      transferSuggestions: [],
+    };
   }
   if (pathname === '/api/budget') {
     const items = bundle.orderBudgetItems || [];
@@ -596,16 +643,163 @@ async function staticGhApi(url, opts = {}) {
       installments: instRows,
     };
   }
+  if (pathname === '/api/supplier-catalog') {
+    const baseEntries = Array.isArray(bundle.abSupplierCatalog?.entries) ? bundle.abSupplierCatalog.entries : [];
+    const localSaved = (() => {
+      try {
+        return JSON.parse(localStorage.getItem('ab_supplier_catalog_v1') || 'null');
+      } catch {
+        return null;
+      }
+    })();
+    const mergedMap = new Map();
+    for (const e of baseEntries) mergedMap.set(String(e.modelName || '').toUpperCase(), { ...e });
+    for (const e of (localSaved?.entries || [])) mergedMap.set(String(e.modelName || '').toUpperCase(), { ...e });
+    const invItems = state.inventory?.items || bundle.inventory?.items || [];
+    const prodMap = new Map(invItems.map((it) => [it.id, it]));
+    const localCosts = getLocalSupplierCostsMap();
+    const entries = Array.from(mergedMap.values()).map((e) => {
+      const p = e.matchedProductId ? prodMap.get(e.matchedProductId) : null;
+      const ov = e.matchedProductId ? localCosts[e.matchedProductId] : null;
+      const totalAvail = p
+        ? (bundle.inventory?.branches || []).reduce((s, b) => s + (Number(p.byBranch?.[b.id]?.qtyAvailable) || 0), 0)
+        : 0;
+      return {
+        ...e,
+        productName: p?.name || e.productName || '',
+        productSku: p?.sku || e.productSku || '',
+        basePrice: p ? Number(p.base_price) || 0 : Number(e.basePrice) || 0,
+        costPrice: p ? Number(p.cost_price) || 0 : Number(e.costPrice) || 0,
+        costAb: ov?.cost_ab ?? p?.cost_ab ?? e.costAb ?? null,
+        costAk: ov?.cost_ak ?? p?.cost_ak ?? e.costAk ?? null,
+        costOnline: ov?.cost_online ?? p?.cost_online ?? e.costOnline ?? null,
+        lifecycleStatus: p?.lifecycle_status || e.lifecycleStatus || '',
+        totalAvail,
+      };
+    });
+    const stockDate = entries.reduce((mx, e) => (e.stockDate && e.stockDate > mx ? e.stockDate : mx), localSaved?.stockDate || bundle.abSupplierCatalog?.stockDate || '');
+    return { stockDate, entries };
+  }
+  if (pathname === '/api/supplier-catalog/import' && opts.method === 'POST') {
+    const body = JSON.parse(opts.body || '{}');
+    const parsed = parseAbSupplierStockTextClient(body.rawText || '');
+    const allProds = state.inventory?.items || bundle.inventory?.items || [];
+    if (body.dryRun) {
+      const entries = parsed.map((e) => {
+        const m = matchSupplierEntryToProductsClient(e, allProds);
+        return {
+          ...e,
+          matched: m.map((p) => ({
+            productId: p.id,
+            name: p.name,
+            basePrice: Number(p.base_price) || 0,
+            prevAb: p.cost_ab !== null && p.cost_ab !== undefined ? Number(p.cost_ab) : null,
+            nextAb: e.dpCost,
+            lifecycleStatus: p.lifecycle_status,
+          })),
+        };
+      });
+      return { ok: true, dryRun: true, entries };
+    }
+    if (!parsed.length) throw new Error('No DP prices found in pasted text');
+    const prevCatalog = await staticGhApi('/api/supplier-catalog');
+    const mergedMap = new Map((prevCatalog.entries || []).map((e) => [String(e.modelName || '').toUpperCase(), { ...e }]));
+    const batchBrands = new Set(parsed.map((e) => String(e.brand || '').toUpperCase()).filter(Boolean));
+    for (const [k, existing] of mergedMap.entries()) {
+      if (batchBrands.has(String(existing.brand || '').toUpperCase())) {
+        mergedMap.set(k, { ...existing, isAvailable: false });
+      }
+    }
+    const updatedIds = new Set();
+    const matchedIds = new Set();
+    const diffs = [];
+    const lcOverrides = (() => { try { return JSON.parse(localStorage.getItem('ab_lifecycle_overrides_v1') || '{}'); } catch { return {}; } })();
+    const todayIso = manilaTodayClient();
+    for (const entry of parsed) {
+      const m = matchSupplierEntryToProductsClient(entry, allProds);
+      const effectiveDate = body.stockDate || entry.stockDate || '2026-11-23';
+      mergedMap.set(entry.modelName.toUpperCase(), {
+        brand: entry.brand,
+        category: entry.category,
+        modelName: entry.modelName,
+        dpCost: entry.dpCost,
+        colorsNotes: entry.colorsNotes || '',
+        matchedProductId: m[0]?.id || '',
+        stockDate: effectiveDate,
+        isAvailable: true,
+      });
+      for (const p of m) {
+        matchedIds.add(p.id);
+        const prevAb = p.cost_ab !== null && p.cost_ab !== undefined ? Number(p.cost_ab) : null;
+        await saveProductSupplierCosts(p.id, { costAb: entry.dpCost });
+        p.last_supplier_seen_at = effectiveDate;
+        p.supplier_missing_since = '';
+        if (p.lifecycle_status === 'Subject to Phaseout') {
+          p.lifecycle_status = 'Active';
+          lcOverrides[p.id] = { lifecycle_status: 'Active', supplier_missing_since: '' };
+        }
+        updatedIds.add(p.id);
+        diffs.push({ productId: p.id, productName: p.name, prevAb, nextAb: entry.dpCost, changed: prevAb !== entry.dpCost });
+      }
+    }
+    let subjectToPhaseoutCount = 0;
+    let autoPhasedOutCount = 0;
+    const batchLatestDate = parsed.reduce((mx, e) => (e.stockDate && e.stockDate > mx ? e.stockDate : mx), body.stockDate || todayIso);
+    for (const p of allProds) {
+      if (matchedIds.has(p.id)) continue;
+      const u = `${p.brand || ''} ${p.model || ''} ${p.name || ''}`.toUpperCase();
+      if (/\bREPO\b|\bREPAIRED\b|\bLDU\b|FREEBIE|FREE BUNDLE|\bFREE\b|\bDEMO\b/.test(u)) continue;
+      const inBatch = [...batchBrands].some((bu) => (bu === 'ANKER' ? u.includes('ANKER') || u.includes('SOUNDCORE') : bu === 'INFINIX' ? u.includes('INFINIX') || u.includes('XPAD') || u.includes('XBOOK') || u.includes('GTBOOK') : u.includes(bu)));
+      if (!inBatch || !['Active', 'Subject to Phaseout'].includes(p.lifecycle_status || 'Active')) continue;
+      const ms = String(p.supplier_missing_since || '').trim() || batchLatestDate || todayIso;
+      const nextLc = hasThreeMonthsPassedClient(ms, todayIso) ? 'Phaseout / Do Not Reorder' : 'Subject to Phaseout';
+      p.supplier_missing_since = ms;
+      p.lifecycle_status = nextLc;
+      lcOverrides[p.id] = { lifecycle_status: nextLc, supplier_missing_since: ms };
+      if (nextLc === 'Phaseout / Do Not Reorder') autoPhasedOutCount++;
+      else subjectToPhaseoutCount++;
+    }
+    localStorage.setItem('ab_lifecycle_overrides_v1', JSON.stringify(lcOverrides));
+    const nextList = Array.from(mergedMap.values());
+    const nextStockDate = nextList.reduce((mx, e) => (e.stockDate && e.stockDate > mx ? e.stockDate : mx), '');
+    localStorage.setItem('ab_supplier_catalog_v1', JSON.stringify({ stockDate: nextStockDate, entries: nextList }));
+    const waitingCount = nextList.filter((e) => e.isAvailable !== false && !e.matchedProductId).length;
+    return { ok: true, importedCount: parsed.length, updatedProductsCount: updatedIds.size, waitingCount, subjectToPhaseoutCount, autoPhasedOutCount, diffs };
+  }
+  if (pathname === '/api/products/lifecycle' && opts.method === 'PATCH') {
+    const body = JSON.parse(opts.body || '{}');
+    const lcOverrides = (() => { try { return JSON.parse(localStorage.getItem('ab_lifecycle_overrides_v1') || '{}'); } catch { return {}; } })();
+    const todayIso = manilaTodayClient();
+    for (const pid of (body.productIds || [])) {
+      const prev = lcOverrides[pid] || {};
+      const ms = body.status === 'Active' ? '' : (body.status === 'Subject to Phaseout' ? (prev.supplier_missing_since || todayIso) : (prev.supplier_missing_since || ''));
+      lcOverrides[pid] = { lifecycle_status: body.status, supplier_missing_since: ms };
+    }
+    localStorage.setItem('ab_lifecycle_overrides_v1', JSON.stringify(lcOverrides));
+    return { ok: true, count: (body.productIds || []).length };
+  }
   return {};
 }
 
 async function api(url, opts = {}) {
   if (IS_STATIC_GH) return staticGhApi(url, opts);
   const res = await fetch(url, {
+    credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
     ...opts,
   });
   const data = await res.json();
+  if (res.status === 401 && !String(url || '').startsWith('/api/auth/')) {
+    if (typeof eventSource !== 'undefined' && eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+    state.reauthInPlace = Boolean(state.inventory);
+    await checkAuth('Session expired after update — enter your 6-digit PIN once to resume and keep your session saved.');
+    const authErr = new Error(data.error || 'Authentication required — enter your PIN in the unlock box and retry.');
+    authErr.isAuthHandled = true;
+    throw authErr;
+  }
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
@@ -675,6 +869,8 @@ async function loadInventory() {
   state.inventory = await api('/api/inventory');
   if (IS_STATIC_GH && state.inventory?.items) {
     const localCosts = getLocalSupplierCostsMap();
+    const lcOverrides = (() => { try { return JSON.parse(localStorage.getItem('ab_lifecycle_overrides_v1') || '{}'); } catch { return {}; } })();
+    const todayIso = manilaTodayClient();
     for (const item of state.inventory.items) {
       const ov = localCosts[item.id];
       if (ov) {
@@ -682,11 +878,20 @@ async function loadInventory() {
         item.cost_ak = ov.cost_ak;
         item.cost_online = ov.cost_online;
       }
+      const lov = lcOverrides[item.id];
+      if (lov) {
+        item.lifecycle_status = lov.lifecycle_status || item.lifecycle_status;
+        item.supplier_missing_since = lov.supplier_missing_since ?? item.supplier_missing_since;
+      }
+      if (item.lifecycle_status === 'Subject to Phaseout' && item.supplier_missing_since && hasThreeMonthsPassedClient(item.supplier_missing_since, todayIso)) {
+        item.lifecycle_status = 'Phaseout / Do Not Reorder';
+      }
     }
   }
   populateSelects();
   renderInventory();
   renderHealth();
+  loadSupplierCatalog().catch(() => {});
 }
 
 function populateSelects() {
@@ -949,7 +1154,9 @@ function renderModelCard(item, visibleBranches) {
     .join('');
   const lifecycleBadge =
     item.lifecycle_status && item.lifecycle_status !== 'Active'
-      ? `<span class="lifecycle-pill">${item.lifecycle_status}</span>`
+      ? item.lifecycle_status === 'Subject to Phaseout'
+        ? `<span class="lifecycle-pill" style="background:rgba(245,158,11,0.18);color:#fbbf24;border-color:rgba(245,158,11,0.45);" title="Not in latest AB supplier stock update (${item.supplier_missing_since || '2026-11-23'}). Auto-phaseout after 3 months (${addMonthsIsoClient(item.supplier_missing_since || '2026-11-23', 3)}).">Subject to Phaseout • Since ${item.supplier_missing_since || 'Nov 23'}</span>`
+        : `<span class="lifecycle-pill">${item.lifecycle_status}</span>`
       : '';
   const thumb = item.imageUrl
     ? `<img src="${item.imageUrl}" alt="${item.name}" style="width:52px;height:52px;object-fit:contain;background:#fff;border-radius:9px;padding:2px;flex:0 0 52px;box-shadow:0 2px 8px rgba(0,0,0,.3);" loading="lazy" />`
@@ -1040,6 +1247,7 @@ function renderInventory() {
 
     let matchView = true;
     if (stockView === 'available') matchView = itemAvail > 0;
+    else if (stockView === 'subject_phaseout') matchView = item.lifecycle_status === 'Subject to Phaseout';
     else if (stockView === 'phaseout') matchView = item.lifecycle_status !== 'Active';
     else if (stockView === 'unavailable') matchView = itemAvail === 0;
     else if (stockView === 'reorder') matchView = anyLow && item.lifecycle_status === 'Active';
@@ -1914,8 +2122,8 @@ function buildRestockDemandIndex() {
   }
 
   const nowMs = Date.now();
-  const since30 = new Date(nowMs - 30 * 86400000).toISOString().slice(0, 10);
-  const since90 = new Date(nowMs - 90 * 86400000).toISOString().slice(0, 10);
+  const since30 = new Date(nowMs - 30 * 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+  const since90 = new Date(nowMs - 90 * 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
 
   const rawPB = new Map();
   const ensurePB = (pid, bid) => {
@@ -2108,10 +2316,14 @@ function buildPendingOrdersLookup() {
     if (label) pAgg.refs.add(label);
   };
 
-  const pendingStatuses = new Set(['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received']);
+  const pendingStatuses = new Set(['Sent to Supplier', 'Supplier Approved', 'At Warehouse (AB Web INITIAL)', 'Partially Received']);
+  const linkedAbLineKeys = new Set();
   for (const o of state.savedOrders || []) {
     if (!pendingStatuses.has(o.status)) continue;
     for (const it of o.items || []) {
+      if (it.abDeliveryNo && it.abDeliveryNo !== 'PENDING IN AB WEB' && it.productId && it.branchId) {
+        linkedAbLineKeys.add(`${String(it.abDeliveryNo).trim()}::${it.branchId}::${it.productId}`);
+      }
       if (it.approved === false || it.isExtraItem) continue;
       const appQty = Math.max(0, Number(it.qty) || 0);
       const recQty =
@@ -2123,11 +2335,15 @@ function buildPendingOrdersLookup() {
     }
   }
 
-  // Also include any in-transit AB Web deliveries whose header status is not RECEIVED yet
+  // Also include any unlinked non-RECEIVED, non-CANCELLED AB Web deliveries (e.g. DELIVERY / INITIAL at warehouse for pick-up)
   for (const d of state.abDeliveries || []) {
-    if (String(d.status || '').toUpperCase() === 'RECEIVED') continue;
+    const dSt = String(d.status || '').toUpperCase();
+    if (dSt === 'RECEIVED' || dSt === 'CANCELLED') continue;
     for (const dl of d.items || []) {
-      if (dl.productId && (Number(dl.deliveredQty) || 0) > (Number(dl.receivedQty) || 0)) {
+      if (!dl.productId) continue;
+      const lineKey = `${String(d.deliveryNo || '').trim()}::${d.branchId}::${dl.productId}`;
+      if (d.deliveryNo && linkedAbLineKeys.has(lineKey)) continue;
+      if ((Number(dl.deliveredQty) || 0) > (Number(dl.receivedQty) || 0)) {
         addPending(dl.productId, d.branchId, (Number(dl.deliveredQty) || 0) - (Number(dl.receivedQty) || 0), d.deliveryNo);
       }
     }
@@ -2230,8 +2446,10 @@ function buildRestockDraftPlan() {
         ? Math.max(baseFloor, demandTarget, reorderPoint + (avail === 0 ? 1 : 0))
         : Math.max(baseFloor, avail === 0 ? baseFloor : reorderPoint + 1);
 
+      const minOrderQty = tier.key === 'LOW_END' ? 2 : 1;
       const coveredByPending = deductPending && pendingQty > 0 && effectiveAvail > reorderPoint;
-      const suggestedQty = coveredByPending ? 0 : Math.max(1, targetQty - effectiveAvail);
+      const excludedUnavailable = Boolean(state.restockExcludedKeys?.has(`${item.id}::${b.id}`));
+      const suggestedQty = coveredByPending ? 0 : Math.max(minOrderQty, targetQty - effectiveAvail);
       const rawNeededWithoutPending = Math.max(0, targetQty - avail);
       const savedByPendingQty = deductPending ? Math.max(0, rawNeededWithoutPending - suggestedQty) : 0;
 
@@ -2263,6 +2481,7 @@ function buildRestockDraftPlan() {
         pendingRefs,
         effectiveAvail,
         coveredByPending,
+        excludedUnavailable,
         savedByPendingQty,
         reorderPoint,
         branchDemand30,
@@ -2272,15 +2491,15 @@ function buildRestockDraftPlan() {
         storewideDemand90,
         storewideAllSold,
         qty: suggestedQty,
-        selected: !coveredByPending && suggestedQty > 0,
+        selected: !coveredByPending && !excludedUnavailable && suggestedQty > 0,
       });
     }
   }
 
-  // Sort by selected priority strategy (push fully-covered-by-pending rows after actionable rows)
+  // Sort by selected priority strategy (push fully-covered-by-pending & supplier-unavailable excluded rows after actionable rows)
   candidates.sort((a, b) => {
-    const aNeed = a.coveredByPending || a.qty <= 0 ? 1 : 0;
-    const bNeed = b.coveredByPending || b.qty <= 0 ? 1 : 0;
+    const aNeed = a.coveredByPending || a.excludedUnavailable || a.qty <= 0 ? 1 : 0;
+    const bNeed = b.coveredByPending || b.excludedUnavailable || b.qty <= 0 ? 1 : 0;
     if (aNeed !== bNeed) return aNeed - bNeed;
 
     const aHasDemand = a.branchDemand90 > 0 || a.storewideDemand90 > 0 || a.storewideAllSold > 0 ? 1 : 0;
@@ -2296,7 +2515,7 @@ function buildRestockDraftPlan() {
       if (a.savingsVsWebsite !== b.savingsVsWebsite) return b.savingsVsWebsite - a.savingsVsWebsite;
       if (a.branchDemand90 !== b.branchDemand90) return b.branchDemand90 - a.branchDemand90;
       if (a.tierRank !== b.tierRank) return a.tierRank - b.tierRank;
-      return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel);
+      return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel) || a.key.localeCompare(b.key);
     }
 
     if (priorityMode === 'DEMAND_FIRST') {
@@ -2306,7 +2525,7 @@ function buildRestockDraftPlan() {
       if (a.storewideDemand90 !== b.storewideDemand90) return b.storewideDemand90 - a.storewideDemand90;
       if (a.tierRank !== b.tierRank) return a.tierRank - b.tierRank;
       if (a.effectiveAvail !== b.effectiveAvail) return a.effectiveAvail - b.effectiveAvail;
-      return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel);
+      return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel) || a.key.localeCompare(b.key);
     }
 
     // DEFAULT: LOW_END_DEMAND — Prioritize Active-Demand Low-End Cellphones (SRP <= ₱10k), Out-of-Stock (after pending) first, then Store Demand
@@ -2319,13 +2538,13 @@ function buildRestockDraftPlan() {
     if (a.storewideAllSold !== b.storewideAllSold) return b.storewideAllSold - a.storewideAllSold;
     if (a.savingsVsWebsite !== b.savingsVsWebsite) return b.savingsVsWebsite - a.savingsVsWebsite;
     if (a.effectiveAvail !== b.effectiveAvail) return a.effectiveAvail - b.effectiveAvail;
-    return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel);
+    return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel) || a.key.localeCompare(b.key);
   });
 
   if (budgetVal > 0) {
     let spent = 0;
     for (const c of candidates) {
-      if (c.coveredByPending || c.qty <= 0) {
+      if (c.coveredByPending || c.excludedUnavailable || c.qty <= 0) {
         c.selected = false;
         continue;
       }
@@ -2333,13 +2552,14 @@ function buildRestockDraftPlan() {
         c.selected = false;
         continue;
       }
-      if (spent + c.unitCost > budgetVal) {
+      const minOrderQty = c.tierKey === 'LOW_END' ? 2 : 1;
+      if (spent + c.unitCost * minOrderQty > budgetVal) {
         c.selected = false;
         continue;
       }
       const maxAffordable = Math.floor((budgetVal - spent) / c.unitCost);
       if (maxAffordable < c.qty) {
-        c.qty = Math.max(1, maxAffordable);
+        c.qty = Math.max(minOrderQty, maxAffordable);
       }
       spent += c.qty * c.unitCost;
     }
@@ -2402,6 +2622,7 @@ function renderRestockCards() {
   const totalZeroLines = plan.filter((r) => r.avail === 0 && !r.coveredByPending).length;
   const pendingSavedPcs = plan.reduce((s, r) => s + (Number(r.savedByPendingQty) || 0), 0);
   const pendingLineCount = plan.filter((r) => r.pendingQty > 0).length;
+  const excludedCount = state.restockExcludedKeys?.size || 0;
   if (sumEl) {
     const tierNote =
       lowEndUnits + midUnits + highUnits > 0
@@ -2411,7 +2632,17 @@ function renderRestockCards() {
       pendingSavedPcs > 0
         ? ` • <span style="color:#60a5fa;">Pending On-Order deducted: <strong>${fmtNum(pendingSavedPcs)} pcs</strong> (${pendingLineCount} branch line${pendingLineCount === 1 ? '' : 's'})</span>`
         : '';
-    sumEl.innerHTML = `Selected <strong>${fmtNum(selected.length)}</strong> line(s) (<strong>${fmtNum(zeroLines)}/${fmtNum(totalZeroLines)}</strong> out-of-stock) • <strong>${fmtNum(totalUnits)} pcs</strong>${tierNote}${pendNote} • Est. Total: <strong style="color:var(--gold-bright);">${fmtCurrency(totalCost)}</strong>`;
+    const exclNote =
+      excludedCount > 0
+        ? ` • <span style="color:#f59e0b;">Unavailable excluded: <strong>${fmtNum(excludedCount)}</strong> <button type="button" id="clearRestockExcludedBtn" class="secondary" style="padding:1px 6px;font-size:10.5px;min-height:0;margin-left:3px;">Reset</button></span>`
+        : '';
+    sumEl.innerHTML = `Selected <strong>${fmtNum(selected.length)}</strong> line(s) (<strong>${fmtNum(zeroLines)}/${fmtNum(totalZeroLines)}</strong> out-of-stock) • <strong>${fmtNum(totalUnits)} pcs</strong>${tierNote}${pendNote}${exclNote} • Est. Total: <strong style="color:var(--gold-bright);">${fmtCurrency(totalCost)}</strong>`;
+    sumEl.querySelector('#clearRestockExcludedBtn')?.addEventListener('click', () => {
+      state.restockExcludedKeys = new Set();
+      state.previewUncheckedKeys = new Set();
+      buildRestockDraftPlan();
+      renderRestockCards();
+    });
   }
 
   const visible = getFilteredRestockRows();
@@ -2510,6 +2741,10 @@ function renderRestockCards() {
               ? `<span style="color:#f59e0b;font-size:10.5px;font-weight:700;">• +${fmtCurrency(Math.abs(diffWeb))} vs Web</span>`
               : '';
         const tierPill = `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;background:rgba(255,255,255,0.08);color:${m.tierColor};">${m.tierLabel}${m.srp > 0 ? ` • ${fmtCurrency(m.srp)}` : ''}</span>`;
+        const supEntry = state.abSupplierCatalog?.byProductId?.get(m.productId);
+        const abStockPill = supEntry
+          ? `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;background:rgba(16,185,129,0.14);color:#34d399;" title="${String(supEntry.colorsNotes || 'Available on AB Supplier Stock List').replace(/"/g, '&quot;')}">AB Stock: ${supEntry.stockDate || 'Nov 23'}</span>`
+          : '';
         const demandPill =
           m.storewideDemand90 > 0
             ? `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;background:rgba(231,197,95,0.14);color:var(--gold-bright);">Demand: ${fmtNum(m.storewideDemand90)} / 90d</span>`
@@ -2522,7 +2757,7 @@ function renderRestockCards() {
               ${thumbHtml}
               <div style="min-width:0;flex:1;">
                 <div style="font-weight:700;font-size:13px;line-height:1.25;">${m.displayModel}</div>
-                <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:3px;">${tierPill}${demandPill}</div>
+                <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:3px;">${tierPill}${demandPill}${abStockPill}</div>
                 <div class="small muted" style="margin-top:2px;">${m.sku} • <span style="color:var(--gold-bright);">${m.supplier}</span></div>
                 <div class="small" style="margin-top:2px;">Active Cost: <strong>${m.unitCost > 0 ? fmtCurrency(m.unitCost) : '—'}</strong> ${diffBadge}</div>
               </div>
@@ -2622,8 +2857,8 @@ function renderRestockCards() {
         renderRestockCards();
         renderInventory();
       } catch (err) {
-        btn.textContent = 'Err';
-        alert(err.message);
+        btn.textContent = err?.isAuthHandled ? 'Retry' : 'Err';
+        if (!err?.isAuthHandled) alert(err.message);
       }
     });
   });
@@ -2637,7 +2872,7 @@ function computeOrderSummaryMetrics(items, orderStatus = 'Supplier Approved') {
   let requestedTotal = 0;
   let approvedTotal = 0;
   let deliveredTotal = 0;
-  const isPendingStatus = ['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received'].includes(orderStatus);
+  const isPendingStatus = ['Sent to Supplier', 'Supplier Approved', 'At Warehouse (AB Web INITIAL)', 'Partially Received'].includes(orderStatus);
 
   for (const it of items || []) {
     const rq = Math.max(0, Number(it.requestedQty ?? it.qty) || 0);
@@ -2688,6 +2923,52 @@ function setLocalSavedOrders(orders) {
     localStorage.setItem('ab_purchase_orders_v1', JSON.stringify(orders || []));
   } catch {
     // ignore storage quota errors
+  }
+  schedulePhoneOrdersPush();
+}
+
+// Phone (GitHub Pages) -> PC: push phone-created orders to public/phone-orders.json so the PC portal imports them
+let phonePushTimer = null;
+function schedulePhoneOrdersPush() {
+  if (!IS_STATIC_GH) return;
+  clearTimeout(phonePushTimer);
+  phonePushTimer = setTimeout(() => { pushPhoneOrdersToGh().catch(() => {}); }, 1500);
+}
+
+async function pushPhoneOrdersToGh() {
+  const token = localStorage.getItem('bs_gh_pub_token');
+  if (!token) return false;
+  const phoneOrders = getLocalSavedOrders().filter((o) => String(o.id || '').startsWith('PO-PH-'));
+  const payload = JSON.stringify({ updatedAt: new Date().toISOString(), orders: phoneOrders }, null, 1);
+  const repo = 'ab-gadgetz/ab-gadgetz.github.io';
+  const apiUrl = `https://api.github.com/repos/${repo}/contents/public/phone-orders.json`;
+  const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
+  let sha;
+  const getRes = await fetch(apiUrl, { headers });
+  if (getRes.ok) sha = (await getRes.json()).sha;
+  const putRes = await fetch(apiUrl, {
+    method: 'PUT',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message: 'Sync phone saved orders to PC portal',
+      content: btoa(unescape(encodeURIComponent(payload))),
+      ...(sha ? { sha } : {}),
+    }),
+  });
+  return putRes.ok;
+}
+
+async function importPhoneOrdersIntoPc() {
+  if (IS_STATIC_GH) return 0;
+  try {
+    const r = await fetch(`https://raw.githubusercontent.com/ab-gadgetz/ab-gadgetz.github.io/main/public/phone-orders.json?v=${Date.now()}`, { cache: 'no-store' });
+    if (!r.ok) return 0;
+    const j = await r.json();
+    if (!Array.isArray(j?.orders) || !j.orders.length) return 0;
+    const res = await api('/api/purchase-orders/import-phone', { method: 'POST', body: JSON.stringify({ orders: j.orders }) });
+    return Number(res?.changed) || 0;
+  } catch {
+    return 0;
   }
 }
 
@@ -2767,6 +3048,7 @@ async function loadSavedPurchaseOrders() {
     return state.savedOrders;
   }
   try {
+    await importPhoneOrdersIntoPc();
     const res = await api('/api/purchase-orders');
     state.savedOrders = Array.isArray(res?.orders) ? res.orders : [];
   } catch {
@@ -2803,28 +3085,45 @@ function applyEditedPricesToLocalInventory(items) {
 }
 
 function reconcileStaticOrdersWithDeliveries(onlyPoId = null) {
-  const deliveries = (state.abDeliveries || []).filter((d) => String(d.status || '').toUpperCase() === 'RECEIVED');
+  const deliveries = (state.abDeliveries || [])
+    .filter((d) => String(d.status || '').toUpperCase() !== 'CANCELLED')
+    .slice()
+    .sort((a, b) => String(a.deliveryDate || '').localeCompare(String(b.deliveryDate || '')) || (Number(a.id || a.portalDeliveryId) || 0) - (Number(b.id || b.portalDeliveryId) || 0));
   if (!deliveries.length) return 0;
-  const orders = getLocalSavedOrders();
-  const claimed = new Set();
+  const orders = getLocalSavedOrders().slice().sort((a, b) => {
+    const aAuto = String(a.id || '').startsWith('PO-AB-') ? 1 : 0;
+    const bAuto = String(b.id || '').startsWith('PO-AB-') ? 1 : 0;
+    return aAuto - bAuto || String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+  });
+  const claimedLines = new Set();
   for (const o of orders) {
-    if (onlyPoId && o.id === onlyPoId) continue;
-    for (const ref of String(o.abDeliveryRefs || '').split(',').map((s) => s.trim()).filter(Boolean)) claimed.add(ref);
+    if (o.status === 'Cancelled') continue;
+    for (const it of o.items || []) {
+      if (it.abDeliveryNo && it.abDeliveryNo !== 'PENDING IN AB WEB' && it.productId && it.branchId) {
+        claimedLines.add(`${it.abDeliveryNo}::${it.branchId}::${it.productId}`);
+      }
+    }
   }
   let updatedOrders = 0;
   const now = new Date().toISOString();
   for (const po of orders) {
     if (onlyPoId && po.id !== onlyPoId) continue;
-    if (!['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received', 'Received (Pending AB Web)'].includes(po.status)) continue;
+    if (!['Sent to Supplier', 'Supplier Approved', 'At Warehouse (AB Web INITIAL)', 'Partially Received', 'Received (Pending AB Web)'].includes(po.status)) continue;
+    const isAutoPo = String(po.id || '').startsWith('PO-AB-');
+    const autoDelivId = isAutoPo ? parseInt(String(po.id).replace('PO-AB-', ''), 10) : 0;
     const orderDate = String(po.createdAt || '').slice(0, 10);
     const refs = new Set(String(po.abDeliveryRefs || '').split(',').map((s) => s.trim()).filter(Boolean));
     let changed = false;
     for (const deliv of deliveries) {
-      if (orderDate && deliv.deliveryDate < orderDate) continue;
-      if (claimed.has(deliv.deliveryNo) && !refs.has(deliv.deliveryNo)) continue;
+      const delivIdNum = Number(deliv.id || deliv.portalDeliveryId) || 0;
+      if (isAutoPo && delivIdNum !== autoDelivId) continue;
+      if (!isAutoPo && orderDate && deliv.deliveryDate < orderDate && !refs.has(deliv.deliveryNo)) continue;
+      const dStatus = String(deliv.status || '').toUpperCase();
+      const isRecStatus = dStatus === 'RECEIVED';
       let matched = false;
       for (const dl of deliv.items || []) {
         if (!dl.productId) continue;
+        const lineKey = `${deliv.deliveryNo}::${deliv.branchId}::${dl.productId}`;
         const target = (po.items || []).find(
           (it) =>
             it.approved !== false &&
@@ -2833,23 +3132,33 @@ function reconcileStaticOrdersWithDeliveries(onlyPoId = null) {
             (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB' || it.abDeliveryNo === deliv.deliveryNo)
         );
         if (!target) continue;
+        if (claimedLines.has(lineKey) && target.abDeliveryNo !== deliv.deliveryNo) continue;
         matched = true;
-        if (target.abDeliveryNo !== deliv.deliveryNo) {
+        claimedLines.add(lineKey);
+        if (
+          target.abDeliveryNo !== deliv.deliveryNo ||
+          target.abDeliveryStatus !== dStatus ||
+          (isRecStatus && (target.receivedQty === undefined || target.receivedQty === null || target.receivedQty === ''))
+        ) {
           target.abDeliveryNo = deliv.deliveryNo;
-          target.receivedDate = target.receivedDate || deliv.deliveryDate;
-          if (target.receivedQty === undefined || target.receivedQty === null || target.receivedQty === '') {
-            target.receivedQty = Number(dl.receivedQty ?? dl.deliveredQty) || 0;
+          target.abDeliveryStatus = dStatus;
+          target.abDeliveryDate = deliv.deliveryDate;
+          target.abDeliveredQty = Number(dl.deliveredQty) || 0;
+          if (isRecStatus) {
+            target.receivedDate = target.receivedDate || deliv.deliveryDate;
+            if (target.receivedQty === undefined || target.receivedQty === null || target.receivedQty === '') {
+              target.receivedQty = Number(dl.receivedQty ?? dl.deliveredQty) || 0;
+            }
+            if (target.receivedCost === undefined || target.receivedCost === null || target.receivedCost === '') {
+              target.receivedCost = Number(target.unitCost) || 0;
+            }
+            target.abReportedQty = Number(dl.receivedQty ?? dl.deliveredQty) || 0;
           }
-          if (target.receivedCost === undefined || target.receivedCost === null || target.receivedCost === '') {
-            target.receivedCost = Number(target.unitCost) || 0;
-          }
-          target.abReportedQty = Number(dl.receivedQty ?? dl.deliveredQty) || 0;
           changed = true;
         }
       }
       if (matched && !refs.has(deliv.deliveryNo)) {
         refs.add(deliv.deliveryNo);
-        claimed.add(deliv.deliveryNo);
         changed = true;
       }
     }
@@ -2859,12 +3168,108 @@ function reconcileStaticOrdersWithDeliveries(onlyPoId = null) {
       const appItems = (po.items || []).filter((it) => it.approved !== false && (Number(it.qty) || 0) > 0);
       const anyRec = (po.items || []).some((it) => Number(it.receivedQty) > 0 || (it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== ''));
       const allDone = appItems.length > 0 && appItems.every((it) => it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== '');
+      const anyWarehouse = (po.items || []).some((it) => String(it.abDeliveryStatus || '').toUpperCase() !== 'RECEIVED' && it.abDeliveryNo);
       const hasMissingAb = (po.items || []).some((it) => Number(it.receivedQty) > 0 && (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB'));
       if (allDone) po.status = hasMissingAb ? 'Received (Pending AB Web)' : 'Received';
       else if (anyRec) po.status = 'Partially Received';
+      else if (anyWarehouse) po.status = 'At Warehouse (AB Web INITIAL)';
       updatedOrders++;
     }
   }
+
+  // Auto-create PO-AB-<id> records for active unrecorded AB Web deliveries (non-RECEIVED warehouse deliveries, or new RECEIVED >= 2026-11-24)
+  if (!onlyPoId) {
+    const existingIds = new Set(orders.map((o) => o.id));
+    const deletedIds = getDeletedLocalPoIds();
+    const invItems = state.inventory?.items || [];
+    const prodById = new Map(invItems.map((p) => [p.id, p]));
+    const brNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
+    for (const deliv of deliveries) {
+      const delivId = Number(deliv.id || deliv.portalDeliveryId) || 0;
+      if (!delivId) continue;
+      const autoId = `PO-AB-${delivId}`;
+      if (existingIds.has(autoId) || deletedIds.has(autoId)) continue;
+      const dStatus = String(deliv.status || '').toUpperCase();
+      const isRec = dStatus === 'RECEIVED';
+      const isPendingWarehouse = !isRec && dStatus !== 'CANCELLED' && (Number(deliv.totalDeliveredQty) || 0) > 0;
+      const isNewReceived = isRec && String(deliv.deliveryDate || '') >= '2026-11-24';
+      if (!isPendingWarehouse && !isNewReceived) continue;
+
+      const itemsOut = [];
+      for (const dl of deliv.items || []) {
+        if (!dl.productId) continue;
+        if (/FREE/i.test(String(dl.code || '')) || /FREE\s*BUNDLE/i.test(String(dl.productName || ''))) continue;
+        const qty = Math.max(0, Number(dl.deliveredQty) || 0);
+        if (qty <= 0) continue;
+        const lineKey = `${deliv.deliveryNo}::${deliv.branchId}::${dl.productId}`;
+        if (claimedLines.has(lineKey)) continue;
+
+        const p = prodById.get(dl.productId);
+        const unitCost =
+          Number(p?.cost_ab) ||
+          Number(p?.cost_ak) ||
+          Number(p?.cost_online) ||
+          Number(p?.cost_price) ||
+          (Number(p?.base_price) > 0 ? Math.round(Number(p.base_price) * 0.85) : 0);
+        const srp = Number(p?.base_price) || Number(dl.unitSrp) || 0;
+        const tierKey = srp > 0 && srp <= 10000 ? 'LOW_END' : srp <= 20000 ? 'MID_RANGE' : 'HIGH_END';
+        const tierLabel = tierKey === 'LOW_END' ? 'Low-End' : tierKey === 'MID_RANGE' ? 'Mid-Range' : 'High-End';
+        const brand = p?.brand || '';
+        const model = p?.model || dl.productName || '';
+        const displayModel = brand && !String(model).toLowerCase().startsWith(brand.toLowerCase()) ? `${brand} ${model}` : model;
+        const recQty = isRec ? Number(dl.receivedQty ?? qty) || 0 : null;
+        itemsOut.push({
+          key: `${dl.productId}::${deliv.branchId}`,
+          productId: dl.productId,
+          brand,
+          model,
+          displayModel,
+          sku: dl.code || p?.sku || '',
+          branchId: deliv.branchId,
+          branchName: brNames[deliv.branchId] || deliv.branchId,
+          supplier: p?.supplier && p.supplier !== 'Portal Auto-Import' ? p.supplier : 'AB Main Supplier',
+          tierKey,
+          tierLabel,
+          avail: 0,
+          branchDemand90: 0,
+          storewideDemand90: 0,
+          requestedQty: qty,
+          qty,
+          requestedCost: unitCost,
+          unitCost,
+          approved: true,
+          receivedQty: recQty,
+          receivedCost: unitCost,
+          receivedDate: isRec ? deliv.deliveryDate : '',
+          abDeliveryNo: deliv.deliveryNo,
+          abDeliveryStatus: dStatus,
+          abDeliveryDate: deliv.deliveryDate,
+          abDeliveredQty: qty,
+          abReportedQty: isRec ? Number(dl.receivedQty ?? qty) || 0 : null,
+          isExtraItem: false,
+        });
+        claimedLines.add(lineKey);
+      }
+      if (!itemsOut.length) continue;
+      const poStatus = isRec ? 'Received' : 'At Warehouse (AB Web INITIAL)';
+      orders.unshift({
+        id: autoId,
+        title: `AB Web Delivery • ${deliv.deliveryNo} (${brNames[deliv.branchId] || deliv.branchId})`,
+        status: poStatus,
+        supplierFilter: 'AUTO_AB_WEB',
+        notes: `Auto-synced from AB Web delivery ${deliv.deliveryNo} (${dStatus}) — adjusts Restock automatically.`,
+        expectedDate: '',
+        abDeliveryRefs: deliv.deliveryNo,
+        items: itemsOut,
+        ...computeOrderSummaryMetrics(itemsOut, poStatus),
+        createdAt: `${deliv.deliveryDate}T08:00:00.000Z`,
+        updatedAt: now,
+      });
+      existingIds.add(autoId);
+      updatedOrders++;
+    }
+  }
+
   if (updatedOrders > 0) setLocalSavedOrders(orders);
   return updatedOrders;
 }
@@ -2876,10 +3281,10 @@ function renderSavedOrdersPanel() {
   const hdrEl = document.getElementById('savedOrdersSummaryHdr');
   const orders = state.savedOrders || [];
 
-  const pendingOrders = orders.filter((o) => ['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received'].includes(o.status));
+  const pendingOrders = orders.filter((o) => ['Sent to Supplier', 'Supplier Approved', 'At Warehouse (AB Web INITIAL)', 'Partially Received'].includes(o.status));
   const totalPendingUnits = pendingOrders.reduce((s, o) => s + (computeOrderSummaryMetrics(o.items, o.status).pendingUnits || 0), 0);
   const totalPendingCost = orders.reduce((s, o) => {
-    if (!['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received'].includes(o.status)) return s;
+    if (!['Sent to Supplier', 'Supplier Approved', 'At Warehouse (AB Web INITIAL)', 'Partially Received'].includes(o.status)) return s;
     for (const it of o.items || []) {
       if (it.approved === false || it.isExtraItem) continue;
       const app = Math.max(0, Number(it.qty) || 0);
@@ -2906,7 +3311,7 @@ function renderSavedOrdersPanel() {
     if (!orders.length) {
       hdrEl.textContent = 'Log pending orders, edit supplier approvals & reconcile deliveries';
     } else {
-      hdrEl.innerHTML = `${pendingOrders.length} pending (<strong style="color:#60a5fa;">${fmtNum(totalPendingUnits)} pcs / ${fmtCurrency(totalPendingCost)}</strong> on order) • Considers Restock automatically`;
+      hdrEl.innerHTML = `${pendingOrders.length} finalized pending (<strong style="color:#60a5fa;">${fmtNum(totalPendingUnits)} pcs / ${fmtCurrency(totalPendingCost)}</strong> on order) • Considers Restock automatically`;
     }
   }
 
@@ -2916,7 +3321,7 @@ function renderSavedOrdersPanel() {
   if (!listEl) return;
 
   if (!orders.length) {
-    listEl.innerHTML = '<div class="muted small" style="padding:6px 0;">No orders logged yet. Click <strong>+ LOG PENDING ORDER</strong>, <strong>PASTE EXCEL / TEXT</strong>, or build a Restock plan &amp; click <strong>SAVE ORDER</strong>.</div>';
+    listEl.innerHTML = '<div class="muted small" style="padding:6px 0;">No orders logged yet. Click <strong>+ LOG PENDING ORDER</strong>, <strong>PASTE EXCEL / TEXT</strong>, or build a Restock plan &amp; click <strong>SAVE PLAN</strong>.</div>';
     renderSavedOrderInlineEditor();
     return;
   }
@@ -2940,19 +3345,34 @@ function renderSavedOrdersPanel() {
         m.deliveredUnits > 0 || o.status === 'Received' || o.status === 'Received (Pending AB Web)' || o.status === 'Partially Received'
           ? ` → Delivered: <strong style="color:${m.qtyVariance === 0 ? 'var(--green)' : '#f59e0b'};">${fmtNum(m.deliveredUnits)} pcs</strong> (${fmtCurrency(m.deliveredTotal)}${m.qtyVariance !== 0 ? `, Var ${m.qtyVariance >= 0 ? '+' : ''}${m.qtyVariance} pcs` : ''})`
           : '';
+      const warehouseUnits = (o.items || [])
+        .filter((it) => String(it.abDeliveryStatus || 'RECEIVED').toUpperCase() !== 'RECEIVED' && it.abDeliveryNo && it.abDeliveryNo !== 'PENDING IN AB WEB' && (it.receivedQty === null || it.receivedQty === undefined || it.receivedQty === ''))
+        .reduce((s, it) => s + (Number(it.abDeliveredQty ?? it.qty) || 0), 0);
       const missingAbCount = (o.items || []).filter(
         (it) => Number(it.receivedQty) > 0 && (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB')
       ).length;
+      const missingFromPartialAb =
+        o.status !== 'Draft' && o.status !== 'Cancelled' && Boolean(o.abDeliveryRefs)
+          ? (o.items || []).filter((it) => it.approved !== false && !it.isExtraItem && (Number(it.qty) || 0) > 0 && !it.abDeliveryNo).length
+          : 0;
       const pendTag =
-        m.pendingUnits > 0
-          ? `<span class="badge badge-warn" style="font-size:10px;">⏳ ${fmtNum(m.pendingUnits)} pcs pending delivery</span>`
+        o.status === 'Draft'
+          ? `<span class="badge badge-warn" style="font-size:10px;">Not Yet Finalized</span>`
+          : m.pendingUnits > 0
+            ? `<span class="badge badge-warn" style="font-size:10px;">⏳ ${fmtNum(m.pendingUnits)} pcs pending delivery</span>`
+            : '';
+      const warehouseTag =
+        warehouseUnits > 0
+          ? `<span class="badge badge-warn" style="font-size:10px;background:rgba(96,165,250,0.18);color:#93c5fd;border-color:rgba(96,165,250,0.4);">🚚 ${fmtNum(warehouseUnits)} pcs @ Warehouse (For Pick-Up)</span>`
           : '';
       const abMissTag =
-        missingAbCount > 0
-          ? `<span class="badge badge-danger" style="font-size:10px;">${missingAbCount} line(s) not yet in AB Web</span>`
-          : o.abDeliveryRefs
-            ? `<span class="badge badge-ok" style="font-size:10px;">AB: ${o.abDeliveryRefs}</span>`
-            : '';
+        missingFromPartialAb > 0
+          ? `<span class="badge badge-danger" style="font-size:10px;">⚠ ${missingFromPartialAb} item(s) missing in AB Web deliveries</span>`
+          : missingAbCount > 0
+            ? `<span class="badge badge-danger" style="font-size:10px;">${missingAbCount} line(s) not yet in AB Web</span>`
+            : o.abDeliveryRefs
+              ? `<span class="badge badge-ok" style="font-size:10px;">AB: ${o.abDeliveryRefs}</span>`
+              : '';
       const dtLabel = String(o.createdAt || o.updatedAt || '').slice(0, 10);
       return `
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.03);">
@@ -2962,6 +3382,7 @@ function renderSavedOrdersPanel() {
               <strong style="font-size:13px;">${o.title}</strong>
               <span class="badge ${statusColor(o.status)}" style="font-size:10px;">${o.status}</span>
               ${pendTag}
+              ${warehouseTag}
               ${abMissTag}
             </div>
             <div class="small muted" style="margin-top:3px;">
@@ -2972,8 +3393,8 @@ function renderSavedOrdersPanel() {
             ${o.notes ? `<div class="small muted" style="margin-top:2px;">Note: ${o.notes}</div>` : ''}
           </div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            <button type="button" class="saved-po-edit-btn" data-poid="${o.id}" style="padding:5px 10px;font-size:11px;min-height:0;">EDIT / RECORD DELIVERY</button>
-            <button type="button" class="secondary saved-po-preview-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">PREVIEW</button>
+            <button type="button" class="saved-po-edit-btn" data-poid="${o.id}" style="padding:5px 10px;font-size:11px;min-height:0;">${o.status === 'Draft' ? 'EDIT / FINALIZE' : 'EDIT / RECORD DELIVERY'}</button>
+            <button type="button" class="secondary saved-po-preview-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">${o.status === 'Draft' ? 'PREVIEW / FINALIZE' : 'PREVIEW'}</button>
             <button type="button" class="secondary saved-po-copy-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">COPY</button>
             <button type="button" class="secondary saved-po-pdf-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">PDF</button>
             <button type="button" class="secondary saved-po-del-btn" data-poid="${o.id}" style="padding:5px 8px;font-size:11px;min-height:0;color:var(--danger);">✕</button>
@@ -3362,18 +3783,24 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
                       const recCostRaw = r.receivedCost !== undefined && r.receivedCost !== null && r.receivedCost !== '' ? Number(r.receivedCost) : curCost;
                       const delivQtyNum = recQtyRaw === '' ? 0 : Math.max(0, Number(recQtyRaw) || 0);
                       const hasRec = recQtyRaw !== '';
+                      const abStatusU = String(r.abDeliveryStatus || 'RECEIVED').toUpperCase();
+                      const isWhInit = !hasRec && r.abDeliveryNo && r.abDeliveryNo !== 'PENDING IN AB WEB' && abStatusU !== 'RECEIVED';
                       const qVar = hasRec ? delivQtyNum - (isApp ? curQty : 0) : 0;
                       const cVar = hasRec ? recCostRaw - curCost : 0;
                       const varTag = hasRec
                         ? qVar === 0 && Math.abs(cVar) < 0.01
                           ? `<span style="color:var(--green);font-weight:700;font-size:10.5px;">✓ Match</span>`
                           : `<span style="color:${qVar < 0 || cVar > 0 ? '#ef4444' : '#f59e0b'};font-weight:700;font-size:10.5px;">${qVar !== 0 ? `${qVar > 0 ? '+' : ''}${qVar} pcs` : ''}${Math.abs(cVar) >= 0.01 ? ` ${cVar > 0 ? '+' : ''}${fmtCurrency(cVar)}/pc` : ''}</span>`
-                        : `<span class="muted" style="font-size:10px;">pending delivery</span>`;
+                        : isWhInit
+                          ? `<span style="color:#60a5fa;font-weight:700;font-size:10.5px;">🚚 @ Warehouse (${Number(r.abDeliveredQty ?? curQty)} pcs)</span>`
+                          : `<span class="muted" style="font-size:10px;">pending delivery</span>`;
                       const abTag = hasRec
                         ? r.abDeliveryNo && r.abDeliveryNo !== 'PENDING IN AB WEB'
                           ? `<span class="badge badge-ok" style="font-size:9.5px;">${r.abDeliveryNo}</span>`
                           : `<span class="badge badge-danger" style="font-size:9.5px;">Not in AB Web</span>`
-                        : '';
+                        : isWhInit
+                          ? `<span class="badge badge-warn" style="font-size:9.5px;background:rgba(96,165,250,0.18);color:#93c5fd;">${r.abDeliveryNo} (${abStatusU})</span>`
+                          : '';
                       return `
                         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);font-size:12px;${isApp || isExtra ? '' : 'opacity:0.48;'}">
                           <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer;flex:1;min-width:190px;flex-wrap:wrap;">
@@ -3433,7 +3860,7 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
       <div>
         <label for="mainPoStatusSel" style="font-size:10.5px;">ORDER / DELIVERY STATUS</label>
         <select id="mainPoStatusSel" style="padding:5px 8px;font-size:12px;">
-          ${['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received', 'Received (Pending AB Web)', 'Received', 'Cancelled']
+          ${['Draft', 'Sent to Supplier', 'Supplier Approved', 'At Warehouse (AB Web INITIAL)', 'Partially Received', 'Received (Pending AB Web)', 'Received', 'Cancelled']
             .map((st) => `<option value="${st}" ${po.status === st ? 'selected' : ''}>${st}</option>`)
             .join('')}
         </select>
@@ -3671,7 +4098,7 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
     const missingAb = (po.items || []).some((it) => Number(it.receivedQty) > 0 && (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB'));
     if (!['Cancelled', 'Draft'].includes(status)) {
       if (allRec && status !== 'Received') status = missingAb ? 'Received (Pending AB Web)' : 'Received';
-      else if (anyRec && !allRec && ['Sent to Supplier', 'Supplier Approved'].includes(status)) status = 'Partially Received';
+      else if (anyRec && !allRec && ['Sent to Supplier', 'Supplier Approved', 'At Warehouse (AB Web INITIAL)'].includes(status)) status = 'Partially Received';
     }
     const refs = [...new Set((po.items || []).map((it) => String(it.abDeliveryNo || '').trim()).filter((r) => r && r !== 'PENDING IN AB WEB'))].join(', ');
 
@@ -3778,11 +4205,18 @@ async function matchSingleOrderWithAbWeb(poId = 'ALL') {
 function buildVarianceReportRows() {
   const orderFilter = document.getElementById('varianceOrderFilter')?.value || 'ALL';
   const typeFilter = document.getElementById('varianceTypeFilter')?.value || 'ALL';
-  const orders = (state.savedOrders || []).filter((o) => o.status !== 'Cancelled' && (orderFilter === 'ALL' || o.id === orderFilter));
+  const orders = (state.savedOrders || []).filter((o) => {
+    if (o.status === 'Cancelled') return false;
+    if (orderFilter !== 'ALL') return o.id === orderFilter;
+    return o.status !== 'Draft';
+  });
+
+  const abList = (state.abDeliveries || []).filter((d) => String(d.status || '').toUpperCase() !== 'CANCELLED');
 
   const out = [];
   for (const o of orders) {
     const ordDate = String(o.createdAt || '').slice(0, 10);
+    const poHasAnyAbRef = Boolean(String(o.abDeliveryRefs || '').trim()) || (o.items || []).some((x) => Boolean(x.abDeliveryNo && x.abDeliveryNo !== 'PENDING IN AB WEB'));
     for (const it of o.items || []) {
       const reqQty = Math.max(0, Number(it.requestedQty ?? it.qty) || 0);
       const isApp = it.approved !== false && !it.isExtraItem;
@@ -3791,26 +4225,48 @@ function buildVarianceReportRows() {
       const hasRec = it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== '';
       const delQty = hasRec ? Math.max(0, Number(it.receivedQty) || 0) : 0;
       const delCost = hasRec ? Math.max(0, Number(it.receivedCost ?? appCost) || 0) : appCost;
-      const qtyVar = hasRec ? delQty - appQty : 0;
-      const unitPriceVar = hasRec ? delCost - appCost : 0;
-      const pesoImpact = hasRec ? delQty * delCost - appQty * appCost : 0;
       const abRef = String(it.abDeliveryNo || '').trim();
-      const missingInAb = hasRec && delQty > 0 && (!abRef || abRef === 'PENDING IN AB WEB');
+      const abStatus = String(it.abDeliveryStatus || (abRef && abRef !== 'PENDING IN AB WEB' ? 'RECEIVED' : '')).toUpperCase();
+      const hasAbRef = Boolean(abRef && abRef !== 'PENDING IN AB WEB');
+      const abQty = hasAbRef ? Number(it.abDeliveredQty ?? it.abReportedQty ?? (hasRec ? delQty : 0)) : 0;
+      const isWarehouseInitial = hasAbRef && abStatus !== 'RECEIVED' && !hasRec;
 
-      let rowStatus = 'Waiting Delivery';
+      const qtyVar = hasRec ? delQty - appQty : isWarehouseInitial ? abQty - appQty : 0;
+      const unitPriceVar = hasRec ? delCost - appCost : 0;
+      const pesoImpact = hasRec ? delQty * delCost - appQty * appCost : isWarehouseInitial ? (abQty - appQty) * appCost : 0;
+      const missingInAb = hasRec && delQty > 0 && !hasAbRef;
+      const notInAbDeliveries = isApp && appQty > 0 && !hasAbRef;
+      const hasBranchAbAfterOrder = abList.some((d) => (!ordDate || String(d.deliveryDate || '') >= ordDate) && (!it.branchId || d.branchId === it.branchId));
+      const confirmedMissingInAb = notInAbDeliveries && (poHasAnyAbRef || hasBranchAbAfterOrder || hasRec);
+
+      let rowStatus = 'Waiting AB Web Delivery';
       if (it.isExtraItem) rowStatus = 'Extra / Substituted';
       else if (!isApp) rowStatus = 'Cancelled by Supplier';
       else if (hasRec) {
         if (qtyVar < 0) rowStatus = `Short (${qtyVar})`;
         else if (qtyVar > 0) rowStatus = `Over (+${qtyVar})`;
         else if (Math.abs(unitPriceVar) >= 0.01) rowStatus = 'Price Diff';
+        else if (missingInAb) rowStatus = 'Received (Not in AB Web)';
         else rowStatus = 'Matched ✓';
+      } else if (isWarehouseInitial) {
+        if (abQty < appQty) rowStatus = `At Warehouse · Short (${abQty - appQty})`;
+        else if (abQty > appQty) rowStatus = `At Warehouse · Over (+${abQty - appQty})`;
+        else rowStatus = 'At Warehouse (Pick-Up)';
+      } else if (confirmedMissingInAb) {
+        rowStatus = 'Missing in AB Web Delivery';
       }
 
-      const isVariance = Boolean(it.isExtraItem) || (hasRec && (qtyVar !== 0 || Math.abs(unitPriceVar) >= 0.01)) || !isApp;
+      const isVariance =
+        Boolean(it.isExtraItem) ||
+        confirmedMissingInAb ||
+        (hasRec && (qtyVar !== 0 || Math.abs(unitPriceVar) >= 0.01 || missingInAb)) ||
+        (isWarehouseInitial && abQty !== appQty) ||
+        !isApp;
+
+      if (typeFilter === 'NOT_IN_AB' && !notInAbDeliveries) continue;
+      if (typeFilter === 'AT_WAREHOUSE' && !isWarehouseInitial) continue;
       if (typeFilter === 'VARIANCES_ONLY' && !isVariance) continue;
       if (typeFilter === 'PENDING_ONLY' && (hasRec || !isApp)) continue;
-      if (typeFilter === 'NOT_IN_AB' && !missingInAb) continue;
 
       out.push({
         orderId: o.id,
@@ -3823,16 +4279,22 @@ function buildVarianceReportRows() {
         reqQty,
         appQty,
         delQty: hasRec ? delQty : null,
+        abQty: hasAbRef ? abQty : null,
+        abStatus,
+        isWarehouseInitial,
         qtyVar,
         appCost,
         delCost: hasRec ? delCost : null,
         unitPriceVar,
         pesoImpact,
         hasRec,
+        hasAbRef,
         isApp,
         isExtra: Boolean(it.isExtraItem),
         abRef,
         missingInAb,
+        notInAbDeliveries,
+        confirmedMissingInAb,
         rowStatus,
       });
     }
@@ -3847,60 +4309,69 @@ function renderOrderVarianceReport() {
   const tbody = document.querySelector('#orderVarianceTable tbody');
   if (!tbody) return;
 
-  const orders = (state.savedOrders || []).filter((o) => o.status !== 'Cancelled');
+  const orders = (state.savedOrders || []).filter((o) => o.status !== 'Cancelled' && o.status !== 'Draft');
+  const allNonCancelled = (state.savedOrders || []).filter((o) => o.status !== 'Cancelled');
   if (orderSel) {
     const prev = orderSel.value || 'ALL';
     orderSel.innerHTML =
-      '<option value="ALL">All Orders (Ordered vs Delivered)</option>' +
-      orders.map((o) => `<option value="${o.id}">${o.id} — ${o.title} (${o.status})</option>`).join('');
+      '<option value="ALL">All Finalized Orders (Ordered vs AB Web)</option>' +
+      allNonCancelled.map((o) => `<option value="${o.id}">${o.id} — ${o.title} (${o.status})</option>`).join('');
     if ([...orderSel.options].some((opt) => opt.value === prev)) orderSel.value = prev;
   }
 
   const rows = buildVarianceReportRows();
-  let sumAppQty = 0, sumDelQty = 0, sumPendingQty = 0, sumAppVal = 0, sumDelVal = 0, sumPriceImpact = 0;
-  let shortUnits = 0, overUnits = 0, missingAbCount = 0;
+  let sumAppQty = 0, sumDelQty = 0, sumAbRecordedQty = 0, sumWarehouseQty = 0, sumPendingQty = 0, sumAppVal = 0, sumDelVal = 0, sumPriceImpact = 0;
+  let shortUnits = 0, overUnits = 0, missingAbLines = 0, missingAbUnits = 0, confirmedMissingLines = 0;
 
   for (const r of rows) {
     sumAppQty += r.appQty;
     sumAppVal += r.appQty * r.appCost;
+    if (r.hasAbRef) sumAbRecordedQty += Math.max(0, r.abQty || 0);
+    if (r.isWarehouseInitial) sumWarehouseQty += Math.max(0, r.abQty || r.appQty);
+    if (r.notInAbDeliveries) {
+      missingAbLines++;
+      missingAbUnits += r.appQty;
+      if (r.confirmedMissingInAb) confirmedMissingLines++;
+    }
     if (r.hasRec) {
       sumDelQty += r.delQty;
       sumDelVal += r.delQty * r.delCost;
       sumPriceImpact += r.delQty * (r.delCost - r.appCost);
       if (r.qtyVar < 0) shortUnits += Math.abs(r.qtyVar);
       if (r.qtyVar > 0) overUnits += r.qtyVar;
-      if (r.missingInAb) missingAbCount++;
     } else if (r.isApp) {
       sumPendingQty += r.appQty;
+      if (r.isWarehouseInitial && r.qtyVar < 0) shortUnits += Math.abs(r.qtyVar);
+      if (r.isWarehouseInitial && r.qtyVar > 0) overUnits += r.qtyVar;
     }
   }
 
   const reportedAppQty = Math.max(0, sumAppQty - sumPendingQty);
-  const fillRate = reportedAppQty > 0 ? (sumDelQty / reportedAppQty) * 100 : 0;
+  const abRecordPct = sumAppQty > 0 ? (sumAbRecordedQty / sumAppQty) * 100 : 0;
   const netQtyVar = sumDelQty - reportedAppQty;
   const netValVar = sumDelVal - (sumAppVal - rows.filter((r) => !r.hasRec && r.isApp).reduce((s, r) => s + r.appQty * r.appCost, 0));
 
   if (kpiGrid) {
     kpiGrid.innerHTML = `
       <div class="summary-box">
-        DELIVERY FILL RATE (REPORTED LINES)
-        <strong style="color:${fillRate >= 98 ? 'var(--green)' : '#f59e0b'};">${fillRate.toFixed(1)}%</strong>
-        <span class="summary-note">${fmtNum(sumDelQty)} delivered vs ${fmtNum(reportedAppQty)} reported • ${fmtNum(sumPendingQty)} pcs still pending</span>
+        FINALIZED vs AB WEB RECORDED
+        <strong style="color:${abRecordPct >= 99 ? 'var(--green)' : '#f59e0b'};">${fmtNum(sumAbRecordedQty)} / ${fmtNum(sumAppQty)} pcs</strong>
+        <span class="summary-note">${abRecordPct.toFixed(1)}% in AB Web • Branch Received: ${fmtNum(sumDelQty)} pcs</span>
+      </div>
+      <div class="summary-box" style="border-color:${sumWarehouseQty > 0 ? '#60a5fa' : 'var(--border)'};">
+        AT WAREHOUSE (FOR PICK-UP)
+        <strong style="color:${sumWarehouseQty > 0 ? '#60a5fa' : 'var(--muted)'};">${fmtNum(sumWarehouseQty)} pcs</strong>
+        <span class="summary-note">AB Web status INITIAL (arrived at warehouse, awaiting branch pick-up)</span>
+      </div>
+      <div class="summary-box" style="border-color:${confirmedMissingLines > 0 ? 'var(--danger)' : missingAbLines > 0 ? '#f59e0b' : 'var(--green)'};">
+        MISSING IN AB WEB DELIVERIES
+        <strong style="color:${confirmedMissingLines > 0 ? 'var(--danger)' : missingAbLines > 0 ? '#f59e0b' : 'var(--green)'};">${missingAbLines > 0 ? `${fmtNum(missingAbLines)} line(s) / ${fmtNum(missingAbUnits)} pcs` : '0 Missing ✓'}</strong>
+        <span class="summary-note">${confirmedMissingLines > 0 ? `${confirmedMissingLines} line(s) missing even with newer AB Web deliveries` : 'Ordered items not yet recorded in AB Web /panel/deliveries'}</span>
       </div>
       <div class="summary-box">
-        QUANTITY VARIANCE (SHORT vs OVER)
-        <strong style="color:${netQtyVar === 0 ? 'var(--green)' : netQtyVar < 0 ? 'var(--danger)' : '#f59e0b'};">${netQtyVar >= 0 ? '+' : ''}${fmtNum(netQtyVar)} pcs</strong>
-        <span class="summary-note">Short: −${fmtNum(shortUnits)} pcs • Over/Extra: +${fmtNum(overUnits)} pcs</span>
-      </div>
-      <div class="summary-box">
-        INVOICE / PRICE VARIANCE
-        <strong style="color:${sumPriceImpact <= 0 ? 'var(--green)' : 'var(--danger)'};">${sumPriceImpact >= 0 ? '+' : ''}${fmtCurrency(sumPriceImpact)}</strong>
-        <span class="summary-note">Total Peso Var (incl. qty): ${netValVar >= 0 ? '+' : ''}${fmtCurrency(netValVar)}</span>
-      </div>
-      <div class="summary-box" style="border-color:${missingAbCount > 0 ? 'var(--danger)' : 'var(--green)'};">
-        AB WEB RECORD SYNC STATUS
-        <strong style="color:${missingAbCount > 0 ? '#f59e0b' : 'var(--green)'};">${missingAbCount > 0 ? `${fmtNum(missingAbCount)} Missing in AB` : 'Synced'}</strong>
-        <span class="summary-note">${missingAbCount > 0 ? 'Delivered physically, still not in AB Web /panel/deliveries' : 'All recorded deliveries matched in AB Web'}</span>
+        QUANTITY &amp; PRICE VARIANCE
+        <strong style="color:${shortUnits === 0 && sumPriceImpact <= 0 ? 'var(--green)' : 'var(--danger)'};">${shortUnits > 0 ? `−${fmtNum(shortUnits)} short` : `${netQtyVar >= 0 ? '+' : ''}${fmtNum(netQtyVar)} pcs`}</strong>
+        <span class="summary-note">Over: +${fmtNum(overUnits)} pcs • Price Var: ${sumPriceImpact >= 0 ? '+' : ''}${fmtCurrency(sumPriceImpact)} (${netValVar >= 0 ? '+' : ''}${fmtCurrency(netValVar)})</span>
       </div>
     `;
   }
@@ -3908,19 +4379,21 @@ function renderOrderVarianceReport() {
   if (banner) {
     const latestAb = (state.abDeliveries || [])[0];
     const brNameMap = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
-    const latestStr = latestAb ? `Latest AB Web delivery synced: <strong>${latestAb.deliveryDate} (${latestAb.deliveryNo} • ${latestAb.branchName || brNameMap[latestAb.branchId] || latestAb.branchId || ''})</strong>.` : '';
-    banner.innerHTML = `<strong>Order vs. Delivery Audit:</strong> Showing <strong>${rows.length}</strong> line item(s). ${
-      missingAbCount > 0
-        ? `<strong style="color:#f59e0b;">${missingAbCount} line(s)</strong> are physically recorded as delivered but <strong>not yet in AB Web</strong> (keep tracking until they appear on AB Web). `
-        : ''
-    }${shortUnits > 0 ? `<strong style="color:var(--danger);">${shortUnits} unit(s) short-delivered</strong> — check backorder or next Restock. ` : ''}${latestStr}`;
+    const latestStr = latestAb ? `Latest AB Web delivery: <strong>${latestAb.deliveryDate} (${latestAb.deliveryNo} • ${latestAb.status} • ${latestAb.branchName || brNameMap[latestAb.branchId] || latestAb.branchId || ''})</strong>.` : '';
+    banner.innerHTML = `<strong>Finalized Orders vs. AB Web Delivery Audit:</strong> Comparing <strong>${rows.length}</strong> line item(s) across ${orders.length} finalized order(s). ${
+      confirmedMissingLines > 0
+        ? `<strong style="color:var(--danger);">${confirmedMissingLines} finalized item(s) MISSING in AB Web deliveries</strong> (deliveries have already arrived in AB Web for these branches/orders without this item). `
+        : missingAbLines > 0
+          ? `<strong style="color:#f59e0b;">${missingAbLines} item(s) (${fmtNum(missingAbUnits)} pcs)</strong> not yet recorded in AB Web deliveries. `
+          : ''
+    }${sumWarehouseQty > 0 ? `<strong style="color:#60a5fa;">${fmtNum(sumWarehouseQty)} pcs</strong> arrived at warehouse (AB Web <code>INITIAL</code> — subject for pick-up). ` : ''}${shortUnits > 0 ? `<strong style="color:var(--danger);">${shortUnits} unit(s) short-delivered</strong>. ` : ''}${latestStr}`;
   }
 
   tbody.innerHTML = rows.length
     ? rows
         .map((r) => {
-          const varColor = !r.hasRec
-            ? 'var(--muted)'
+          const varColor = !r.hasRec && !r.isWarehouseInitial
+            ? r.confirmedMissingInAb ? 'var(--danger)' : 'var(--muted)'
             : r.qtyVar < 0
               ? 'var(--danger)'
               : r.qtyVar > 0 || r.isExtra
@@ -3929,11 +4402,21 @@ function renderOrderVarianceReport() {
           const priceDisp = r.hasRec
             ? `${fmtCurrency(r.appCost)} → <strong style="color:${Math.abs(r.unitPriceVar) < 0.01 ? 'var(--text)' : r.unitPriceVar < 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(r.delCost)}</strong>`
             : fmtCurrency(r.appCost);
-          const abBadge = !r.hasRec
-            ? `<span class="badge badge-warn" style="font-size:10px;">Waiting Delivery</span>`
-            : r.missingInAb
-              ? `<span class="badge badge-danger" style="font-size:10px;">Not Yet in AB Web</span>`
-              : `<span class="badge badge-ok" style="font-size:10px;">${r.abRef}</span>`;
+          let abBadge = `<span class="badge badge-warn" style="font-size:10px;">Waiting AB Web</span>`;
+          if (r.hasRec && r.missingInAb) {
+            abBadge = `<span class="badge badge-danger" style="font-size:10px;">Received · Missing in AB Web</span>`;
+          } else if (r.hasRec) {
+            abBadge = `<span class="badge badge-ok" style="font-size:10px;">${r.abRef} (RECEIVED)</span>`;
+          } else if (r.isWarehouseInitial) {
+            abBadge = `<span class="badge badge-warn" style="font-size:10px;background:rgba(96,165,250,0.18);color:#93c5fd;border-color:rgba(96,165,250,0.4);">🚚 ${r.abRef} (${r.abStatus || 'DELIVERY'} · Pick-Up)</span>`;
+          } else if (r.confirmedMissingInAb) {
+            abBadge = `<span class="badge badge-danger" style="font-size:10px;">⚠ MISSING IN AB WEB</span>`;
+          }
+          const recCellText = r.hasRec
+            ? `<strong>${fmtNum(r.delQty)}</strong>`
+            : r.isWarehouseInitial
+              ? `<strong style="color:#60a5fa;">${fmtNum(r.abQty)} (WH)</strong>`
+              : '<span class="muted">—</span>';
           return `
             <tr>
               <td><strong>${r.orderId}</strong><div class="small muted">${r.orderDate}</div></td>
@@ -3941,15 +4424,15 @@ function renderOrderVarianceReport() {
               <td><strong>${r.displayModel}</strong><div class="small muted">${r.supplier}</div></td>
               <td>${fmtNum(r.reqQty)}</td>
               <td><strong>${fmtNum(r.appQty)}</strong></td>
-              <td>${r.hasRec ? `<strong>${fmtNum(r.delQty)}</strong>` : '<span class="muted">—</span>'}</td>
-              <td style="color:${varColor};font-weight:700;">${r.hasRec ? `${r.qtyVar > 0 ? '+' : ''}${r.qtyVar}` : '—'}</td>
+              <td>${recCellText}</td>
+              <td style="color:${varColor};font-weight:700;">${r.hasRec || r.isWarehouseInitial ? `${r.qtyVar > 0 ? '+' : ''}${r.qtyVar}` : '—'}</td>
               <td>${priceDisp}</td>
-              <td style="color:${r.pesoImpact === 0 ? 'var(--muted)' : r.pesoImpact < 0 ? '#f59e0b' : 'var(--danger)'};"><strong>${r.hasRec ? `${r.pesoImpact >= 0 ? '+' : ''}${fmtCurrency(r.pesoImpact)}` : '—'}</strong></td>
+              <td style="color:${r.pesoImpact === 0 ? 'var(--muted)' : r.pesoImpact < 0 ? '#f59e0b' : 'var(--danger)'};"><strong>${r.hasRec || r.isWarehouseInitial ? `${r.pesoImpact >= 0 ? '+' : ''}${fmtCurrency(r.pesoImpact)}` : '—'}</strong></td>
               <td>${abBadge}<div class="small" style="color:${varColor};margin-top:2px;">${r.rowStatus}</div></td>
             </tr>`;
         })
         .join('')
-    : '<tr><td colspan="10" class="muted">No order lines match this variance filter.</td></tr>';
+    : '<tr><td colspan="10" class="muted">No finalized order lines match this variance filter.</td></tr>';
 }
 
 function renderAbDeliveriesView() {
@@ -4014,12 +4497,20 @@ function downloadVariancePdf() {
       r.displayModel,
       r.reqQty,
       r.appQty,
-      r.hasRec ? r.delQty : '—',
-      r.hasRec ? (r.qtyVar > 0 ? `+${r.qtyVar}` : r.qtyVar) : '—',
+      r.hasRec ? r.delQty : r.isWarehouseInitial ? `${r.abQty} (WH)` : '—',
+      r.hasRec || r.isWarehouseInitial ? (r.qtyVar > 0 ? `+${r.qtyVar}` : r.qtyVar) : '—',
       `PHP ${fmtNum(Math.round(r.appCost))}`,
       r.hasRec ? `PHP ${fmtNum(Math.round(r.delCost))}` : '—',
-      r.hasRec ? `PHP ${fmtNum(Math.round(r.pesoImpact))}` : '—',
-      r.hasRec ? (r.missingInAb ? `Not in AB Web (${r.rowStatus})` : `${r.abRef} (${r.rowStatus})`) : 'Waiting Delivery',
+      r.hasRec || r.isWarehouseInitial ? `PHP ${fmtNum(Math.round(r.pesoImpact))}` : '—',
+      r.hasRec
+        ? r.missingInAb
+          ? `Not in AB Web (${r.rowStatus})`
+          : `${r.abRef} (${r.rowStatus})`
+        : r.isWarehouseInitial
+          ? `${r.abRef} (INITIAL · Pick-Up)`
+          : r.confirmedMissingInAb
+            ? 'MISSING IN AB WEB DELIVERY'
+            : r.rowStatus,
     ]),
     theme: 'grid',
     styles: { font: 'helvetica', fontSize: 7.5, cellPadding: 3 / 72, lineColor: [60, 60, 60], lineWidth: 0.65 / 72 },
@@ -4052,16 +4543,24 @@ async function downloadVarianceExcel() {
       r.displayModel,
       r.reqQty,
       r.appQty,
-      r.hasRec ? r.delQty : '',
-      r.hasRec ? r.qtyVar : '',
+      r.hasRec ? r.delQty : r.isWarehouseInitial ? r.abQty : '',
+      r.hasRec || r.isWarehouseInitial ? r.qtyVar : '',
       r.appCost,
       r.hasRec ? r.delCost : '',
-      r.hasRec ? r.pesoImpact : '',
-      r.hasRec ? (r.missingInAb ? `Not Yet in AB Web (${r.rowStatus})` : `${r.abRef} (${r.rowStatus})`) : 'Waiting Delivery',
+      r.hasRec || r.isWarehouseInitial ? r.pesoImpact : '',
+      r.hasRec
+        ? r.missingInAb
+          ? `Not Yet in AB Web (${r.rowStatus})`
+          : `${r.abRef} (${r.rowStatus})`
+        : r.isWarehouseInitial
+          ? `${r.abRef} (INITIAL · Pick-Up)`
+          : r.confirmedMissingInAb
+            ? 'MISSING IN AB WEB DELIVERY'
+            : r.rowStatus,
     ]);
     er.getCell(9).numFmt = '"₱"#,##0.00';
-    if (r.hasRec) {
-      er.getCell(10).numFmt = '"₱"#,##0.00';
+    if (r.hasRec || r.isWarehouseInitial) {
+      if (r.hasRec) er.getCell(10).numFmt = '"₱"#,##0.00';
       er.getCell(11).numFmt = '"₱"#,##0.00';
     }
   }
@@ -4077,15 +4576,47 @@ async function downloadVarianceExcel() {
   a.click();
 }
 
-async function createSavedOrderFromDraft() {
+async function createSavedOrderFromDraft(opts = {}) {
+  const {
+    initialStatus = 'Sent to Supplier',
+    excludeUnchecked = false,
+    openInPreview = false,
+  } = opts || {};
   if (!state.restockPlan) buildRestockDraftPlan();
-  const draftSelected = (state.restockPlan || []).filter((r) => r.selected && Number(r.qty) > 0);
+  let draftSelected = (state.restockPlan || []).filter(
+    (r) => r.selected && Number(r.qty) > 0 && (!excludeUnchecked || !state.previewUncheckedKeys?.has(r.key))
+  );
+  // Enforce the Net Order Budget cap at save time so a plan can never exceed it (e.g. ₱200,000)
+  const budgetCap = parseMoneyInput(document.getElementById('restockBudgetInput')?.value);
+  let trimmedNote = '';
+  if (budgetCap > 0) {
+    let spent = 0;
+    const kept = [];
+    let dropped = 0;
+    for (const r of draftSelected) {
+      const unit = Number(r.unitCost) || 0;
+      const minQ = r.tierKey === 'LOW_END' ? 2 : 1;
+      let q = Number(r.qty) || 0;
+      if (unit > 0) {
+        const afford = Math.floor((budgetCap - spent) / unit);
+        if (afford < minQ) { dropped++; continue; }
+        q = Math.min(q, afford);
+      }
+      kept.push({ ...r, qty: q });
+      spent += q * unit;
+    }
+    if (kept.length !== draftSelected.length || kept.some((r, i) => r.qty !== draftSelected[i]?.qty)) {
+      trimmedNote = ` Trimmed to your ${fmtCurrency(budgetCap)} budget (${fmtCurrency(spent)} total${dropped ? `, ${dropped} line(s) left out` : ''}).`;
+    }
+    draftSelected = kept;
+  }
   if (!draftSelected.length) {
-    alert('Select at least one product in the Restock cards before saving an order.');
-    return;
+    alert('Select at least one product before saving.');
+    return null;
   }
   const mode = document.querySelector('input[name="restockSupplierMode"]:checked')?.value || 'LOWEST';
-  const title = `Restock Order • ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  const prefix = initialStatus === 'Draft' ? 'Saved Plan' : 'Restock Order';
+  const title = `${prefix} • ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
   const itemsPayload = draftSelected.map((r) => ({
     key: r.key,
     productId: r.productId,
@@ -4110,6 +4641,9 @@ async function createSavedOrderFromDraft() {
     receivedCost: Number(r.unitCost) || 0,
     receivedDate: '',
     abDeliveryNo: '',
+    abDeliveryStatus: '',
+    abDeliveryDate: '',
+    abDeliveredQty: null,
     abReportedQty: null,
     isExtraItem: false,
   }));
@@ -4120,17 +4654,18 @@ async function createSavedOrderFromDraft() {
     const dayTag = now.slice(0, 10).replace(/-/g, '');
     const all = getLocalSavedOrders();
     const todayCnt = all.filter((o) => String(o.id || '').startsWith(`PO-${dayTag}-`)).length;
-    const id = `PO-${dayTag}-${String(todayCnt + 1).padStart(2, '0')}`;
+    const phCnt = all.filter((o) => String(o.id || '').startsWith(`PO-PH-${dayTag}-`)).length;
+    const id = `PO-PH-${dayTag}-${String(phCnt + 1).padStart(2, '0')}`;
     createdOrder = {
       id,
       title,
-      status: 'Sent to Supplier',
+      status: initialStatus,
       supplierFilter: mode,
       notes: '',
       expectedDate: '',
       abDeliveryRefs: '',
       items: itemsPayload,
-      ...computeOrderSummaryMetrics(itemsPayload, 'Sent to Supplier'),
+      ...computeOrderSummaryMetrics(itemsPayload, initialStatus),
       createdAt: now,
       updatedAt: now,
     };
@@ -4140,22 +4675,33 @@ async function createSavedOrderFromDraft() {
   } else {
     const res = await api('/api/purchase-orders', {
       method: 'POST',
-      body: JSON.stringify({ title, status: 'Sent to Supplier', supplierFilter: mode, notes: '', items: itemsPayload }),
+      body: JSON.stringify({ title, status: initialStatus, supplierFilter: mode, notes: '', items: itemsPayload }),
     });
     createdOrder = res?.order || null;
     await loadSavedPurchaseOrders();
   }
 
   if (createdOrder) {
-    openSavedOrderInlineEditor(createdOrder);
+    state.restockExcludedKeys = new Set();
+    state.previewUncheckedKeys = new Set();
     renderSavedOrdersPanel();
     buildRestockDraftPlan();
     renderRestockCards();
-    renderSavedOrderInlineEditor(`Order ${createdOrder.id} saved — Restock now deducts these pending units automatically ✓`);
+    if (openInPreview) {
+      state.previewOrderOverride = createdOrder;
+      renderReorderPreviewModal(
+        `Saved plan ${createdOrder.id} (${createdOrder.status}) ✓${trimmedNote} — Tick SHOW COSTS to adjust prices, or FINALIZE AS ORDERED when ready.${IS_STATIC_GH && !localStorage.getItem('bs_gh_pub_token') ? ' (Add your GitHub token in Staff PINs tab once so phone plans also appear on your PC.)' : ''}`
+      );
+      document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
+    } else {
+      openSavedOrderInlineEditor(createdOrder);
+      renderSavedOrderInlineEditor(`Order ${createdOrder.id} saved — Restock now deducts these pending units automatically ✓`);
+    }
   }
+  return createdOrder;
 }
 
-function getGroupedReorderPlan(overrideOrder = null) {
+function getGroupedReorderPlan(overrideOrder = null, filterPreviewUnchecked = false) {
   const activeOrd = overrideOrder && Array.isArray(overrideOrder.items)
     ? overrideOrder
     : state.previewOrderOverride && Array.isArray(state.previewOrderOverride.items)
@@ -4163,8 +4709,12 @@ function getGroupedReorderPlan(overrideOrder = null) {
       : null;
 
   const selected = activeOrd
-    ? activeOrd.items.filter((r) => r.approved !== false && Number(r.qty) > 0)
-    : (state.restockPlan || []).filter((r) => r.selected && Number(r.qty) > 0);
+    ? activeOrd.items
+        .map((r, idx) => ({ ...r, _itemIdx: idx }))
+        .filter((r) => r.approved !== false && Number(r.qty) > 0)
+    : (state.restockPlan || []).filter(
+        (r) => r.selected && Number(r.qty) > 0 && (!filterPreviewUnchecked || !state.previewUncheckedKeys?.has(r.key))
+      );
 
   const bySupplier = new Map();
   for (const sup of SUPPLIER_ORDER) bySupplier.set(sup, new Map());
@@ -4196,7 +4746,7 @@ function getGroupedReorderPlan(overrideOrder = null) {
 }
 
 function buildReorderCopyText(overrideOrder = null) {
-  const { grouped } = getGroupedReorderPlan(overrideOrder);
+  const { grouped } = getGroupedReorderPlan(overrideOrder, true);
   if (!grouped.length) return '';
   const parts = ['Reorder request'];
   for (const supGroup of grouped) {
@@ -4212,63 +4762,223 @@ function buildReorderCopyText(overrideOrder = null) {
   return parts.join('\n\n');
 }
 
-function renderReorderPreviewModal() {
-  const modal = document.getElementById('reorderPreviewModal');
-  if (!modal) return;
-  const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked);
-  const { selected, grouped } = getGroupedReorderPlan();
-
-  const prepEl = document.getElementById('reorderPreviewPrepared');
-  if (prepEl) {
-    prepEl.textContent = `Prepared ${new Date().toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    })}`;
-  }
-
-  const totalUnits = selected.reduce((s, r) => s + (Number(r.qty) || 0), 0);
-  const totalCost = selected.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.unitCost) || 0), 0);
+function renderPreviewMetricsSummary(selectedRows, showCosts) {
+  const metricsEl = document.getElementById('reorderPreviewMetrics');
+  if (!metricsEl) return;
+  const totalUnits = selectedRows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+  const totalCost = selectedRows.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.unitCost) || 0), 0);
   const branchTotals = new Map(BRANCH_ORDER.map((b) => [b, { qty: 0, cost: 0 }]));
-  for (const r of selected) {
+  for (const r of selectedRows) {
     if (!branchTotals.has(r.branchName)) branchTotals.set(r.branchName, { qty: 0, cost: 0 });
     const bt = branchTotals.get(r.branchName);
     bt.qty += Number(r.qty) || 0;
     bt.cost += (Number(r.qty) || 0) * (Number(r.unitCost) || 0);
   }
+  const branchPills = [...branchTotals.entries()]
+    .filter(([, v]) => v.qty > 0)
+    .map(
+      ([b, v]) =>
+        `<span style="display:inline-block;padding:4px 8px;border-radius:6px;background:#fff;border:1px solid #d5ceb8;font-size:12px;color:#1b1913;"><strong>${b}:</strong> ${v.qty} pcs${showCosts ? ` (${fmtCurrency(v.cost)})` : ''}</span>`
+    )
+    .join(' ');
+  metricsEl.innerHTML = `
+    <div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:130px;">
+      <div style="font-size:10px;font-weight:700;color:#6b6351;">ORDER UNITS</div>
+      <div style="font-size:18px;font-weight:800;color:#1b1913;">${fmtNum(totalUnits)}</div>
+    </div>
+    ${
+      showCosts
+        ? `<div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:150px;">
+            <div style="font-size:10px;font-weight:700;color:#6b6351;">EST. TOTAL COST</div>
+            <div style="font-size:18px;font-weight:800;color:#1d6f42;">${fmtCurrency(totalCost)}</div>
+          </div>`
+        : ''
+    }
+    <div style="flex:1;min-width:220px;">
+      <div style="font-size:10px;font-weight:700;color:#6b6351;margin-bottom:4px;">BRANCH SUBTOTALS</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">${branchPills || '<span style="font-size:12px;color:#6b6351;">None</span>'}</div>
+    </div>
+  `;
+}
 
-  const metricsEl = document.getElementById('reorderPreviewMetrics');
-  if (metricsEl) {
-    const branchPills = [...branchTotals.entries()]
-      .filter(([, v]) => v.qty > 0)
-      .map(
-        ([b, v]) =>
-          `<span style="display:inline-block;padding:4px 8px;border-radius:6px;background:#fff;border:1px solid #d5ceb8;font-size:12px;"><strong>${b}:</strong> ${v.qty} pcs${showCosts ? ` (${fmtCurrency(v.cost)})` : ''}</span>`
-      )
-      .join(' ');
-    metricsEl.innerHTML = `
-      <div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:130px;">
-        <div style="font-size:10px;font-weight:700;color:#6b6351;">ORDER UNITS</div>
-        <div style="font-size:18px;font-weight:800;color:#1b1913;">${fmtNum(totalUnits)}</div>
-      </div>
-      ${
-        showCosts
-          ? `<div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:150px;">
-              <div style="font-size:10px;font-weight:700;color:#6b6351;">EST. TOTAL COST</div>
-              <div style="font-size:18px;font-weight:800;color:#1d6f42;">${fmtCurrency(totalCost)}</div>
-            </div>`
-          : ''
+async function autoSaveSavedPreviewItemCost(order, itemIdx, newCost, persistNow = true) {
+  if (!order || !Array.isArray(order.items) || !order.items[itemIdx]) return;
+  const it = order.items[itemIdx];
+  const cleanCost = Math.max(0, Number(newCost) || 0);
+  it.unitCost = cleanCost;
+  if (it.receivedQty === undefined || it.receivedQty === null || it.receivedQty === '') {
+    it.receivedCost = cleanCost;
+  }
+  Object.assign(order, computeOrderSummaryMetrics(order.items, order.status));
+
+  const activeRows = order.items.filter((r) => r.approved !== false && Number(r.qty) > 0);
+  renderPreviewMetricsSummary(activeRows, Boolean(document.getElementById('reorderShowCostsChk')?.checked));
+
+  if (!persistNow) return;
+
+  // Persist order update & auto-save price to the specific supplier it was ordered from
+  if (IS_STATIC_GH) {
+    const all = getLocalSavedOrders();
+    const idx = all.findIndex((o) => o.id === order.id);
+    const updated = { ...order, updatedAt: new Date().toISOString(), ...computeOrderSummaryMetrics(order.items, order.status) };
+    if (idx >= 0) all[idx] = updated;
+    else all.unshift(updated);
+    setLocalSavedOrders(all);
+    state.savedOrders = all.map((o) => ({ ...o, ...computeOrderSummaryMetrics(o.items, o.status) }));
+    state.previewOrderOverride = updated;
+  } else {
+    const res = await api(`/api/purchase-orders/${encodeURIComponent(order.id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ items: order.items, syncSupplierCosts: true }),
+    });
+    if (res?.order) {
+      state.previewOrderOverride = res.order;
+      const list = state.savedOrders || [];
+      const ix = list.findIndex((o) => o.id === res.order.id);
+      if (ix >= 0) list[ix] = res.order;
+    }
+  }
+
+  const supName = String(it.supplier || 'AB Main Supplier');
+  if (it.productId && cleanCost > 0) {
+    const supUpper = supName.toUpperCase();
+    const costPatch = supUpper.includes('A&K')
+      ? { costAk: cleanCost }
+      : supUpper.includes('ONLINE')
+        ? { costOnline: cleanCost }
+        : { costAb: cleanCost };
+    await saveProductSupplierCosts(it.productId, costPatch);
+  }
+
+  renderSavedOrdersPanel();
+  renderInventory();
+  renderRestockCards();
+
+  const stEl = document.getElementById('reorderPreviewStatus');
+  if (stEl) {
+    stEl.style.color = '#1d6f42';
+    stEl.textContent = `Auto-saved ${fmtCurrency(cleanCost)} for ${it.displayModel || it.model} (${supName}) ✓`;
+  }
+}
+
+function findCheaperOtherSuppliers(row) {
+  const prod = state.inventory?.items?.find((i) => i.id === row?.productId);
+  if (!prod) return null;
+  const curCost = Number(row?.unitCost) || 0;
+  if (curCost <= 0) return null;
+  const curSup = String(row?.supplier || 'AB Main Supplier').trim().toUpperCase();
+  const candidates = [
+    { name: 'AB Main Supplier', cost: Number(prod.cost_ab) || 0 },
+    { name: 'A&K', cost: Number(prod.cost_ak) || 0 },
+    { name: 'Online Purchase', cost: Number(prod.cost_online) || 0 },
+  ].filter((c) => c.cost > 0 && c.name.toUpperCase() !== curSup && c.cost < curCost - 0.005);
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => a.cost - b.cost);
+  const best = candidates[0];
+  const qty = Math.max(1, Number(row?.qty) || 1);
+  return {
+    cheaperSupplier: best.name,
+    cheaperCost: best.cost,
+    savePerPc: Number((curCost - best.cost).toFixed(2)),
+    saveTotal: Number(((curCost - best.cost) * qty).toFixed(2)),
+    allAlternatives: candidates,
+  };
+}
+
+function renderReorderPreviewModal(statusNote = '') {
+  const modal = document.getElementById('reorderPreviewModal');
+  if (!modal) return;
+  if (!state.previewUncheckedKeys) state.previewUncheckedKeys = new Set();
+  if (!state.restockExcludedKeys) state.restockExcludedKeys = new Set();
+  const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked);
+  const compareMode = Boolean(document.getElementById('reorderCompareSuppliersChk')?.checked);
+  const { selected, grouped, isSaved, order } = getGroupedReorderPlan(null, false);
+  const activeSelected = isSaved ? selected : selected.filter((r) => !state.previewUncheckedKeys.has(r.key));
+
+  const titleEl = document.getElementById('reorderPreviewTitle');
+  if (titleEl) {
+    titleEl.textContent = isSaved && order
+      ? `AB-GADGETZ · ${order.id} (${String(order.status || 'Draft').toUpperCase()})`
+      : 'AB-GADGETZ · REORDER PLAN';
+  }
+
+  const prepEl = document.getElementById('reorderPreviewPrepared');
+  if (prepEl) {
+    prepEl.textContent = isSaved && order
+      ? `${order.title || 'Saved Order'} · Order Date ${String(order.createdAt || '').slice(0, 10) || todayStr}`
+      : `Prepared ${new Date().toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+        })}`;
+  }
+
+  renderPreviewMetricsSummary(activeSelected, showCosts);
+
+  const compareHits = [];
+  const compareByKey = new Map();
+  if (compareMode) {
+    for (const r of activeSelected) {
+      const cmp = findCheaperOtherSuppliers(r);
+      if (cmp) {
+        const key = r.key || `${r.productId}::${r.branchId}`;
+        compareByKey.set(key, cmp);
+        compareHits.push({ row: r, key, ...cmp });
       }
-      <div style="flex:1;min-width:220px;">
-        <div style="font-size:10px;font-weight:700;color:#6b6351;margin-bottom:4px;">BRANCH SUBTOTALS</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;">${branchPills || '<span style="font-size:12px;color:#6b6351;">None</span>'}</div>
-      </div>
-    `;
+    }
+  }
+
+  const compareBannerEl = document.getElementById('reorderCompareBanner');
+  if (compareBannerEl) {
+    if (!compareMode) {
+      compareBannerEl.classList.add('hidden');
+      compareBannerEl.innerHTML = '';
+    } else if (compareHits.length) {
+      const totalPotentialSavings = compareHits.reduce((s, h) => s + h.saveTotal, 0);
+      compareBannerEl.classList.remove('hidden');
+      compareBannerEl.style.background = '#fef2f2';
+      compareBannerEl.style.border = '1.5px solid #dc2626';
+      compareBannerEl.style.color = '#7f1d1d';
+      compareBannerEl.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+          <div>
+            <strong style="font-size:13px;color:#991b1b;">⚠ LOWER SUPPLIER PRICE FOUND — REVIEW BEFORE PROCEEDING</strong>
+            <div style="margin-top:2px;font-weight:600;">${compareHits.length} item(s) cost less at a different supplier — potential savings: <strong>${fmtCurrency(totalPotentialSavings)}</strong></div>
+          </div>
+          ${
+            !isSaved
+              ? '<button type="button" id="reorderUncheckCheaperBtn" style="padding:5px 10px;font-size:11px;font-weight:700;background:#b91c1c;color:#fff;border:none;border-radius:6px;cursor:pointer;">UNCHECK CHEAPER-ELSEWHERE ITEMS</button>'
+              : ''
+          }
+        </div>
+        <ul style="margin:6px 0 0 18px;padding:0;line-height:1.45;">
+          ${compareHits
+            .map(
+              (h) =>
+                `<li><strong>${escAbHtml(h.row.branchName)} · ${escAbHtml(h.row.displayModel || h.row.model)}</strong> (${fmtNum(h.row.qty)} ${h.row.qty === 1 ? 'pc' : 'pcs'}): ${escAbHtml(h.row.supplier || 'Selected')} <strong>${fmtCurrency(h.row.unitCost)}</strong> → <strong style="color:#166534;">${escAbHtml(h.cheaperSupplier)} is ${fmtCurrency(h.cheaperCost)}</strong> (save <strong>${fmtCurrency(h.savePerPc)}/pc</strong> · ${fmtCurrency(h.saveTotal)} total)</li>`
+            )
+            .join('')}
+        </ul>
+      `;
+      document.getElementById('reorderUncheckCheaperBtn')?.addEventListener('click', () => {
+        for (const h of compareHits) {
+          state.previewUncheckedKeys.add(h.key);
+        }
+        renderReorderPreviewModal(`Unchecked ${compareHits.length} item(s) cheaper at another supplier — click BUILD PLAN AGAIN or edit supplier.`);
+      });
+    } else {
+      compareBannerEl.classList.remove('hidden');
+      compareBannerEl.style.background = '#ecfdf5';
+      compareBannerEl.style.border = '1px solid #10b981';
+      compareBannerEl.style.color = '#065f46';
+      compareBannerEl.innerHTML = '<strong>✓ BEST SUPPLIER PRICES VERIFIED:</strong> No other recorded supplier offers a lower cost for any selected item in this order.';
+    }
   }
 
   const bodyEl = document.getElementById('reorderPreviewBody');
+  const prevScrollTop = bodyEl ? bodyEl.scrollTop : 0;
   if (bodyEl) {
     if (!grouped.length) {
       bodyEl.innerHTML = '<div style="padding:16px;text-align:center;color:#6b6351;">No products selected in this reorder plan.</div>';
@@ -4290,11 +5000,33 @@ function renderReorderPreviewModal() {
                     const nameLabel = r.brand && !String(r.model || '').toLowerCase().startsWith(String(r.brand || '').toLowerCase())
                       ? `${r.brand} · ${r.model}`
                       : r.model || r.displayModel;
+                    const rowKey = r.key || `${r.productId}::${r.branchId}`;
+                    const isChecked = isSaved || !state.previewUncheckedKeys.has(rowKey);
+                    const cmpHit = compareMode ? (compareByKey.get(rowKey) || (isChecked ? findCheaperOtherSuppliers(r) : null)) : null;
+                    const cmpInline = cmpHit && isChecked
+                      ? `<div style="font-size:11px;font-weight:700;color:#b91c1c;margin-top:2px;">⚠ Cheaper at ${escAbHtml(cmpHit.cheaperSupplier)}: ${fmtCurrency(cmpHit.cheaperCost)} (save ${fmtCurrency(cmpHit.savePerPc)}/pc)</div>`
+                      : '';
+                    const costArea = !showCosts
+                      ? ''
+                      : isSaved
+                        ? `<span style="display:inline-flex;align-items:center;gap:4px;color:#4f493a;font-size:11.5px;">
+                            <span>₱</span>
+                            <input type="number" min="0" step="1" class="reorder-saved-cost-inp" data-item-idx="${r._itemIdx}" value="${Number(r.unitCost) || 0}" title="Edit unit cost (auto-saves to ${sup.supplier})" style="width:76px;padding:2px 5px;font-size:11.5px;font-weight:700;background:#fff;color:#1b1913;border:1px solid #b8ab87;border-radius:5px;text-align:right;" />
+                            <span>× ${r.qty} = <strong class="reorder-saved-row-sub" data-item-idx="${r._itemIdx}" style="color:#1b1913;">${fmtCurrency(r.unitCost * r.qty)}</strong></span>
+                          </span>`
+                        : `<span style="color:#4f493a;font-size:11.5px;">${fmtCurrency(r.unitCost)} × ${r.qty} = <strong style="color:#1b1913;">${fmtCurrency(r.unitCost * r.qty)}</strong></span>`;
                     return `
-                    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid #e6e0ce;font-size:12.5px;">
-                      <span>${nameLabel}</span>
-                      <span style="display:flex;align-items:center;gap:12px;white-space:nowrap;">
-                        ${showCosts ? `<span style="color:#4f493a;font-size:11.5px;">${fmtCurrency(r.unitCost)} × ${r.qty} = <strong>${fmtCurrency(r.unitCost * r.qty)}</strong></span>` : ''}
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:5px ${cmpHit && isChecked ? '6px' : '0'};border-bottom:1px solid #e6e0ce;font-size:12.5px;color:#1b1913;${cmpHit && isChecked ? 'background:#fef2f2;border-radius:4px;' : ''}">
+                      ${
+                        isSaved
+                          ? `<div style="min-width:0;flex:1;"><span style="color:#1b1913;font-weight:500;">${nameLabel}</span>${cmpInline}</div>`
+                          : `<label style="display:flex;align-items:flex-start;gap:8px;margin:0;cursor:pointer;flex:1;min-width:0;font-weight:500;font-size:12.5px;color:#1b1913;text-transform:none;letter-spacing:0;">
+                              <input type="checkbox" class="reorder-preview-item-chk" data-key="${String(rowKey).replace(/"/g, '&quot;')}" ${isChecked ? 'checked' : ''} style="width:16px;height:16px;margin:2px 0 0;accent-color:#b45309;flex-shrink:0;" />
+                              <span style="min-width:0;"><span style="color:${isChecked ? '#1b1913' : '#6b6351'};${isChecked ? '' : 'text-decoration:line-through;opacity:0.55;'}">${nameLabel}</span>${cmpInline}</span>
+                            </label>`
+                      }
+                      <span style="display:flex;align-items:center;gap:10px;white-space:nowrap;${isChecked ? '' : 'opacity:0.45;'}">
+                        ${costArea}
                         <strong style="color:#b45309;">${r.qty} ${r.qty === 1 ? 'pc' : 'pcs'}</strong>
                       </span>
                     </div>`;
@@ -4306,10 +5038,95 @@ function renderReorderPreviewModal() {
           </div>`
         )
         .join('');
+      bodyEl.scrollTop = prevScrollTop;
+
+      if (!isSaved) {
+        bodyEl.querySelectorAll('.reorder-preview-item-chk').forEach((chk) => {
+          chk.addEventListener('change', (e) => {
+            const key = e.target.dataset.key;
+            if (!key) return;
+            if (e.target.checked) state.previewUncheckedKeys.delete(key);
+            else state.previewUncheckedKeys.add(key);
+            renderReorderPreviewModal();
+          });
+        });
+      } else if (showCosts && order) {
+        const timers = new Map();
+        bodyEl.querySelectorAll('.reorder-saved-cost-inp').forEach((inp) => {
+          const itemIdx = Number(inp.dataset.itemIdx);
+          inp.addEventListener('input', () => {
+            const val = Math.max(0, Number(inp.value) || 0);
+            const subEl = bodyEl.querySelector(`.reorder-saved-row-sub[data-item-idx="${itemIdx}"]`);
+            const rowQty = Number(order.items?.[itemIdx]?.qty) || 0;
+            if (subEl) subEl.textContent = fmtCurrency(val * rowQty);
+            autoSaveSavedPreviewItemCost(order, itemIdx, val, false);
+            clearTimeout(timers.get(itemIdx));
+            timers.set(
+              itemIdx,
+              setTimeout(() => {
+                autoSaveSavedPreviewItemCost(order, itemIdx, val, true);
+              }, 600)
+            );
+          });
+          inp.addEventListener('change', () => {
+            clearTimeout(timers.get(itemIdx));
+            const val = Math.max(0, Number(inp.value) || 0);
+            autoSaveSavedPreviewItemCost(order, itemIdx, val, true);
+          });
+        });
+      }
     }
   }
+
+  const rebuildBtn = document.getElementById('reorderRebuildPlanBtn');
+  if (rebuildBtn) {
+    rebuildBtn.classList.toggle('hidden', isSaved);
+    const uncnt = state.previewUncheckedKeys.size;
+    rebuildBtn.textContent = uncnt > 0 ? `BUILD PLAN AGAIN (EXCLUDE ${uncnt} UNAVAILABLE)` : 'BUILD PLAN AGAIN';
+  }
+  const savePlanBtn = document.getElementById('reorderSavePlanBtn');
+  if (savePlanBtn) {
+    savePlanBtn.classList.toggle('hidden', isSaved);
+  }
+  const finalizeBtn = document.getElementById('reorderFinalizeOrderBtn');
+  if (finalizeBtn) {
+    const canFinalize = Boolean(isSaved && order && order.status === 'Draft');
+    finalizeBtn.classList.toggle('hidden', !canFinalize);
+  }
+  const resetBtn = document.getElementById('reorderResetExcludedBtn');
+  if (resetBtn) {
+    const exCnt = state.restockExcludedKeys.size;
+    resetBtn.classList.toggle('hidden', isSaved || exCnt === 0);
+    if (exCnt > 0) resetBtn.textContent = `RESET EXCLUDED (${exCnt})`;
+  }
+
   const stEl = document.getElementById('reorderPreviewStatus');
-  if (stEl) stEl.textContent = '';
+  if (stEl) {
+    const uncnt = isSaved ? 0 : state.previewUncheckedKeys.size;
+    const exCnt = isSaved ? 0 : state.restockExcludedKeys.size;
+    if (statusNote) {
+      stEl.style.color = '#1d6f42';
+      stEl.textContent = statusNote;
+    } else if (isSaved && order) {
+      if (order.status === 'Draft') {
+        stEl.style.color = '#b45309';
+        stEl.textContent = showCosts
+          ? 'Saved Draft — edit any unit cost (auto-saves to its specific supplier), then click FINALIZE AS ORDERED.'
+          : 'Saved Draft — tick SHOW COSTS to adjust supplier prices, or click FINALIZE AS ORDERED once sent.';
+      } else {
+        stEl.style.color = '#1d6f42';
+        stEl.textContent = `Finalized (${order.status}) ✓ — compared automatically against AB Web deliveries.${showCosts ? ' Cost changes auto-save to supplier.' : ''}`;
+      }
+    } else if (uncnt > 0) {
+      stEl.style.color = '#b45309';
+      stEl.textContent = `${uncnt} unit(s) unchecked as unavailable — click BUILD PLAN AGAIN to refill budget with next available units.`;
+    } else if (exCnt > 0) {
+      stEl.style.color = '#6b6351';
+      stEl.textContent = `${exCnt} unavailable unit(s) currently excluded from this plan. Uncheck more or click RESET EXCLUDED to restore.`;
+    } else {
+      stEl.textContent = '';
+    }
+  }
 }
 
 function downloadReorderPlanPdf(overrideOrder = null) {
@@ -4318,7 +5135,7 @@ function downloadReorderPlanPdf(overrideOrder = null) {
     alert('PDF generator library is still loading. Please try again.');
     return;
   }
-  const { selected, grouped, isSaved, order } = getGroupedReorderPlan(overrideOrder, false);
+  const { selected, grouped, isSaved, order } = getGroupedReorderPlan(overrideOrder, true);
   if (!selected.length) {
     alert('No approved products selected to download.');
     return;
@@ -4419,7 +5236,7 @@ async function downloadReorderPlanExcel(overrideOrder = null) {
     alert('Excel library is still loading. Please try again in a second.');
     return;
   }
-  const { selected, grouped, isSaved, order } = getGroupedReorderPlan(overrideOrder, false);
+  const { selected, grouped, isSaved, order } = getGroupedReorderPlan(overrideOrder, true);
   if (!selected.length) {
     alert('No approved products selected to export.');
     return;
@@ -4499,12 +5316,16 @@ async function loadPlanning() {
       state.planningActivity ? Promise.resolve(state.planningActivity) : api('/api/activity?start=2024-01-01&end=2099-12-31').catch(() => null),
       loadSavedPurchaseOrders(),
       loadAbDeliveries(),
+      loadSupplierCatalog(),
     ]);
     state.planning = planning;
     state.budget = budget;
     if (act) state.planningActivity = act;
   } catch {
     await Promise.all([loadSavedPurchaseOrders(), loadAbDeliveries()]);
+  }
+  if (IS_STATIC_GH && reconcileStaticOrdersWithDeliveries() > 0) {
+    await loadSavedPurchaseOrders();
   }
   renderPlanning();
 }
@@ -4606,10 +5427,43 @@ function updateOrderFundsSummaryUI(syncToInput = true) {
     `;
   }
   const budgetInp = document.getElementById('restockBudgetInput');
-  if (budgetInp && syncToInput) {
+  // Never wipe a budget the owner typed manually (e.g. ₱200,000) with the auto Net Order Budget (often ₱0)
+  if (budgetInp && syncToInput && !state.budgetManual) {
     budgetInp.value = formatMoneyInput(Math.max(0, t.netOrderBudget));
   }
 }
+
+// Persist manual budget cap so background sync / re-render can never silently remove it
+(function initBudgetPersistence() {
+  const inp = document.getElementById('restockBudgetInput');
+  if (!inp) return;
+  try {
+    const saved = Number(localStorage.getItem('ab_restock_budget_manual_v1')) || 0;
+    if (saved > 0) {
+      state.budgetManual = true;
+      inp.value = formatMoneyInput(saved);
+    }
+  } catch {}
+  inp.addEventListener('input', () => {
+    const v = parseMoneyInput(inp.value);
+    state.budgetManual = v > 0;
+    try {
+      if (v > 0) localStorage.setItem('ab_restock_budget_manual_v1', String(v));
+      else localStorage.removeItem('ab_restock_budget_manual_v1');
+    } catch {}
+  });
+  // Editing the Order Funds panel intentionally goes back to auto Net Order Budget
+  document.addEventListener('input', (e) => {
+    const t = e.target;
+    if (!t || t === inp) return;
+    const id = String(t.id || '');
+    const cls = String(t.className || '');
+    if (/^fund(Metrobank|Maribank|Gcash)$/.test(id) || /fund-(undep|cc|ded)-amt/.test(cls)) {
+      state.budgetManual = false;
+      try { localStorage.removeItem('ab_restock_budget_manual_v1'); } catch {}
+    }
+  }, true);
+})();
 
 function renderOrderFundsPanel() {
   const f = getOrderFundsState();
@@ -4871,6 +5725,7 @@ document.getElementById('addDeductionBtn')?.addEventListener('click', () => {
 
 document.getElementById('buildRestockPlanBtn')?.addEventListener('click', () => {
   state.previewOrderOverride = null;
+  state.previewUncheckedKeys = new Set();
   buildRestockDraftPlan();
   renderRestockCards();
   renderReorderPreviewModal();
@@ -4879,12 +5734,13 @@ document.getElementById('buildRestockPlanBtn')?.addEventListener('click', () => 
 
 document.getElementById('previewRestockPlanBtn')?.addEventListener('click', () => {
   state.previewOrderOverride = null;
+  state.previewUncheckedKeys = new Set();
   if (!state.restockPlan) buildRestockDraftPlan();
   renderReorderPreviewModal();
   document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
 });
 
-document.getElementById('saveNewRestockOrderBtn')?.addEventListener('click', createSavedOrderFromDraft);
+document.getElementById('saveNewRestockOrderBtn')?.addEventListener('click', () => createSavedOrderFromDraft());
 
 document.getElementById('restockPriorityMode')?.addEventListener('change', () => {
   buildRestockDraftPlan();
@@ -4898,6 +5754,8 @@ document.getElementById('restockTypeFilter')?.addEventListener('change', () => {
 
 document.querySelectorAll('input[name="restockSupplierMode"]').forEach((r) => {
   r.addEventListener('change', () => {
+    state.restockExcludedKeys = new Set();
+    state.previewUncheckedKeys = new Set();
     buildRestockDraftPlan();
     renderRestockCards();
   });
@@ -4928,7 +5786,115 @@ document.getElementById('reorderSelectAllChk')?.addEventListener('change', (e) =
   renderRestockCards();
 });
 
-document.getElementById('reorderShowCostsChk')?.addEventListener('change', renderReorderPreviewModal);
+document.getElementById('reorderShowCostsChk')?.addEventListener('change', () => renderReorderPreviewModal());
+document.getElementById('reorderCompareSuppliersChk')?.addEventListener('change', () => renderReorderPreviewModal());
+document.getElementById('reorderRebuildPlanBtn')?.addEventListener('click', () => {
+  if (!state.restockExcludedKeys) state.restockExcludedKeys = new Set();
+  if (!state.previewUncheckedKeys) state.previewUncheckedKeys = new Set();
+  if (state.previewUncheckedKeys.size === 0 && state.restockExcludedKeys.size === 0) {
+    const stEl = document.getElementById('reorderPreviewStatus');
+    if (stEl) {
+      stEl.style.color = '#b45309';
+      stEl.textContent = 'Uncheck item(s) not available at supplier first, then click BUILD PLAN AGAIN.';
+    }
+    return;
+  }
+  const newlyExcluded = state.previewUncheckedKeys.size;
+  for (const key of state.previewUncheckedKeys) {
+    state.restockExcludedKeys.add(key);
+  }
+  state.previewUncheckedKeys.clear();
+  state.previewOrderOverride = null;
+  buildRestockDraftPlan();
+  renderRestockCards();
+  renderReorderPreviewModal(
+    newlyExcluded > 0
+      ? `Rebuilt plan excluding ${newlyExcluded} unavailable item(s) — budget refilled with next available units ✓`
+      : 'Rebuilt plan with updated exclusions ✓'
+  );
+});
+document.getElementById('reorderSavePlanBtn')?.addEventListener('click', async () => {
+  const btn = document.getElementById('reorderSavePlanBtn');
+  if (btn) btn.textContent = 'SAVING...';
+  try {
+    await createSavedOrderFromDraft({ initialStatus: 'Draft', excludeUnchecked: true, openInPreview: true });
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    if (btn) btn.textContent = 'SAVE PLAN';
+  }
+});
+document.getElementById('reorderFinalizeOrderBtn')?.addEventListener('click', async () => {
+  const ord = state.previewOrderOverride;
+  if (!ord) return;
+  const btn = document.getElementById('reorderFinalizeOrderBtn');
+  if (btn) btn.textContent = 'FINALIZING...';
+  try {
+    // Flush any live cost edits currently typed into .reorder-saved-cost-inp
+    document.querySelectorAll('#reorderPreviewBody .reorder-saved-cost-inp').forEach((inp) => {
+      const idx = Number(inp.dataset.itemIdx);
+      const val = Math.max(0, Number(inp.value) || 0);
+      if (ord.items?.[idx]) {
+        ord.items[idx].unitCost = val;
+        if (ord.items[idx].receivedQty === undefined || ord.items[idx].receivedQty === null || ord.items[idx].receivedQty === '') {
+          ord.items[idx].receivedCost = val;
+        }
+      }
+    });
+
+    const nextStatus = 'Supplier Approved';
+    ord.status = nextStatus;
+    if (IS_STATIC_GH) {
+      const all = getLocalSavedOrders();
+      const idx = all.findIndex((o) => o.id === ord.id);
+      const updated = { ...ord, status: nextStatus, updatedAt: new Date().toISOString(), ...computeOrderSummaryMetrics(ord.items, nextStatus) };
+      if (idx >= 0) all[idx] = updated;
+      else all.unshift(updated);
+      setLocalSavedOrders(all);
+      reconcileStaticOrdersWithDeliveries(updated.id);
+      const reloaded = getLocalSavedOrders().find((o) => o.id === updated.id) || updated;
+      state.savedOrders = getLocalSavedOrders().map((o) => ({ ...o, ...computeOrderSummaryMetrics(o.items, o.status) }));
+      state.previewOrderOverride = reloaded;
+    } else {
+      const res = await api(`/api/purchase-orders/${encodeURIComponent(ord.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: nextStatus, items: ord.items, syncSupplierCosts: true }),
+      });
+      if (res?.order) state.previewOrderOverride = res.order;
+      await api(`/api/purchase-orders/${encodeURIComponent(ord.id)}/match-deliveries`, { method: 'POST', body: JSON.stringify({}) }).catch(() => null);
+      await loadSavedPurchaseOrders();
+      const latest = (state.savedOrders || []).find((o) => o.id === ord.id);
+      if (latest) state.previewOrderOverride = latest;
+    }
+
+    // Save edited item costs to each item's specific supplier in local state / backend
+    for (const it of (state.previewOrderOverride?.items || [])) {
+      const c = Number(it.unitCost) || 0;
+      if (!it.productId || it.approved === false || !(c > 0)) continue;
+      const supU = String(it.supplier || '').toUpperCase();
+      const patch = supU.includes('A&K') ? { costAk: c } : supU.includes('ONLINE') ? { costOnline: c } : { costAb: c };
+      await saveProductSupplierCosts(it.productId, patch).catch(() => null);
+    }
+
+    renderSavedOrdersPanel();
+    renderInventory();
+    buildRestockDraftPlan();
+    renderRestockCards();
+    renderReorderPreviewModal(`Finalized as Ordered (${ord.id}) ✓ — Supplier costs synced & pending deliveries will compare with AB Web.`);
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    if (btn) btn.textContent = 'FINALIZE AS ORDERED';
+  }
+});
+document.getElementById('reorderResetExcludedBtn')?.addEventListener('click', () => {
+  state.restockExcludedKeys = new Set();
+  state.previewUncheckedKeys = new Set();
+  state.previewOrderOverride = null;
+  buildRestockDraftPlan();
+  renderRestockCards();
+  renderReorderPreviewModal('Restored all previously excluded units ✓');
+});
 document.getElementById('closeReorderPreviewBtn')?.addEventListener('click', () => {
   document.getElementById('reorderPreviewModal')?.classList.add('hidden');
 });
@@ -4957,6 +5923,22 @@ document.getElementById('reorderCopyBtn')?.addEventListener('click', async () =>
 
 function renderCostCompareTool() {
   if (!state.inventory) return;
+  const abCatCount = state.abSupplierCatalog?.entries?.length || 0;
+  const abBadge = document.getElementById('abSupplierCatalogBadge');
+  if (abBadge) {
+    abBadge.textContent = abCatCount > 0 ? `(${abCatCount} • ${state.abSupplierCatalog?.stockDate || 'Nov 23'})` : '';
+  }
+  const abSubjCount = (state.inventory?.items || []).filter((it) => it.lifecycle_status === 'Subject to Phaseout').length;
+  const abPhasedBadge = document.getElementById('abPhaseoutTrackerBadge');
+  if (abPhasedBadge) {
+    abPhasedBadge.textContent = abSubjCount > 0 ? `(${abSubjCount})` : '';
+  }
+  if (state.activeCcView === 'supplierCatalog') {
+    renderAbSupplierCatalogView();
+  }
+  if (state.activeCcView === 'phaseoutTracker') {
+    renderSubjectToPhaseoutTracker();
+  }
   const search = (document.getElementById('costCompareSearch')?.value || '').trim().toLowerCase();
   const typeFilter = document.getElementById('costCompareType')?.value || 'Cellphones';
   const stockFilter = document.getElementById('costCompareStockFilter')?.value || 'IN_STOCK';
@@ -4972,7 +5954,7 @@ function renderCostCompareTool() {
   const supplierWins = { 'AB Main Supplier': 0, 'A&K': 0, 'Online Purchase': 0 };
 
   for (const item of items) {
-    if ((item.lifecycle_status || 'Active') !== 'Active') continue;
+    if (!['Active', 'Subject to Phaseout'].includes(item.lifecycle_status || 'Active')) continue;
     const pType = item.product_type || 'Cellphones';
     if (typeFilter !== 'ALL' && pType !== typeFilter) continue;
 
@@ -5141,9 +6123,13 @@ function renderCostCompareTool() {
             ? `<strong>${fmtCurrency(r.srp)}</strong><div class="small" style="color:${marginColor};font-weight:700;">${r.srpMarginPct !== null ? `${r.srpMarginPct.toFixed(1)}% SRP • ${r.cashMarginPct.toFixed(1)}% Cash` : '—'}</div>`
             : '<span class="muted">—</span>';
 
+          const ccProdObj = state.inventory?.items?.find((i) => i.id === r.id);
+          const ccSubjBadge = ccProdObj?.lifecycle_status === 'Subject to Phaseout'
+            ? '<span class="badge badge-warn" style="margin-left:4px;font-size:10px;">Subject to Phaseout</span>'
+            : '';
           return `
             <tr data-pid="${r.id}">
-              <td><strong>${r.displayModel}</strong><div class="small muted">${r.sku} • ${r.totalAvail} avail</div></td>
+              <td><strong>${r.displayModel}</strong>${ccSubjBadge}<div class="small muted">${r.sku} • ${r.totalAvail} avail</div></td>
               <td>${priceMarginHtml}</td>
               <td><strong>${r.webCost > 0 ? fmtCurrency(r.webCost) : '—'}</strong></td>
               <td>${fmtCell(r.cAb, r.webCost, 'cc-ab-inp', r.id)}</td>
@@ -5177,8 +6163,8 @@ function renderCostCompareTool() {
           renderRestockCards();
         }
       } catch (err) {
-        btn.textContent = 'Err';
-        alert(err.message);
+        btn.textContent = err?.isAuthHandled ? 'Retry' : 'Err';
+        if (!err?.isAuthHandled) alert(err.message);
       }
     });
   });
@@ -5192,6 +6178,442 @@ document.getElementById('costCompareSort')?.addEventListener('change', renderCos
 document.getElementById('applyCostPriorityRestockBtn')?.addEventListener('click', () => {
   const restockBtn = document.querySelector('.inv-tool-btn[data-tool="restock"]');
   if (restockBtn) restockBtn.click();
+});
+
+const escAbHtml = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+function parseAbSupplierStockTextClient(rawText, defaultDate = '2026-11-23') {
+  const extractDate = (txt, fallback) => {
+    const m = String(txt || '').match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})\s*,\s*(20\d{2})\b/i);
+    if (m) {
+      const mm = { january: '01', february: '02', march: '03', april: '04', may: '05', june: '06', july: '07', august: '08', september: '09', october: '10', november: '11', december: '12' }[m[1].toLowerCase()];
+      if (mm) return `${m[3]}-${mm}-${String(parseInt(m[2], 10)).padStart(2, '0')}`;
+    }
+    const iso = String(txt || '').match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+    return iso ? iso[1] : fallback;
+  };
+  const cleanL = (l) => String(l || '')
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\uFE0F]/gu, ' ')
+    .replace(/[✅🛑⛄📢🧑🎄🌈⚠️❗🤳⌚🥳*]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const cleanTitle = (l) => String(l || '')
+    .replace(/\(\s*(?:NEW MODEL|LIMITED|NEW PRICE)\s*\)/gi, ' ')
+    .replace(/\b(?:NEW PRICE|NEW MODEL)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const lines = String(rawText || '').replace(/\r/g, '').split('\n');
+  const defaultStockDate = extractDate(rawText, defaultDate);
+  let currentBrand = 'INFINIX';
+  let currentCategory = 'Smartphones';
+  let sectionDate = defaultStockDate;
+  let pendingModel = '';
+  let pendingNotes = [];
+  let lastParsed = null;
+  const results = [];
+
+  for (const rawLine of lines) {
+    const trimmedRaw = rawLine.trim();
+    if (!trimmedRaw || /^_{4,}$/.test(trimmedRaw)) { pendingModel = ''; pendingNotes = []; continue; }
+    const line = cleanL(trimmedRaw);
+    if (!line) continue;
+    const up = line.toUpperCase();
+    if (/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}\s*,\s*20\d{2}\b/i.test(line)) {
+      sectionDate = extractDate(line, defaultStockDate);
+    }
+    if (/POCO STOCK UPDATE|POCO SMARTPHONES/i.test(up)) { currentBrand = 'POCO'; currentCategory = 'Smartphones'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/OPPO STOCKS|OPPO SMARTPHONES/i.test(up)) { currentBrand = 'OPPO'; currentCategory = 'Smartphones'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/OPPO AIOT/i.test(up)) { currentBrand = 'OPPO'; currentCategory = 'AIOT & Accessories'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/INFINIX SMARTPHONES|INFINIX MOBILE/i.test(up)) { currentBrand = 'INFINIX'; currentCategory = 'Smartphones'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/TABLETS\s*&\s*LAPTOPS/i.test(up)) { currentBrand = 'INFINIX'; currentCategory = 'Tablets & Laptops'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/INFINIX SMART TV/i.test(up)) { currentBrand = 'INFINIX'; currentCategory = 'Smart TV'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/AIOT\s*&\s*ACCESSORIES/i.test(up)) { currentBrand = 'INFINIX'; currentCategory = 'AIOT & Accessories'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (up === 'ANKER') { currentBrand = 'ANKER'; currentCategory = 'Anker'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/TECNO STOCK|TECNO SMARTPHONES/i.test(up)) { currentBrand = 'TECNO'; currentCategory = 'Smartphones'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/ITEL STOCK|ITEL SMARTPHONES/i.test(up)) { currentBrand = 'ITEL'; currentCategory = 'Smartphones'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/REALME STOCK|REALME SMARTPHONES/i.test(up)) { currentBrand = 'REALME'; currentCategory = 'Smartphones'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/^(check out our|thank you|happy selling|good day|available .* stocks|sharing our|blissful|anna liza|br,|(poco|oppo|infinix|tecno|realme|itel)\s*\|\s*tecnix)/i.test(line)) {
+      pendingModel = ''; pendingNotes = []; continue;
+    }
+    if (trimmedRaw.startsWith('⚠️') && lastParsed && !/\bDP\b/i.test(line)) {
+      lastParsed.colorsNotes = lastParsed.colorsNotes ? `${lastParsed.colorsNotes} | ${line}` : line;
+      continue;
+    }
+    const beforeSrp = line.split(/\b(?:NEW\s+)?SRP\b/i)[0];
+    const dpMatch = beforeSrp.match(/\b(?:NEW\s+)?DP\s*[:\-–]\s*([0-9][0-9,\s]*(?:\.[0-9]+)?)/i);
+    if (dpMatch) {
+      const dpCost = Math.round(Number(dpMatch[1].replace(/[,\s]+/g, '')) * 100) / 100;
+      const rawModel = pendingModel || line.split(/\b(?:NEW\s+)?DP\s*[:\-–]/i)[0].trim();
+      if (Number.isFinite(dpCost) && dpCost > 0 && rawModel) {
+        let modelName = rawModel.replace(/^[-•–*]+\s*/, '').trim();
+        const mu = modelName.toUpperCase();
+        if (currentBrand === 'OPPO' && !mu.startsWith('OPPO ')) modelName = `OPPO ${modelName}`;
+        else if (currentBrand === 'POCO' && !mu.startsWith('POCO ')) modelName = `POCO ${modelName}`;
+        else if (currentBrand === 'ANKER' && !mu.startsWith('ANKER ') && !mu.startsWith('SOUNDCORE ')) modelName = `ANKER ${modelName}`;
+        else if (currentBrand === 'INFINIX' && currentCategory === 'Smartphones' && !mu.startsWith('INFINIX ')) modelName = `INFINIX ${modelName}`;
+        if (/WATCH\s+S\b/i.test(modelName) && pendingNotes.length) {
+          modelName = `${modelName} - ${pendingNotes[0].replace(/\s*\(LIMITED\)\s*/gi, '').trim()}`;
+        }
+        const entry = { brand: currentBrand, category: currentCategory, modelName, dpCost, colorsNotes: pendingNotes.join(' | '), stockDate: sectionDate || defaultStockDate };
+        results.push(entry);
+        lastParsed = entry;
+      }
+      pendingModel = ''; pendingNotes = [];
+      continue;
+    }
+    if (/^\b(?:NEW\s+)?SRP\s*[:\-–]/i.test(line)) continue;
+    if (!pendingModel || /^[✅🛑⛄*]/.test(trimmedRaw)) {
+      pendingModel = cleanTitle(line);
+      pendingNotes = [];
+      lastParsed = null;
+    } else {
+      pendingNotes.push(line);
+    }
+  }
+  const dedup = new Map();
+  for (const r of results) dedup.set(r.modelName.toUpperCase(), r);
+  return Array.from(dedup.values());
+}
+
+function matchSupplierEntryToProductsClient(entry, products) {
+  const validProducts = (products || []).filter((p) => !/\bREPO\b|\bREPAIRED\b|\bLDU\b|FREEBIE|FREE BUNDLE|\bFREE\b|\bDEMO\b/.test(`${p.name || ''} ${p.model || ''}`.toUpperCase()));
+  const normK = (s) => String(s || '').toLowerCase().replace(/\(repo\)|\(repaired.*?\)|\(ldu\)|\(limited\)|\(new model\)/gi, ' ').replace(/\bbt\b/gi, 'bluetooth').replace(/(\d+)\s*gb\b/gi, '$1').replace(/(\d+)\s*[+/]\s*(\d+)/g, ' $1_$2 ').replace(/[^a-z0-9_]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const compK = (s) => normK(s).replace(/[_ ]+/g, '');
+  const aliases = {
+    pocom8s5g8256: ['prd-poco-85'], pocom8s5g8gb256gb: ['prd-poco-85'],
+    infinixgt50pro12256: ['prd-infinix-021'], infinixgt50pro12256gb: ['prd-infinix-021'],
+    xpad20pro8256: ['prd-infinix-098', 'prd-xpad-098'], xpad20pro8256gb: ['prd-infinix-098', 'prd-xpad-098'],
+    infinixxpad20pro8256: ['prd-infinix-098', 'prd-xpad-098'], xpad30ebtkeyboard: ['prd-xpad-099'],
+    xwatchh4xw4l: ['prd-infinix-058'], smartwatchh5proxw5p: ['prd-infinix-032'],
+    xwatchn5pro: ['prd-infinix-031'], gtwatch5pro: ['prd-watch-019'],
+  };
+  const cEntry = compK(entry.modelName);
+  if (aliases[cEntry]) {
+    const m = validProducts.filter((p) => aliases[cEntry].includes(p.id));
+    if (m.length) return m;
+  }
+  const tk = normK(entry.modelName);
+  const ramRom = tk.match(/\b\d+_\d+\b/g) || [];
+  const brandU = String(entry.brand || '').toUpperCase();
+  const brandPool = validProducts.filter((p) => {
+    const tu = `${p.brand || ''} ${p.model || ''} ${p.name || ''}`.toUpperCase();
+    if (brandU === 'POCO') return tu.includes('POCO');
+    if (brandU === 'OPPO') return tu.includes('OPPO');
+    if (brandU === 'ANKER') return tu.includes('ANKER') || tu.includes('SOUNDCORE');
+    if (brandU === 'INFINIX') return tu.includes('INFINIX') || tu.includes('XPAD') || tu.includes('XBOOK') || tu.includes('GTBOOK') || tu.includes('XWATCH') || tu.includes('XBUDS');
+    return !brandU || tu.includes(brandU);
+  });
+  const exact = brandPool.filter((p) => compK(`${p.brand || ''} ${p.model || ''}`) === cEntry || compK(p.name) === cEntry);
+  if (exact.length) return exact;
+  const words = tk.split(' ').filter((w) => w && !/^\d+_\d+$/.test(w) && !['poco', 'oppo', 'infinix', 'anker', 'tecno', 'realme', 'itel', '5g', '4g', 'bt', 'limited'].includes(w));
+  if (!words.length) return [];
+  return brandPool.filter((p) => {
+    const pk = normK(`${p.brand || ''} ${p.model || ''} ${p.name || ''}`);
+    const pw = new Set(pk.split(' '));
+    const pr = pk.match(/\b\d+_\d+$|\b\d+_\d+\b/g) || [];
+    if (ramRom.length) { for (const rr of ramRom) if (!pr.includes(rr)) return false; } else if (pr.length) return false;
+    if (/KEYBOARD|CASE|PENCIL/i.test(entry.modelName)) {
+      const extra = pk.split(' ').filter((w) => w && !['infinix', 'oppo', 'poco', 'tecno', 'bt', 'bluetooth', 'keyboard', 'case'].includes(w) && !words.includes(w));
+      if (extra.some((w) => /\d/.test(w))) return false;
+    }
+    return words.every((w) => pw.has(w));
+  });
+}
+
+async function loadSupplierCatalog() {
+  try {
+    const res = await api('/api/supplier-catalog');
+    const byProductId = new Map();
+    for (const e of (res.entries || [])) {
+      if (e.matchedProductId) byProductId.set(e.matchedProductId, e);
+    }
+    state.abSupplierCatalog = { stockDate: res.stockDate || '', entries: res.entries || [], byProductId };
+    const abBadge = document.getElementById('abSupplierCatalogBadge');
+    if (abBadge) {
+      abBadge.textContent = state.abSupplierCatalog.entries.length > 0
+        ? `(${state.abSupplierCatalog.entries.length} • ${state.abSupplierCatalog.stockDate || 'Nov 23'})`
+        : '';
+    }
+    if (state.activeCcView === 'supplierCatalog') renderAbSupplierCatalogView();
+  } catch {}
+}
+
+function renderAbSupplierCatalogView() {
+  const catalog = state.abSupplierCatalog || { stockDate: '', entries: [] };
+  const entries = catalog.entries || [];
+  const search = (document.getElementById('abCatSearch')?.value || '').trim().toLowerCase();
+  const brandFilter = document.getElementById('abCatBrandFilter')?.value || 'ALL';
+  const matchFilter = document.getElementById('abCatMatchFilter')?.value || 'ALL';
+
+  const brandSel = document.getElementById('abCatBrandFilter');
+  if (brandSel && entries.length) {
+    const existingOpts = new Set(Array.from(brandSel.options).map((o) => o.value));
+    for (const b of [...new Set(entries.map((e) => e.brand).filter(Boolean))]) {
+      if (!existingOpts.has(b)) {
+        const opt = document.createElement('option');
+        opt.value = b;
+        opt.textContent = b;
+        brandSel.appendChild(opt);
+      }
+    }
+  }
+
+  const invMap = new Map((state.inventory?.items || []).map((i) => [i.id, i]));
+  const branches = state.inventory?.branches || [];
+  const enriched = entries.map((e) => {
+    const prod = e.matchedProductId ? invMap.get(e.matchedProductId) : null;
+    const basePrice = prod ? Number(prod.base_price) || 0 : Number(e.basePrice) || 0;
+    const cashPrice = basePrice > 0 ? Math.round(basePrice * 0.95) : 0;
+    const dp = Number(e.dpCost) || 0;
+    const marginPhp = basePrice > 0 && dp > 0 ? basePrice - dp : null;
+    const marginPct = basePrice > 0 && dp > 0 ? ((basePrice - dp) / basePrice) * 100 : null;
+    const lifecycleStatus = prod ? (prod.lifecycle_status || 'Active') : (e.lifecycleStatus || '');
+    const totalAvail = prod
+      ? branches.reduce((s, b) => s + (Number(prod.byBranch?.[b.id]?.qtyAvailable) || 0), 0)
+      : Number(e.totalAvail) || 0;
+    return { ...e, basePrice, cashPrice, dp, marginPhp, marginPct, lifecycleStatus, totalAvail };
+  });
+
+  const matchedCount = enriched.filter((e) => e.matchedProductId).length;
+  const unmatchedCount = enriched.length - matchedCount;
+  const activeMatchedCount = enriched.filter((e) => e.matchedProductId && e.lifecycleStatus === 'Active').length;
+  const sumGrid = document.getElementById('abSupplierCatalogSummaryGrid');
+  if (sumGrid) {
+    sumGrid.innerHTML = `
+      <div class="summary-box">AB SUPPLIER ITEMS (${escAbHtml(catalog.stockDate || 'Nov 23')})<strong>${fmtNum(enriched.length)}</strong></div>
+      <div class="summary-box">SYNCED TO AB WEB PRODUCTS<strong style="color:var(--green);">${fmtNum(matchedCount)} (${fmtNum(activeMatchedCount)} Active)</strong></div>
+      <div class="summary-box">WAITING FOR AB WEB INPUT<strong style="color:var(--gold-bright);">${fmtNum(unmatchedCount)}</strong></div>
+      <div class="summary-box">SELLING PRICE SOURCE<strong>AB Web Current Prices (SRP Ignored)</strong></div>
+    `;
+  }
+
+  const filtered = enriched.filter((e) => {
+    if (brandFilter !== 'ALL' && e.brand !== brandFilter) return false;
+    if (matchFilter === 'MATCHED' && !e.matchedProductId) return false;
+    if (matchFilter === 'UNMATCHED' && e.matchedProductId) return false;
+    if (search) {
+      const hay = `${e.brand} ${e.category} ${e.modelName} ${e.colorsNotes} ${e.productName} ${e.productSku}`.toLowerCase();
+      if (!hay.includes(search)) return false;
+    }
+    return true;
+  });
+
+  const tbody = document.querySelector('#abSupplierCatalogTable tbody');
+  if (!tbody) return;
+  tbody.innerHTML = filtered.length
+    ? filtered
+        .map((e) => {
+          const sellHtml = e.basePrice > 0
+            ? `<strong>${fmtCurrency(e.basePrice)}</strong><div class="small muted">Cash (-5%): ${fmtCurrency(e.cashPrice)}</div>`
+            : e.matchedProductId
+              ? '<span class="muted small">AB Web ₱0</span>'
+              : '<span class="muted small">Waiting for AB Web price (SRP ignored)</span>';
+          const marginColor = e.marginPct === null ? 'var(--muted)' : e.marginPct >= 10 ? 'var(--green)' : e.marginPct >= 5 ? 'var(--gold-bright)' : '#f87171';
+          const marginHtml = e.marginPct !== null
+            ? `<strong style="color:${marginColor};">${e.marginPct.toFixed(1)}%</strong><div class="small" style="color:${marginColor};">${e.marginPhp >= 0 ? '+' : ''}${fmtCurrency(e.marginPhp)}</div>`
+            : '<span class="muted">—</span>';
+          const statusHtml = e.matchedProductId
+            ? e.lifecycleStatus === 'Active'
+              ? `<span class="badge badge-ok">On AB Web • Active</span><div class="small muted">${escAbHtml(e.productName)} (${fmtNum(e.totalAvail)} avail)</div>`
+              : `<span class="badge badge-warn">${escAbHtml(e.lifecycleStatus || 'Phaseout on AB Web')}</span><div class="small muted">${escAbHtml(e.productName)}</div>${e.basePrice >= e.dp ? `<button type="button" class="secondary ab-cat-reactivate-btn" data-pid="${escAbHtml(e.matchedProductId)}" style="margin-top:4px;padding:2px 8px;font-size:10.5px;min-height:0;">Reactivate</button>` : '<div class="small" style="color:#f59e0b;">Note: AB Web price below new DP</div>'}`
+            : '<span class="badge" style="background:rgba(59,130,246,0.18);color:#93c5fd;">Waiting for AB Web Input</span><div class="small muted">DP recorded — links automatically once added on AB Web</div>';
+
+          return `
+            <tr>
+              <td><strong>${escAbHtml(e.brand)}</strong><div class="small muted">${escAbHtml(e.category)}</div></td>
+              <td><strong>${escAbHtml(e.modelName)}</strong>${e.colorsNotes ? `<div class="small" style="color:#34d399;margin-top:2px;">${escAbHtml(e.colorsNotes)}</div>` : ''}</td>
+              <td><strong style="color:var(--gold-bright);">${fmtCurrency(e.dp)}</strong><div class="small muted">Updated ${escAbHtml(e.stockDate || '2026-11-23')}</div></td>
+              <td>${sellHtml}</td>
+              <td>${marginHtml}</td>
+              <td>${statusHtml}</td>
+            </tr>
+          `;
+        })
+        .join('')
+    : '<tr><td colspan="6" class="muted">No AB supplier items match the current filter.</td></tr>';
+
+  tbody.querySelectorAll('.ab-cat-reactivate-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const pid = btn.dataset.pid;
+      const prod = state.inventory?.items?.find((i) => i.id === pid);
+      if (prod) { prod.lifecycle_status = 'Active'; prod.supplier_missing_since = ''; }
+      try {
+        await api('/api/products/lifecycle', { method: 'PATCH', body: JSON.stringify({ productIds: [pid], status: 'Active' }) });
+      } catch (err) {
+        alert(err.message);
+      }
+      renderAbSupplierCatalogView();
+      renderCostCompareTool();
+      if (state.restockPlan) { buildRestockDraftPlan(); renderRestockCards(); }
+    });
+  });
+}
+
+function renderSubjectToPhaseoutTracker() {
+  const items = state.inventory?.items || [];
+  const branches = state.inventory?.branches || [];
+  const todayIso = manilaTodayClient();
+  const tracked = items
+    .filter((p) => p.lifecycle_status === 'Subject to Phaseout' || (p.lifecycle_status === 'Phaseout / Do Not Reorder' && p.supplier_missing_since))
+    .map((p) => {
+      const totalAvail = branches.reduce((s, b) => s + (Number(p.byBranch?.[b.id]?.qtyAvailable) || 0), 0);
+      const missingSince = p.supplier_missing_since || '2026-11-23';
+      const deadline = addMonthsIsoClient(missingSince, 3);
+      const elapsedDays = daysBetweenIsoClient(missingSince, todayIso);
+      const daysLeft = deadline ? Math.max(0, daysBetweenIsoClient(todayIso, deadline)) : 0;
+      const isPhasedOut = p.lifecycle_status === 'Phaseout / Do Not Reorder';
+      return { ...p, totalAvail, missingSince, deadline, elapsedDays, daysLeft, isPhasedOut };
+    })
+    .sort((a, b) => (a.isPhasedOut !== b.isPhasedOut ? (a.isPhasedOut ? 1 : -1) : b.totalAvail - a.totalAvail || a.name.localeCompare(b.name)));
+
+  const subjOnly = tracked.filter((x) => !x.isPhasedOut);
+  const autoPhased = tracked.filter((x) => x.isPhasedOut);
+  const withStock = subjOnly.filter((x) => x.totalAvail > 0).length;
+
+  const sumEl = document.getElementById('abPhaseoutSummaryGrid');
+  if (sumEl) {
+    sumEl.innerHTML = `
+      <div class="summary-box">SUBJECT TO PHASEOUT (&lt; 3 MOS)<strong style="color:#fbbf24;">${fmtNum(subjOnly.length)}</strong></div>
+      <div class="summary-box">SELLABLE IN-STOCK LEFT<strong>${fmtNum(withStock)} models</strong></div>
+      <div class="summary-box">AUTO-PHASED OUT (&ge; 3 MOS)<strong style="color:#f87171;">${fmtNum(autoPhased.length)}</strong></div>
+      <div class="summary-box">RESTOCK PROTECTION<strong>Excluded from New Reorders</strong></div>
+    `;
+  }
+
+  const tbody = document.querySelector('#abPhaseoutTrackerTable tbody');
+  if (!tbody) return;
+  tbody.innerHTML = tracked.length
+    ? tracked
+        .map((p) => {
+          const dispName = formatSwapModelName({ brand: p.brand || '', model: p.model || p.name });
+          const lastCost = Number(p.cost_ab) || Number(p.cost_price) || 0;
+          const deadlineHtml = p.isPhasedOut
+            ? `<span style="color:#f87171;font-weight:700;">Passed 3 months (since ${escAbHtml(p.missingSince)})</span>`
+            : `<strong>Since ${escAbHtml(p.missingSince)}</strong><div class="small muted">Auto-phaseout: ${escAbHtml(p.deadline || '—')} (${fmtNum(p.daysLeft)}d left)</div>`;
+          const statusHtml = p.isPhasedOut
+            ? '<span class="badge" style="background:rgba(239,68,68,0.18);color:#f87171;">Phaseout / Do Not Reorder</span>'
+            : '<span class="badge badge-warn">Subject to Phaseout</span>';
+          const actionsHtml = p.isPhasedOut
+            ? `<button type="button" class="secondary ph-restore-btn" data-pid="${escAbHtml(p.id)}" style="padding:3px 8px;font-size:11px;min-height:0;">Restore Active</button>`
+            : `<div style="display:flex;gap:4px;flex-wrap:wrap;"><button type="button" class="secondary ph-restore-btn" data-pid="${escAbHtml(p.id)}" style="padding:3px 8px;font-size:11px;min-height:0;">Keep Active</button><button type="button" class="danger ph-force-btn" data-pid="${escAbHtml(p.id)}" style="padding:3px 8px;font-size:11px;min-height:0;">Phaseout Now</button></div>`;
+          return `
+            <tr>
+              <td><strong>${escAbHtml(dispName)}</strong><div class="small muted">${escAbHtml(p.brand)} • ${escAbHtml(p.product_type || 'Cellphones')} • ${escAbHtml(p.sku || '')}</div></td>
+              <td><strong>${fmtNum(p.totalAvail)} pcs</strong></td>
+              <td><strong>${p.base_price > 0 ? fmtCurrency(p.base_price) : '—'}</strong><div class="small muted">Last Cost: ${lastCost > 0 ? fmtCurrency(lastCost) : '—'}</div></td>
+              <td>${deadlineHtml}</td>
+              <td>${statusHtml}</td>
+              <td>${actionsHtml}</td>
+            </tr>
+          `;
+        })
+        .join('')
+    : '<tr><td colspan="6" class="muted">No products currently flagged as Subject to Phaseout.</td></tr>';
+
+  const setLc = async (pid, nextStatus) => {
+    const prod = state.inventory?.items?.find((i) => i.id === pid);
+    if (prod) {
+      prod.lifecycle_status = nextStatus;
+      if (nextStatus === 'Active') prod.supplier_missing_since = '';
+    }
+    try {
+      await api('/api/products/lifecycle', { method: 'PATCH', body: JSON.stringify({ productIds: [pid], status: nextStatus }) });
+    } catch (err) {
+      alert(err.message);
+    }
+    renderCostCompareTool();
+    renderInventory();
+    if (state.restockPlan) { buildRestockDraftPlan(); renderRestockCards(); }
+  };
+
+  tbody.querySelectorAll('.ph-restore-btn').forEach((b) => b.addEventListener('click', () => setLc(b.dataset.pid, 'Active')));
+  tbody.querySelectorAll('.ph-force-btn').forEach((b) => b.addEventListener('click', () => setLc(b.dataset.pid, 'Phaseout / Do Not Reorder')));
+}
+
+document.querySelectorAll('.cc-subview-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    state.activeCcView = btn.dataset.ccview || 'compare';
+    document.querySelectorAll('.cc-subview-btn').forEach((b) => {
+      const active = b.dataset.ccview === state.activeCcView;
+      b.classList.toggle('active', active);
+      b.classList.toggle('secondary', !active);
+    });
+    document.getElementById('ccView-compare')?.classList.toggle('hidden', state.activeCcView !== 'compare');
+    document.getElementById('ccView-supplierCatalog')?.classList.toggle('hidden', state.activeCcView !== 'supplierCatalog');
+    document.getElementById('ccView-phaseoutTracker')?.classList.toggle('hidden', state.activeCcView !== 'phaseoutTracker');
+    if (state.activeCcView === 'supplierCatalog') renderAbSupplierCatalogView();
+    if (state.activeCcView === 'phaseoutTracker') renderSubjectToPhaseoutTracker();
+  });
+});
+
+document.getElementById('abCatSearch')?.addEventListener('input', renderAbSupplierCatalogView);
+document.getElementById('abCatBrandFilter')?.addEventListener('change', renderAbSupplierCatalogView);
+document.getElementById('abCatMatchFilter')?.addEventListener('change', renderAbSupplierCatalogView);
+
+document.getElementById('openAbSupplierPasteBtn')?.addEventListener('click', () => {
+  document.getElementById('abSupplierPasteBox')?.classList.toggle('hidden');
+});
+document.getElementById('closeAbSupplierPasteBtn')?.addEventListener('click', () => {
+  document.getElementById('abSupplierPasteBox')?.classList.add('hidden');
+});
+
+document.getElementById('previewAbSupplierPasteBtn')?.addEventListener('click', async () => {
+  const rawText = document.getElementById('abSupplierPasteText')?.value || '';
+  const statusEl = document.getElementById('abSupplierPasteStatus');
+  const prevEl = document.getElementById('abSupplierPastePreview');
+  if (!rawText.trim()) {
+    if (statusEl) statusEl.textContent = 'Paste AB supplier text first.';
+    return;
+  }
+  try {
+    const res = await api('/api/supplier-catalog/import', {
+      method: 'POST',
+      body: JSON.stringify({ rawText, dryRun: true }),
+    });
+    const matchedEntries = (res.entries || []).filter((e) => (e.matched || []).length > 0);
+    if (statusEl) {
+      statusEl.textContent = `Parsed ${res.entries?.length || 0} supplier items • ${matchedEntries.length} match existing AB Web products (selling prices preserved).`;
+    }
+    if (prevEl) {
+      prevEl.classList.remove('hidden');
+      prevEl.innerHTML = matchedEntries.length
+        ? matchedEntries.map((e) => e.matched.map((m) => `<div><strong>${escAbHtml(m.name)}</strong>: Old AB ${m.prevAb ? fmtCurrency(m.prevAb) : '—'} → <strong style="color:var(--gold-bright);">${fmtCurrency(m.nextAb)}</strong> <span class="muted">(AB Web Selling: ${fmtCurrency(m.basePrice)})</span></div>`).join('')).join('')
+        : '<div class="muted">No existing AB Web product matches yet; all parsed items will still save into AB Supplier Stock & DP Catalog.</div>';
+    }
+  } catch (err) {
+    if (statusEl) statusEl.textContent = err.message;
+  }
+});
+
+document.getElementById('applyAbSupplierPasteBtn')?.addEventListener('click', async () => {
+  const rawText = document.getElementById('abSupplierPasteText')?.value || '';
+  const stockDate = document.getElementById('abSupplierDateInp')?.value || '';
+  const statusEl = document.getElementById('abSupplierPasteStatus');
+  if (!rawText.trim()) {
+    if (statusEl) statusEl.textContent = 'Paste AB supplier text first.';
+    return;
+  }
+  try {
+    const res = await api('/api/supplier-catalog/import', {
+      method: 'POST',
+      body: JSON.stringify({ rawText, stockDate }),
+    });
+    await loadInventory();
+    await loadSupplierCatalog();
+    renderCostCompareTool();
+    if (state.restockPlan) {
+      buildRestockDraftPlan();
+      renderRestockCards();
+    }
+    if (statusEl) {
+      statusEl.style.color = '#34d399';
+      statusEl.textContent = `Applied ${res.importedCount} items (${res.updatedProductsCount} synced to AB Web, ${res.waitingCount || 0} waiting for AB Web, ${res.subjectToPhaseoutCount || 0} subject to phaseout${res.autoPhasedOutCount ? `, ${res.autoPhasedOutCount} auto-phased out` : ''})!`;
+    }
+    document.getElementById('abSupplierPastePreview')?.classList.add('hidden');
+  } catch (err) {
+    if (statusEl) statusEl.textContent = err.message;
+  }
 });
 
 async function loadCustomers() {
@@ -6039,13 +7461,18 @@ document.getElementById('catSelectAllVisible').addEventListener('change', async 
 
 document.querySelectorAll('.publish-github-btn').forEach((btn) => {
   btn.addEventListener('click', async () => {
+    if (IS_STATIC_GH && btn.closest('#tab-staffPins')) {
+      document.getElementById('saveStaffPinsBtn')?.click();
+      return;
+    }
     const origText = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Publishing...';
     const catMsg = document.getElementById('publishCatalogMsg');
     const photoMsg = document.getElementById('photoMsg');
     try {
-      const res = await api('/api/catalog/publish-github', { method: 'POST', body: '{}' });
+      const publishStaffOnly = btn.parentElement?.querySelector('#saveStaffPinsBtn') || btn.textContent.includes('Publish PINs');
+      const res = await api(publishStaffOnly ? '/api/staff-pins/publish' : '/api/catalog/publish-github', { method: 'POST', body: '{}' });
       if (catMsg) catMsg.textContent = res.message;
       if (photoMsg) photoMsg.textContent = res.message;
       btn.textContent = '✓ Published!';
@@ -6054,7 +7481,7 @@ document.querySelectorAll('.publish-github-btn').forEach((btn) => {
       const errText = `Publish failed: ${err.message}`;
       if (catMsg) catMsg.textContent = errText;
       if (photoMsg) photoMsg.textContent = errText;
-      alert(errText);
+      if (!err?.isAuthHandled) alert(errText);
       btn.textContent = origText;
     } finally {
       btn.disabled = false;
@@ -9258,10 +10685,11 @@ function applyRolePermissions() {
         <option value="unavailable">Unavailable</option>
       `;
       stockViewSel.value = curVal === 'unavailable' ? 'unavailable' : 'available';
-    } else if (stockViewSel.options.length < 5) {
+    } else if (stockViewSel.options.length < 6) {
       stockViewSel.innerHTML = `
         <option value="available">Available phones</option>
-        <option value="phaseout">Phaseout products (include 0)</option>
+        <option value="subject_phaseout">Subject to Phaseout (&lt; 3 mos)</option>
+        <option value="phaseout">Phaseout / Do Not Reorder (incl. 0)</option>
         <option value="all">All products, incl. unavailable</option>
         <option value="unavailable">Unavailable</option>
         <option value="reorder">Reorder suggestions</option>
@@ -9488,6 +10916,14 @@ async function publishStaffPinsViaGhApi(token, jsonText) {
   }
 }
 
+document.getElementById('ghPublishTokenInput')?.addEventListener('change', (e) => {
+  const v = String(e.target.value || '').trim();
+  if (v) {
+    localStorage.setItem('bs_gh_pub_token', v);
+    if (IS_STATIC_GH) pushPhoneOrdersToGh().catch(() => {});
+  }
+});
+
 document.getElementById('saveStaffPinsBtn')?.addEventListener('click', async () => {
   const msg = document.getElementById('staffPinsMsg');
   const keys = [
@@ -9580,17 +11016,32 @@ document.querySelectorAll('#loginBranchBoxes .login-choice-box').forEach((box) =
   });
 });
 
-async function checkAuth() {
+async function checkAuth(reauthNotice = '') {
   const isStaffPath = window.location.pathname.includes('/staff');
   const status = await api('/api/auth/status');
   if (status.authenticated && (!isStaffPath || status.role !== 'ADMIN')) {
+    state.reauthInPlace = false;
     state.userRole = status.role || 'ADMIN';
     state.userBranchId = status.branchId || '';
     await bootApp();
     return;
   }
-  document.getElementById('appShell').classList.add('hidden');
-  document.getElementById('authGate').classList.remove('hidden');
+  const gateEl = document.getElementById('authGate');
+  if (!state.reauthInPlace) {
+    document.getElementById('appShell').classList.add('hidden');
+    if (gateEl) { gateEl.style.position = ''; gateEl.style.top = ''; gateEl.style.left = ''; gateEl.style.transform = ''; gateEl.style.zIndex = ''; gateEl.style.width = ''; gateEl.style.boxShadow = ''; }
+  } else if (gateEl) {
+    gateEl.style.position = 'fixed';
+    gateEl.style.top = '50%';
+    gateEl.style.left = '50%';
+    gateEl.style.transform = 'translate(-50%, -50%)';
+    gateEl.style.zIndex = '9999';
+    gateEl.style.width = 'min(92vw, 420px)';
+    gateEl.style.boxShadow = '0 24px 70px rgba(0,0,0,0.85)';
+  }
+  gateEl?.classList.remove('hidden');
+  const errEl = document.getElementById('authErrorMsg');
+  if (errEl && reauthNotice) errEl.textContent = reauthNotice;
   const subEl = document.getElementById('portalHeaderSub');
   if (isStaffPath) {
     document.title = 'Staff Portal — AB Gadgetz';
@@ -9642,7 +11093,18 @@ document.getElementById('authSubmitBtn').addEventListener('click', async () => {
     state.userRole = res.role || role || 'ADMIN';
     state.userBranchId = res.branchId || (state.userRole === 'ADMIN' ? '' : branchId);
     document.getElementById('ownerPinInput').value = '';
-    await bootApp();
+    if (state.reauthInPlace && state.inventory) {
+      state.reauthInPlace = false;
+      const gateEl = document.getElementById('authGate');
+      if (gateEl) {
+        gateEl.classList.add('hidden');
+        gateEl.style.position = ''; gateEl.style.top = ''; gateEl.style.left = ''; gateEl.style.transform = ''; gateEl.style.zIndex = ''; gateEl.style.width = ''; gateEl.style.boxShadow = '';
+      }
+      document.getElementById('appShell').classList.remove('hidden');
+      connectEvents();
+    } else {
+      await bootApp();
+    }
   } catch (err) {
     errEl.textContent = err.message;
   }
