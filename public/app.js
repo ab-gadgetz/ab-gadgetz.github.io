@@ -773,10 +773,20 @@ async function staticGhApi(url, opts = {}) {
 async function api(url, opts = {}) {
   if (IS_STATIC_GH) return staticGhApi(url, opts);
   const res = await fetch(url, {
+    credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
     ...opts,
   });
   const data = await res.json();
+  if (res.status === 401 && !String(url || '').startsWith('/api/auth/')) {
+    if (typeof eventSource !== 'undefined' && eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+    state.reauthInPlace = Boolean(state.inventory);
+    await checkAuth('Session expired after server restart — enter your PIN once to stay logged in & save.');
+    throw new Error(data.error || 'Authentication required — please unlock and click Save again.');
+  }
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
@@ -4764,12 +4774,37 @@ async function autoSaveSavedPreviewItemCost(order, itemIdx, newCost, persistNow 
   }
 }
 
+function findCheaperOtherSuppliers(row) {
+  const prod = state.inventory?.items?.find((i) => i.id === row?.productId);
+  if (!prod) return null;
+  const curCost = Number(row?.unitCost) || 0;
+  if (curCost <= 0) return null;
+  const curSup = String(row?.supplier || 'AB Main Supplier').trim().toUpperCase();
+  const candidates = [
+    { name: 'AB Main Supplier', cost: Number(prod.cost_ab) || 0 },
+    { name: 'A&K', cost: Number(prod.cost_ak) || 0 },
+    { name: 'Online Purchase', cost: Number(prod.cost_online) || 0 },
+  ].filter((c) => c.cost > 0 && c.name.toUpperCase() !== curSup && c.cost < curCost - 0.005);
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => a.cost - b.cost);
+  const best = candidates[0];
+  const qty = Math.max(1, Number(row?.qty) || 1);
+  return {
+    cheaperSupplier: best.name,
+    cheaperCost: best.cost,
+    savePerPc: Number((curCost - best.cost).toFixed(2)),
+    saveTotal: Number(((curCost - best.cost) * qty).toFixed(2)),
+    allAlternatives: candidates,
+  };
+}
+
 function renderReorderPreviewModal(statusNote = '') {
   const modal = document.getElementById('reorderPreviewModal');
   if (!modal) return;
   if (!state.previewUncheckedKeys) state.previewUncheckedKeys = new Set();
   if (!state.restockExcludedKeys) state.restockExcludedKeys = new Set();
   const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked);
+  const compareMode = Boolean(document.getElementById('reorderCompareSuppliersChk')?.checked);
   const { selected, grouped, isSaved, order } = getGroupedReorderPlan(null, false);
   const activeSelected = isSaved ? selected : selected.filter((r) => !state.previewUncheckedKeys.has(r.key));
 
@@ -4794,6 +4829,66 @@ function renderReorderPreviewModal(statusNote = '') {
   }
 
   renderPreviewMetricsSummary(activeSelected, showCosts);
+
+  const compareHits = [];
+  const compareByKey = new Map();
+  if (compareMode) {
+    for (const r of activeSelected) {
+      const cmp = findCheaperOtherSuppliers(r);
+      if (cmp) {
+        const key = r.key || `${r.productId}::${r.branchId}`;
+        compareByKey.set(key, cmp);
+        compareHits.push({ row: r, key, ...cmp });
+      }
+    }
+  }
+
+  const compareBannerEl = document.getElementById('reorderCompareBanner');
+  if (compareBannerEl) {
+    if (!compareMode) {
+      compareBannerEl.classList.add('hidden');
+      compareBannerEl.innerHTML = '';
+    } else if (compareHits.length) {
+      const totalPotentialSavings = compareHits.reduce((s, h) => s + h.saveTotal, 0);
+      compareBannerEl.classList.remove('hidden');
+      compareBannerEl.style.background = '#fef2f2';
+      compareBannerEl.style.border = '1.5px solid #dc2626';
+      compareBannerEl.style.color = '#7f1d1d';
+      compareBannerEl.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+          <div>
+            <strong style="font-size:13px;color:#991b1b;">⚠ LOWER SUPPLIER PRICE FOUND — REVIEW BEFORE PROCEEDING</strong>
+            <div style="margin-top:2px;font-weight:600;">${compareHits.length} item(s) cost less at a different supplier — potential savings: <strong>${fmtCurrency(totalPotentialSavings)}</strong></div>
+          </div>
+          ${
+            !isSaved
+              ? '<button type="button" id="reorderUncheckCheaperBtn" style="padding:5px 10px;font-size:11px;font-weight:700;background:#b91c1c;color:#fff;border:none;border-radius:6px;cursor:pointer;">UNCHECK CHEAPER-ELSEWHERE ITEMS</button>'
+              : ''
+          }
+        </div>
+        <ul style="margin:6px 0 0 18px;padding:0;line-height:1.45;">
+          ${compareHits
+            .map(
+              (h) =>
+                `<li><strong>${escAbHtml(h.row.branchName)} · ${escAbHtml(h.row.displayModel || h.row.model)}</strong> (${fmtNum(h.row.qty)} ${h.row.qty === 1 ? 'pc' : 'pcs'}): ${escAbHtml(h.row.supplier || 'Selected')} <strong>${fmtCurrency(h.row.unitCost)}</strong> → <strong style="color:#166534;">${escAbHtml(h.cheaperSupplier)} is ${fmtCurrency(h.cheaperCost)}</strong> (save <strong>${fmtCurrency(h.savePerPc)}/pc</strong> · ${fmtCurrency(h.saveTotal)} total)</li>`
+            )
+            .join('')}
+        </ul>
+      `;
+      document.getElementById('reorderUncheckCheaperBtn')?.addEventListener('click', () => {
+        for (const h of compareHits) {
+          state.previewUncheckedKeys.add(h.key);
+        }
+        renderReorderPreviewModal(`Unchecked ${compareHits.length} item(s) cheaper at another supplier — click BUILD PLAN AGAIN or edit supplier.`);
+      });
+    } else {
+      compareBannerEl.classList.remove('hidden');
+      compareBannerEl.style.background = '#ecfdf5';
+      compareBannerEl.style.border = '1px solid #10b981';
+      compareBannerEl.style.color = '#065f46';
+      compareBannerEl.innerHTML = '<strong>✓ BEST SUPPLIER PRICES VERIFIED:</strong> No other recorded supplier offers a lower cost for any selected item in this order.';
+    }
+  }
 
   const bodyEl = document.getElementById('reorderPreviewBody');
   const prevScrollTop = bodyEl ? bodyEl.scrollTop : 0;
@@ -4820,6 +4915,10 @@ function renderReorderPreviewModal(statusNote = '') {
                       : r.model || r.displayModel;
                     const rowKey = r.key || `${r.productId}::${r.branchId}`;
                     const isChecked = isSaved || !state.previewUncheckedKeys.has(rowKey);
+                    const cmpHit = compareMode ? (compareByKey.get(rowKey) || (isChecked ? findCheaperOtherSuppliers(r) : null)) : null;
+                    const cmpInline = cmpHit && isChecked
+                      ? `<div style="font-size:11px;font-weight:700;color:#b91c1c;margin-top:2px;">⚠ Cheaper at ${escAbHtml(cmpHit.cheaperSupplier)}: ${fmtCurrency(cmpHit.cheaperCost)} (save ${fmtCurrency(cmpHit.savePerPc)}/pc)</div>`
+                      : '';
                     const costArea = !showCosts
                       ? ''
                       : isSaved
@@ -4830,13 +4929,13 @@ function renderReorderPreviewModal(statusNote = '') {
                           </span>`
                         : `<span style="color:#4f493a;font-size:11.5px;">${fmtCurrency(r.unitCost)} × ${r.qty} = <strong style="color:#1b1913;">${fmtCurrency(r.unitCost * r.qty)}</strong></span>`;
                     return `
-                    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid #e6e0ce;font-size:12.5px;color:#1b1913;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:5px ${cmpHit && isChecked ? '6px' : '0'};border-bottom:1px solid #e6e0ce;font-size:12.5px;color:#1b1913;${cmpHit && isChecked ? 'background:#fef2f2;border-radius:4px;' : ''}">
                       ${
                         isSaved
-                          ? `<span style="color:#1b1913;font-weight:500;">${nameLabel}</span>`
-                          : `<label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer;flex:1;min-width:0;font-weight:500;font-size:12.5px;color:#1b1913;text-transform:none;letter-spacing:0;">
-                              <input type="checkbox" class="reorder-preview-item-chk" data-key="${String(rowKey).replace(/"/g, '&quot;')}" ${isChecked ? 'checked' : ''} style="width:16px;height:16px;margin:0;accent-color:#b45309;flex-shrink:0;" />
-                              <span style="color:${isChecked ? '#1b1913' : '#6b6351'};${isChecked ? '' : 'text-decoration:line-through;opacity:0.55;'}">${nameLabel}</span>
+                          ? `<div style="min-width:0;flex:1;"><span style="color:#1b1913;font-weight:500;">${nameLabel}</span>${cmpInline}</div>`
+                          : `<label style="display:flex;align-items:flex-start;gap:8px;margin:0;cursor:pointer;flex:1;min-width:0;font-weight:500;font-size:12.5px;color:#1b1913;text-transform:none;letter-spacing:0;">
+                              <input type="checkbox" class="reorder-preview-item-chk" data-key="${String(rowKey).replace(/"/g, '&quot;')}" ${isChecked ? 'checked' : ''} style="width:16px;height:16px;margin:2px 0 0;accent-color:#b45309;flex-shrink:0;" />
+                              <span style="min-width:0;"><span style="color:${isChecked ? '#1b1913' : '#6b6351'};${isChecked ? '' : 'text-decoration:line-through;opacity:0.55;'}">${nameLabel}</span>${cmpInline}</span>
                             </label>`
                       }
                       <span style="display:flex;align-items:center;gap:10px;white-space:nowrap;${isChecked ? '' : 'opacity:0.45;'}">
@@ -5568,6 +5667,7 @@ document.getElementById('reorderSelectAllChk')?.addEventListener('change', (e) =
 });
 
 document.getElementById('reorderShowCostsChk')?.addEventListener('change', () => renderReorderPreviewModal());
+document.getElementById('reorderCompareSuppliersChk')?.addEventListener('change', () => renderReorderPreviewModal());
 document.getElementById('reorderRebuildPlanBtn')?.addEventListener('click', () => {
   if (!state.restockExcludedKeys) state.restockExcludedKeys = new Set();
   if (!state.previewUncheckedKeys) state.previewUncheckedKeys = new Set();
@@ -10783,17 +10883,32 @@ document.querySelectorAll('#loginBranchBoxes .login-choice-box').forEach((box) =
   });
 });
 
-async function checkAuth() {
+async function checkAuth(reauthNotice = '') {
   const isStaffPath = window.location.pathname.includes('/staff');
   const status = await api('/api/auth/status');
   if (status.authenticated && (!isStaffPath || status.role !== 'ADMIN')) {
+    state.reauthInPlace = false;
     state.userRole = status.role || 'ADMIN';
     state.userBranchId = status.branchId || '';
     await bootApp();
     return;
   }
-  document.getElementById('appShell').classList.add('hidden');
-  document.getElementById('authGate').classList.remove('hidden');
+  const gateEl = document.getElementById('authGate');
+  if (!state.reauthInPlace) {
+    document.getElementById('appShell').classList.add('hidden');
+    if (gateEl) { gateEl.style.position = ''; gateEl.style.top = ''; gateEl.style.left = ''; gateEl.style.transform = ''; gateEl.style.zIndex = ''; gateEl.style.width = ''; gateEl.style.boxShadow = ''; }
+  } else if (gateEl) {
+    gateEl.style.position = 'fixed';
+    gateEl.style.top = '50%';
+    gateEl.style.left = '50%';
+    gateEl.style.transform = 'translate(-50%, -50%)';
+    gateEl.style.zIndex = '9999';
+    gateEl.style.width = 'min(92vw, 420px)';
+    gateEl.style.boxShadow = '0 24px 70px rgba(0,0,0,0.85)';
+  }
+  gateEl?.classList.remove('hidden');
+  const errEl = document.getElementById('authErrorMsg');
+  if (errEl && reauthNotice) errEl.textContent = reauthNotice;
   const subEl = document.getElementById('portalHeaderSub');
   if (isStaffPath) {
     document.title = 'Staff Portal — AB Gadgetz';
@@ -10845,7 +10960,18 @@ document.getElementById('authSubmitBtn').addEventListener('click', async () => {
     state.userRole = res.role || role || 'ADMIN';
     state.userBranchId = res.branchId || (state.userRole === 'ADMIN' ? '' : branchId);
     document.getElementById('ownerPinInput').value = '';
-    await bootApp();
+    if (state.reauthInPlace && state.inventory) {
+      state.reauthInPlace = false;
+      const gateEl = document.getElementById('authGate');
+      if (gateEl) {
+        gateEl.classList.add('hidden');
+        gateEl.style.position = ''; gateEl.style.top = ''; gateEl.style.left = ''; gateEl.style.transform = ''; gateEl.style.zIndex = ''; gateEl.style.width = ''; gateEl.style.boxShadow = '';
+      }
+      document.getElementById('appShell').classList.remove('hidden');
+      connectEvents();
+    } else {
+      await bootApp();
+    }
   } catch (err) {
     errEl.textContent = err.message;
   }
