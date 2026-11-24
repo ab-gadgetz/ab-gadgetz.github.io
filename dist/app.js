@@ -21,9 +21,16 @@ const state = {
 };
 
 const fmtCurrency = (n) =>
-  new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(n || 0);
+  new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(n) || 0);
 
 const fmtNum = (n) => (Number(n) || 0).toLocaleString('en-PH');
+
+const isFreebieAccessory = (item) => {
+  const pType = item?.product_type || item?.productType || 'Cellphones';
+  if (pType !== 'Accessories') return false;
+  const p = Number(item?.base_price ?? item?.basePrice ?? 0);
+  return p <= 5;
+};
 
 const fmtTime = (iso) => {
   if (!iso) return '—';
@@ -42,6 +49,7 @@ function setMenuOpen(open) {
 
 menuToggleBtn.addEventListener('click', (e) => {
   e.stopPropagation();
+  if (state.userRole === 'CASHIER') return;
   setMenuOpen(mainTabsMenu.classList.contains('hidden'));
 });
 
@@ -91,6 +99,8 @@ async function refreshActiveTab() {
   if (tab === 'inventory') {
     await loadInventory();
     if (state.activeInvTool === 'restock') await loadPlanning();
+  } else if (tab === 'sales') {
+    await loadSalesSummary();
   } else if (tab === 'receivables') {
     await loadReceivables();
   } else if (tab === 'finance') {
@@ -101,6 +111,8 @@ async function refreshActiveTab() {
     await loadBranchCatalog();
   } else if (tab === 'activity') {
     await loadActivity();
+  } else if (tab === 'staffPins') {
+    await loadStaffPins();
   }
 }
 
@@ -134,11 +146,13 @@ document.querySelectorAll('.inv-tool-btn').forEach((btn) => {
     document.querySelectorAll('.inv-tool-btn').forEach((b) => {
       b.setAttribute('aria-expanded', String(b.dataset.tool === state.activeInvTool));
     });
-    ['filters', 'restock', 'health', 'lifecycle'].forEach((t) => {
-      document.getElementById(`tool-${t}`).classList.toggle('hidden', t !== state.activeInvTool);
+    ['filters', 'stockswap', 'restock', 'costcompare', 'health', 'lifecycle'].forEach((t) => {
+      document.getElementById(`tool-${t}`)?.classList.toggle('hidden', t !== state.activeInvTool);
     });
     setInvToolsMenuOpen(false);
     if (state.activeInvTool === 'restock' && !state.planning) loadPlanning();
+    if (state.activeInvTool === 'stockswap') renderStockSwapTool();
+    if (state.activeInvTool === 'costcompare') renderCostCompareTool();
   });
 });
 
@@ -175,6 +189,81 @@ async function verifyGhOwnerPin(pin) {
   return b64 === expected;
 }
 
+const DEFAULT_GH_STAFF_PINS = {
+  'CASHIER::br-molave': '111111',
+  'CASHIER::br-tambulig': '112222',
+  'CASHIER::br-bonifacio': '113333',
+  'CI::br-molave': '221111',
+  'CI::br-tambulig': '222222',
+  'CI::br-bonifacio': '223333',
+};
+
+async function getGhStaffPinsPayload() {
+  const urls = [
+    `https://raw.githubusercontent.com/ab-gadgetz/ab-gadgetz.github.io/main/public/staff-pins.json?v=${Date.now()}`,
+    `../data/staff-pins.json?v=${Date.now()}`,
+  ];
+  for (const url of urls) {
+    try {
+      const r = await fetch(url, { cache: 'no-store' });
+      if (r.ok) {
+        const j = await r.json();
+        if (j && (j.hashes || j.encryptedPins)) return j;
+      }
+    } catch {}
+  }
+  try {
+    const bundle = await getGhBundle(true);
+    if (bundle?.staffPinHashes) {
+      return { hashes: bundle.staffPinHashes, encryptedPins: null };
+    }
+  } catch {}
+  return null;
+}
+
+async function deriveStaffEncKey() {
+  const ownerHash = 'WoqyJ8xhvUMB3110oE1lkqUeZm53MSMWRkMIh/jkLB4=';
+  const raw = new TextEncoder().encode(`abg-staff-enc:${ownerHash}`);
+  const keyBytes = await crypto.subtle.digest('SHA-256', raw);
+  return crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+}
+
+async function decryptGhStaffPins(encryptedPins) {
+  if (!encryptedPins?.iv || !encryptedPins?.data) return null;
+  const key = await deriveStaffEncKey();
+  const iv = Uint8Array.from(atob(encryptedPins.iv), (c) => c.charCodeAt(0));
+  const data = Uint8Array.from(atob(encryptedPins.data), (c) => c.charCodeAt(0));
+  const plainBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+  return JSON.parse(new TextDecoder().decode(plainBuf));
+}
+
+async function encryptGhStaffPins(pinsObj) {
+  const key = await deriveStaffEncKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plain = new TextEncoder().encode(JSON.stringify(pinsObj));
+  const cipherBuf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plain);
+  return {
+    iv: btoa(String.fromCharCode(...iv)),
+    data: btoa(String.fromCharCode(...new Uint8Array(cipherBuf))),
+  };
+}
+
+async function verifyGhStaffPin(role, branchId, pin) {
+  const key = `${role}::${branchId}`;
+  try {
+    const payload = await getGhStaffPinsPayload();
+    const hashes = payload?.hashes;
+    if (hashes && hashes[key]) {
+      const salt = 'abg-staff-pin-salt-v1';
+      const bytes = new TextEncoder().encode(`${salt}:${pin}`);
+      const digest = await crypto.subtle.digest('SHA-256', bytes);
+      const b64 = btoa(String.fromCharCode(...new Uint8Array(digest)));
+      return b64 === hashes[key];
+    }
+  } catch {}
+  return pin === DEFAULT_GH_STAFF_PINS[key];
+}
+
 async function staticGhApi(url, opts = {}) {
   const u = new URL(url, window.location.origin);
   const pathname = u.pathname;
@@ -202,12 +291,13 @@ async function staticGhApi(url, opts = {}) {
     if (isStaffPath && role === 'ADMIN') {
       throw new Error('Please use the Admin Portal URL for Owner Admin login.');
     }
-    if (role === 'CASHIER') {
-      if (pin !== '111111') throw new Error('Incorrect Cashier PIN.');
+    if (role === 'CASHIER' || role === 'CI') {
       if (!['br-molave', 'br-tambulig', 'br-bonifacio'].includes(branchId)) throw new Error('Please select a branch.');
-    } else if (role === 'CI') {
-      if (pin !== '222222') throw new Error('Incorrect Credit Investigator PIN.');
-      if (!['br-molave', 'br-tambulig', 'br-bonifacio'].includes(branchId)) throw new Error('Please select a branch.');
+      const ok = await verifyGhStaffPin(role, branchId, pin);
+      if (!ok) {
+        const label = role === 'CASHIER' ? 'Cashier' : 'Credit Investigator';
+        throw new Error(`Incorrect ${label} PIN for selected branch.`);
+      }
     } else {
       const ok = await verifyGhOwnerPin(pin);
       if (!ok) throw new Error('Incorrect Owner PIN.');
@@ -226,25 +316,61 @@ async function staticGhApi(url, opts = {}) {
     return { ok: true };
   }
   if (pathname === '/api/catalog/views') {
+    const startParam = u.searchParams.get('start') || '';
+    const endParam = u.searchParams.get('end') || startParam || '';
+    const todayManila = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+    const sDate = /^\d{4}-\d{2}-\d{2}$/.test(startParam) ? startParam : todayManila;
+    const eDate = /^\d{4}-\d{2}-\d{2}$/.test(endParam) ? endParam : sDate;
+    const dates = [];
+    const cur = new Date(`${sDate}T00:00:00Z`);
+    const endD = new Date(`${eDate}T00:00:00Z`);
+    while (cur <= endD && dates.length < 31) {
+      dates.push(cur.toISOString().slice(0, 10));
+      cur.setUTCDate(cur.getUTCDate() + 1);
+    }
+    if (!dates.length) dates.push(todayManila);
+
     const slugs = [['br-molave', 'molave'], ['br-tambulig', 'tambulig'], ['br-bonifacio', 'bonifacio']];
+    let bundleViews = null;
+    try {
+      const b = await getGhBundle();
+      bundleViews = b?.catalogViews || null;
+    } catch {}
     const byBranch = {};
-    let total = 0, weekly = 0, monthly = 0;
+    let total = 0;
+    let allTimeTotal = 0;
     await Promise.all(
       slugs.map(async ([bid, slug]) => {
-        try {
-          const r = await fetch(`https://hits.sh/api/urns/maynardrdelossantos.github.io/ab-gadgetz-catalog-views/${slug}`);
-          if (r.ok) {
-            const j = await r.json();
-            const t = Number(j.total) || 0, w = Number(j.weekly) || 0, m = Number(j.monthly) || 0;
-            byBranch[bid] = { total: t, weekly: w, monthly: m };
-            total += t; weekly += w; monthly += m;
-            return;
-          }
-        } catch {}
-        byBranch[bid] = { total: 0, weekly: 0, monthly: 0 };
+        const base = bundleViews?.byBranch?.[bid] || { total: 0 };
+        let rangeSum = 0;
+        let liveAll = 0;
+        await Promise.all([
+          ...dates.map(async (dt) => {
+            try {
+              const r = await fetch(`https://abacus.jasoncameron.dev/get/ab-gadgetz-views/${slug}-${dt}?v=${Date.now()}`);
+              if (r.ok) {
+                const j = await r.json();
+                rangeSum += Number(j.value) || 0;
+              }
+            } catch {}
+          }),
+          (async () => {
+            try {
+              const r = await fetch(`https://abacus.jasoncameron.dev/get/ab-gadgetz-views/${slug}?v=${Date.now()}`);
+              if (r.ok) {
+                const j = await r.json();
+                liveAll = Number(j.value) > 0 ? Number(j.value) : 0;
+              }
+            } catch {}
+          })(),
+        ]);
+        const allTime = Math.max(Number(base.total) || 0, liveAll);
+        byBranch[bid] = { total: rangeSum, allTime };
+        total += rangeSum;
+        allTimeTotal += allTime;
       })
     );
-    return { byBranch, total, weekly, monthly };
+    return { byBranch, total, allTimeTotal, start: sDate, end: eDate };
   }
   if (pathname === '/api/sync/now') {
     await getGhBundle(true);
@@ -364,14 +490,40 @@ async function staticGhApi(url, opts = {}) {
       installmentSales: branchId ? allInstallments.filter((i) => i.branch_id === branchId) : allInstallments,
     };
   }
+  if (pathname === '/api/sales/summary') {
+    const start = u.searchParams.get('start') || '';
+    const end = u.searchParams.get('end') || '9999-99-99';
+    const transactions = (bundle.portal_transactions || []).filter((t) => {
+      const d = String(t.tx_date || '').slice(0, 10);
+      return (!start || d >= start) && (!end || d <= end);
+    });
+    return { start, end, transactions };
+  }
   if (pathname === '/api/finance/summary') {
     const start = u.searchParams.get('start') || '';
     const end = u.searchParams.get('end') || '9999-99-99';
     const branchId = u.searchParams.get('branchId') || '';
     const payRows = (bundle.allPayments || []).filter((p) => (!start || p.payment_date >= start) && (!end || p.payment_date <= end) && (!branchId || p.branch_id === branchId));
     const expRows = (bundle.allExpenses || []).filter((e) => (!start || e.expense_date >= start) && (!end || e.expense_date <= end) && (!branchId || e.branch_id === branchId));
-    const totals = { collections: 0, principal: 0, interest: 0, penalties: 0, rebates: 0, financingIncome: 0, expenses: 0, netCashFlow: 0 };
-    const branchStats = new Map(bundle.inventory.branches.map((b) => [b.id, { branchId: b.id, branchName: b.name, collections: 0, principal: 0, financingIncome: 0, expenses: 0, netCashFlow: 0 }]));
+    const txRows = (bundle.portal_transactions || []).filter((t) => (!start || t.tx_date >= start) && (!end || t.tx_date <= end) && (!branchId || t.branch_id === branchId));
+    const instRows = (bundle.allInstallments || []).filter((i) => (!start || i.sale_date >= start) && (!end || i.sale_date <= end) && (!branchId || i.branch_id === branchId));
+
+    const totals = {
+      collections: 0, principal: 0, interest: 0, penalties: 0, rebates: 0,
+      financingIncome: 0, expenses: 0, netCashFlow: 0,
+      cashGrossSrp: 0, cashDiscount: 0, cashNetSales: 0, cashCogs: 0, cashGrossProfit: 0,
+      downpayments: 0, installmentSales: 0, installmentPrincipal: 0, abWebCashInflow: 0, properNetIncome: 0,
+    };
+    const branchStats = new Map(
+      bundle.inventory.branches.map((b) => [
+        b.id,
+        {
+          branchId: b.id, branchName: b.name, collections: 0, principal: 0, financingIncome: 0, expenses: 0, netCashFlow: 0,
+          cashGrossSrp: 0, cashDiscount: 0, cashNetSales: 0, cashCogs: 0, cashGrossProfit: 0,
+          downpayments: 0, installmentSales: 0, installmentPrincipal: 0, abWebCashInflow: 0, properNetIncome: 0,
+        },
+      ])
+    );
     for (const p of payRows) {
       totals.collections += p.amount; totals.principal += p.principal; totals.interest += p.interest;
       totals.penalties += p.penalties; totals.rebates += p.rebates;
@@ -387,14 +539,38 @@ async function staticGhApi(url, opts = {}) {
       if (bs) bs.expenses += e.amount;
       expByTypeMap.set(e.expense_type, (expByTypeMap.get(e.expense_type) || 0) + e.amount);
     }
-    totals.netCashFlow = totals.collections - totals.expenses;
-    for (const bs of branchStats.values()) bs.netCashFlow = bs.collections - bs.expenses;
+    for (const tx of txRows) {
+      const net = Number(tx.amount) || 0;
+      const disc = Number(tx.discount) || 0;
+      const srp = Number(tx.srp) || net + disc;
+      const cogs = Number(tx.unit_cost) || 0;
+      const gp = cogs > 0 ? net - cogs : 0;
+      totals.cashGrossSrp += srp; totals.cashDiscount += disc; totals.cashNetSales += net; totals.cashCogs += cogs; totals.cashGrossProfit += gp;
+      const bs = branchStats.get(tx.branch_id);
+      if (bs) { bs.cashGrossSrp += srp; bs.cashDiscount += disc; bs.cashNetSales += net; bs.cashCogs += cogs; bs.cashGrossProfit += gp; }
+    }
+    for (const inst of instRows) {
+      const amt = Number(inst.amount) || 0;
+      const dp = Number(inst.deposit) || 0;
+      const prin = Number(inst.principal_amount) || 0;
+      totals.downpayments += dp; totals.installmentSales += amt; totals.installmentPrincipal += prin;
+      const bs = branchStats.get(inst.branch_id);
+      if (bs) { bs.downpayments += dp; bs.installmentSales += amt; bs.installmentPrincipal += prin; }
+    }
+    totals.abWebCashInflow = totals.downpayments + totals.cashNetSales + totals.collections;
+    totals.properNetIncome = totals.cashGrossProfit + totals.financingIncome - totals.expenses;
+    totals.netCashFlow = totals.abWebCashInflow - totals.expenses;
+    for (const bs of branchStats.values()) {
+      bs.abWebCashInflow = bs.downpayments + bs.cashNetSales + bs.collections;
+      bs.properNetIncome = bs.cashGrossProfit + bs.financingIncome - bs.expenses;
+      bs.netCashFlow = bs.abWebCashInflow - bs.expenses;
+    }
     return {
       totals,
       byBranch: Array.from(branchStats.values()),
       expensesByType: Array.from(expByTypeMap.entries()).map(([expenseType, amount]) => ({ expenseType, amount })).sort((a, b) => b.amount - a.amount),
-      recentPayments: payRows.slice(0, 100),
-      recentExpenses: expRows.slice(0, 100),
+      recentPayments: payRows,
+      recentExpenses: expRows,
     };
   }
   if (pathname === '/api/receivables/summary') {
@@ -416,8 +592,8 @@ async function staticGhApi(url, opts = {}) {
     return {
       totals: { installmentCount: instRows.length, totalPortfolio, totalPrincipal, totalDeposits, totalMonthlyExpected, dueAccountsCount: dueRows.length },
       byBranch: Array.from(branchMap.values()),
-      pastDues: dueRows.slice(0, 120),
-      installments: instRows.slice(0, 100),
+      pastDues: dueRows,
+      installments: instRows,
     };
   }
   return {};
@@ -434,8 +610,80 @@ async function api(url, opts = {}) {
   return data;
 }
 
+function getLocalSupplierCostsMap() {
+  try {
+    return JSON.parse(localStorage.getItem('abg_supplier_costs_v1') || '{}');
+  } catch {
+    return {};
+  }
+}
+
+async function saveProductSupplierCosts(productId, { costAb, costAk, costOnline }) {
+  const prod = state.inventory?.items?.find((i) => i.id === productId);
+  const nextAb = costAb !== '' && costAb !== undefined ? Math.max(0, Number(costAb) || 0) : (Number(prod?.cost_ab) || 0);
+  const nextAk = costAk !== '' && costAk !== undefined ? Math.max(0, Number(costAk) || 0) : (Number(prod?.cost_ak) || 0);
+  const nextOn = costOnline !== '' && costOnline !== undefined ? Math.max(0, Number(costOnline) || 0) : (Number(prod?.cost_online) || 0);
+
+  const valid = [
+    { name: 'AB Main Supplier', val: nextAb },
+    { name: 'A&K', val: nextAk },
+    { name: 'Online Purchase', val: nextOn },
+  ].filter((c) => c.val > 0);
+  valid.sort((a, b) => a.val - b.val);
+  const bestCost = valid.length ? valid[0].val : 0;
+  const bestSupplier = valid.length ? valid[0].name : (prod?.supplier || 'Portal Auto-Import');
+
+  if (prod) {
+    prod.cost_ab = nextAb;
+    prod.cost_ak = nextAk;
+    prod.cost_online = nextOn;
+    if (bestCost > 0) {
+      prod.supplier = bestSupplier;
+    }
+  }
+
+  const map = getLocalSupplierCostsMap();
+  map[productId] = { cost_ab: nextAb, cost_ak: nextAk, cost_online: nextOn };
+  try {
+    localStorage.setItem('abg_supplier_costs_v1', JSON.stringify(map));
+  } catch {
+    // ignore quota
+  }
+
+  if (!IS_STATIC_GH) {
+    await api('/api/products/costs', {
+      method: 'PATCH',
+      body: JSON.stringify({ productId, costAb: nextAb, costAk: nextAk, costOnline: nextOn }),
+    });
+  }
+
+  // Sync any active restock plan rows for this product
+  if (state.restockPlan?.length && prod) {
+    const mode = document.querySelector('input[name="restockSupplierMode"]:checked')?.value || 'LOWEST';
+    const sup = resolveSupplierForProduct(prod, mode);
+    for (const r of state.restockPlan) {
+      if (r.productId === productId && sup) {
+        r.supplier = sup.supplier;
+        r.unitCost = sup.unitCost;
+      }
+    }
+  }
+  return { nextAb, nextAk, nextOn, bestCost, bestSupplier };
+}
+
 async function loadInventory() {
   state.inventory = await api('/api/inventory');
+  if (IS_STATIC_GH && state.inventory?.items) {
+    const localCosts = getLocalSupplierCostsMap();
+    for (const item of state.inventory.items) {
+      const ov = localCosts[item.id];
+      if (ov) {
+        item.cost_ab = ov.cost_ab;
+        item.cost_ak = ov.cost_ak;
+        item.cost_online = ov.cost_online;
+      }
+    }
+  }
   populateSelects();
   renderInventory();
   renderHealth();
@@ -496,51 +744,157 @@ function syncCostInputs() {
   document.getElementById('costOnline').value = prod.cost_online ?? '';
 }
 
+let activeAdminPhotoProductId = '';
+
+function openAdminPhotoModal(productId) {
+  if (state.userRole !== 'ADMIN' || !state.inventory) return;
+  const prod = state.inventory.items.find((i) => i.id === productId);
+  if (!prod) return;
+  activeAdminPhotoProductId = productId;
+  document.getElementById('adminPhotoModalTitle').textContent = `${prod.brand || ''} ${prod.model || prod.name}`.trim();
+  document.getElementById('adminPhotoModalSub').textContent = `${prod.website_codes || prod.sku} • ${(prod.imageUrls || []).length} photo(s)`;
+  document.getElementById('photoMsg').textContent = '';
+  const abEl = document.getElementById('modalCostAb');
+  const akEl = document.getElementById('modalCostAk');
+  const onEl = document.getElementById('modalCostOnline');
+  const costMsgEl = document.getElementById('modalCostsMsg');
+  if (abEl) abEl.value = prod.cost_ab > 0 ? prod.cost_ab : '';
+  if (akEl) akEl.value = prod.cost_ak > 0 ? prod.cost_ak : '';
+  if (onEl) onEl.value = prod.cost_online > 0 ? prod.cost_online : '';
+  if (costMsgEl) costMsgEl.textContent = '';
+  renderPhotoEditor();
+  document.getElementById('adminPhotoModal').classList.remove('hidden');
+}
+
+document.getElementById('saveModalCostsBtn')?.addEventListener('click', async () => {
+  if (!activeAdminPhotoProductId) return;
+  const msgEl = document.getElementById('modalCostsMsg');
+  try {
+    const res = await saveProductSupplierCosts(activeAdminPhotoProductId, {
+      costAb: document.getElementById('modalCostAb')?.value ?? '',
+      costAk: document.getElementById('modalCostAk')?.value ?? '',
+      costOnline: document.getElementById('modalCostOnline')?.value ?? '',
+    });
+    if (msgEl) {
+      msgEl.style.color = 'var(--gold-bright)';
+      msgEl.textContent = res.bestCost > 0
+        ? `Saved! Best: ${res.bestSupplier} (${fmtCurrency(res.bestCost)})`
+        : 'Saved supplier costs.';
+    }
+    if (state.activeInvTool === 'restock') renderRestockCards();
+    renderInventory();
+  } catch (err) {
+    if (msgEl) {
+      msgEl.style.color = 'var(--danger)';
+      msgEl.textContent = err.message;
+    }
+  }
+});
+
 function renderPhotoEditor() {
   if (!state.inventory) return;
-  const pid = document.getElementById('photoProduct').value;
+  const pid = activeAdminPhotoProductId || document.getElementById('photoProduct')?.value;
   const prod = state.inventory.items.find((i) => i.id === pid);
   const grid = document.getElementById('photoPreviewGrid');
+  if (!grid) return;
   if (!prod) {
     grid.innerHTML = '';
     return;
   }
+  const subEl = document.getElementById('adminPhotoModalSub');
+  if (subEl) subEl.textContent = `${prod.website_codes || prod.sku} • ${(prod.imageUrls || []).length} photo(s)`;
+
   const urls = prod.imageUrls || [];
   if (!urls.length) {
-    grid.innerHTML = '<div class="muted small">No photos added for this product yet.</div>';
+    grid.innerHTML = '<div class="muted small">No photos added for this product yet. Paste an image URL above to add one!</div>';
     return;
   }
-  grid.innerHTML = urls
-    .map(
-      (u, idx) => `
-      <div style="background:#171c23;border:1px solid var(--border-soft);border-radius:8px;padding:6px;display:flex;flex-direction:column;align-items:center;gap:6px;width:96px;">
-        <img src="${u}" alt="${prod.name}" style="width:76px;height:76px;object-fit:contain;background:#fff;border-radius:6px;" />
-        <button type="button" class="danger remove-photo-btn" data-idx="${idx}" style="width:100%;padding:4px;font-size:10px;">Remove</button>
-      </div>`
-    )
-    .join('');
 
-  grid.querySelectorAll('.remove-photo-btn').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const nextUrls = urls.filter((_, i) => i !== Number(btn.dataset.idx));
+  const saveOrderedUrls = async (nextUrls, statusText) => {
+    const msg = document.getElementById('photoMsg');
+    try {
       await api('/api/products/photos', {
         method: 'PATCH',
         body: JSON.stringify({ productId: prod.id, imageUrls: nextUrls }),
       });
-      document.getElementById('photoMsg').textContent = 'Photo removed.';
+      if (msg) msg.textContent = statusText;
       await loadInventory();
       if (state.selectedCustomerId) await loadCustomerCatalog(state.selectedCustomerId);
+      renderPhotoEditor();
+    } catch (err) {
+      if (msg) msg.textContent = err.message;
+    }
+  };
+
+  grid.innerHTML = urls
+    .map(
+      (u, idx) => `
+      <div style="background:#171c23;border:${idx === 0 ? '2px solid var(--gold-bright)' : '1px solid var(--border-soft)'};border-radius:10px;padding:8px;display:flex;flex-direction:column;align-items:center;gap:6px;width:128px;">
+        <div style="width:100%;display:flex;justify-content:space-between;align-items:center;font-size:10px;font-weight:800;color:${idx === 0 ? 'var(--gold-bright)' : 'var(--muted)'};">
+          <span>${idx === 0 ? '★ 1ST COVER' : `#${idx + 1}`}</span>
+          ${idx > 0 ? `<button type="button" class="secondary make-first-photo-btn" data-idx="${idx}" style="padding:2px 6px;font-size:9.5px;min-height:0;" title="Move to 1st">Make 1st</button>` : ''}
+        </div>
+        <img src="${u}" alt="${prod.name}" style="width:96px;height:96px;object-fit:contain;background:#fff;border-radius:6px;padding:2px;" />
+        <div style="display:flex;gap:4px;width:100%;">
+          <button type="button" class="secondary move-left-photo-btn" data-idx="${idx}" ${idx === 0 ? 'disabled' : ''} style="flex:1;padding:3px;font-size:11px;min-height:0;" title="Move left">◀</button>
+          <button type="button" class="secondary move-right-photo-btn" data-idx="${idx}" ${idx === urls.length - 1 ? 'disabled' : ''} style="flex:1;padding:3px;font-size:11px;min-height:0;" title="Move right">▶</button>
+          <button type="button" class="danger remove-photo-btn" data-idx="${idx}" style="flex:1;padding:3px;font-size:11px;min-height:0;" title="Remove photo">✕</button>
+        </div>
+      </div>`
+    )
+    .join('');
+
+  grid.querySelectorAll('.make-first-photo-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const i = Number(btn.dataset.idx);
+      const next = [urls[i], ...urls.filter((_, idx) => idx !== i)];
+      saveOrderedUrls(next, 'Moved photo to 1st position!');
+    });
+  });
+
+  grid.querySelectorAll('.move-left-photo-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const i = Number(btn.dataset.idx);
+      if (i <= 0) return;
+      const next = [...urls];
+      [next[i - 1], next[i]] = [next[i], next[i - 1]];
+      saveOrderedUrls(next, 'Photo order updated.');
+    });
+  });
+
+  grid.querySelectorAll('.move-right-photo-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const i = Number(btn.dataset.idx);
+      if (i >= urls.length - 1) return;
+      const next = [...urls];
+      [next[i], next[i + 1]] = [next[i + 1], next[i]];
+      saveOrderedUrls(next, 'Photo order updated.');
+    });
+  });
+
+  grid.querySelectorAll('.remove-photo-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const nextUrls = urls.filter((_, i) => i !== Number(btn.dataset.idx));
+      saveOrderedUrls(nextUrls, 'Photo removed.');
     });
   });
 }
 
-document.getElementById('photoProduct').addEventListener('change', renderPhotoEditor);
-document.getElementById('addPhotoBtn').addEventListener('click', async () => {
-  const pid = document.getElementById('photoProduct').value;
+document.getElementById('closeAdminPhotoModalBtn')?.addEventListener('click', () => {
+  document.getElementById('adminPhotoModal')?.classList.add('hidden');
+});
+document.getElementById('adminPhotoModal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'adminPhotoModal') {
+    document.getElementById('adminPhotoModal').classList.add('hidden');
+  }
+});
+document.getElementById('photoProduct')?.addEventListener('change', renderPhotoEditor);
+document.getElementById('addPhotoBtn')?.addEventListener('click', async () => {
+  const pid = activeAdminPhotoProductId || document.getElementById('photoProduct')?.value;
   const url = document.getElementById('photoUrlInput').value.trim();
   const msg = document.getElementById('photoMsg');
   if (!pid || !url) {
-    msg.textContent = 'Select a product and paste an image address first.';
+    msg.textContent = 'Paste an image address first.';
     return;
   }
   const prod = state.inventory.items.find((i) => i.id === pid);
@@ -554,6 +908,7 @@ document.getElementById('addPhotoBtn').addEventListener('click', async () => {
     msg.textContent = 'Photo added!';
     await loadInventory();
     if (state.selectedCustomerId) await loadCustomerCatalog(state.selectedCustomerId);
+    renderPhotoEditor();
   } catch (err) {
     msg.textContent = err.message;
   }
@@ -569,12 +924,22 @@ function getSelectedProductTypes() {
 
 function updateBulkBar() {
   const bar = document.getElementById('bulkActionBar');
+  if (!bar) return;
+  if (state.userRole !== 'ADMIN') {
+    bar.classList.add('hidden');
+    return;
+  }
   const count = state.selectedProducts.size;
   bar.classList.toggle('hidden', count === 0);
   document.getElementById('bulkSelectedCount').textContent = `${count} model(s) selected`;
 }
 
 function renderModelCard(item, visibleBranches) {
+  const isCashier = state.userRole === 'CASHIER';
+  const isAdmin = state.userRole === 'ADMIN';
+  const branchObj = visibleBranches[0] || { id: 'br-molave', name: 'Molave', cash_discount_pct: 5 };
+  const discountRate = (Number(branchObj.cash_discount_pct) || 5) / 100;
+  const cashPrice = Math.round((Number(item.base_price) || 0) * (1 - discountRate));
   const pills = visibleBranches
     .map((b) => {
       const cell = item.byBranch[b.id];
@@ -589,11 +954,11 @@ function renderModelCard(item, visibleBranches) {
   const thumb = item.imageUrl
     ? `<img src="${item.imageUrl}" alt="${item.name}" style="width:52px;height:52px;object-fit:contain;background:#fff;border-radius:9px;padding:2px;flex:0 0 52px;box-shadow:0 2px 8px rgba(0,0,0,.3);" loading="lazy" />`
     : `<div style="width:52px;height:52px;border-radius:9px;background:#171c23;border:1px solid var(--border-soft);display:grid;place-items:center;color:var(--gold);font-size:20px;flex:0 0 52px;">📱</div>`;
-  const isSel = state.selectedProducts.has(item.id);
+  const isSel = isAdmin && state.selectedProducts.has(item.id);
   const qtyCls = item.scopedAvail === 0 ? 'model-card-qty zero' : 'model-card-qty';
-  const isAdmin = state.userRole === 'ADMIN';
+  const isFreebie = isFreebieAccessory(item);
   return `
-    <div class="model-card" style="${isSel ? 'border-color:var(--gold);background:linear-gradient(165deg,#332f20 0%,#1f1d16 100%);' : ''}">
+    <div class="model-card" ${isCashier ? `data-inv-calc-id="${item.id}" style="cursor:pointer;"` : isAdmin ? `data-admin-photo-id="${item.id}" style="cursor:pointer;${isSel ? 'border-color:var(--gold);background:linear-gradient(165deg,#332f20 0%,#1f1d16 100%);' : ''}"` : `style="${isSel ? 'border-color:var(--gold);background:linear-gradient(165deg,#332f20 0%,#1f1d16 100%);' : ''}"`}>
       <div class="model-card-head">
         <div style="display:flex;gap:9px;align-items:center;min-width:0;">
           ${isAdmin ? `<input type="checkbox" class="model-select-chk" data-id="${item.id}" ${isSel ? 'checked' : ''} style="width:16px;height:16px;flex:0 0 16px;cursor:pointer;accent-color:var(--gold);" />` : ''}
@@ -607,8 +972,11 @@ function renderModelCard(item, visibleBranches) {
       </div>
       <div class="model-branch-pills">${pills}</div>
       <div class="model-price-row" style="padding-top:6px;border-top:1px solid rgba(255,255,255,.06);">
-        <span>SRP: <strong style="color:var(--gold-bright);font-size:12.5px;">${fmtCurrency(item.base_price)}</strong></span>
+        ${isFreebie
+          ? `<span style="color:var(--green);font-weight:800;font-size:12px;">FREEBIE</span>`
+          : `<span>SRP: <strong style="color:var(--gold-bright);font-size:12.5px;">${fmtCurrency(item.base_price)}</strong></span>`}
         ${isAdmin ? `<span>Cost: <strong style="color:var(--green);">${item.cost_price > 0 ? fmtCurrency(item.cost_price) : '—'}</strong></span>` : ''}
+        ${isCashier && !isFreebie ? `<span style="color:var(--green);">Cash: <strong>${fmtCurrency(cashPrice)}</strong> <span style="color:var(--gold);margin-left:4px;">Options ›</span></span>` : ''}
       </div>
       ${lifecycleBadge}
     </div>
@@ -681,14 +1049,69 @@ function renderInventory() {
     }
   }
 
-  // Sort models by selling price (lowest to highest), then name
-  scopedItems.sort(
-    (a, b) =>
-      (Number(a.base_price) || 0) - (Number(b.base_price) || 0) ||
-      String(a.model || a.name).localeCompare(String(b.model || b.name))
-  );
-
   const isAdmin = state.userRole === 'ADMIN';
+  const isCashier = state.userRole === 'CASHIER';
+  const isCellphonesView = selectedTypes.includes('Cellphones') && !selectedTypes.includes('Accessories');
+
+  // Cashier integrated catalog filters (Price Range & RAM/ROM only when Cellphones is selected)
+  let filteredScoped = scopedItems;
+
+  if (isCashier) {
+    const priceRangeEl = document.getElementById('invPriceRange');
+    const ramRomEl = document.getElementById('invRamRom');
+    const sortBtn = document.getElementById('invPriceSortBtn');
+    if (priceRangeEl) priceRangeEl.classList.toggle('hidden', !isCellphonesView);
+    if (ramRomEl) ramRomEl.classList.toggle('hidden', !isCellphonesView);
+    if (sortBtn) sortBtn.textContent = state.invPriceSort === 'desc' ? 'Price ↓' : 'Price ↑';
+
+    if (isCellphonesView && ramRomEl) {
+      const specs = new Set();
+      for (const x of scopedItems) {
+        const rr = extractRamRom(x.model || x.name, x.brand);
+        if (rr) specs.add(rr);
+      }
+      const prevSpec = ramRomEl.value || 'ALL';
+      const sortedSpecs = Array.from(specs).sort((a, b) => {
+        const na = parseInt(a, 10) || 0;
+        const nb = parseInt(b, 10) || 0;
+        return na - nb || a.localeCompare(b);
+      });
+      ramRomEl.innerHTML =
+        '<option value="ALL">All RAM/ROM</option>' +
+        sortedSpecs.map((s) => `<option value="${s}">${s}</option>`).join('');
+      if (sortedSpecs.includes(prevSpec)) ramRomEl.value = prevSpec;
+      else ramRomEl.value = 'ALL';
+    }
+
+    if (isCellphonesView) {
+      const pr = priceRangeEl?.value || 'ALL';
+      const rrFilter = ramRomEl?.value || 'ALL';
+      filteredScoped = scopedItems.filter((x) => {
+        const p = Number(x.base_price) || 0;
+        if (pr !== 'ALL') {
+          const [lo, hi] = pr.split('-').map(Number);
+          if (p < lo || p > hi) return false;
+        }
+        if (rrFilter !== 'ALL') {
+          if (extractRamRom(x.model || x.name, x.brand) !== rrFilter) return false;
+        }
+        return true;
+      });
+    }
+  }
+
+  // Sort freebies first at the very top, then sort models by selling price
+  const sortDir = isCashier && state.invPriceSort === 'desc' ? -1 : 1;
+  filteredScoped.sort((a, b) => {
+    const fa = isFreebieAccessory(a) ? 0 : 1;
+    const fb = isFreebieAccessory(b) ? 0 : 1;
+    if (fa !== fb) return fa - fb;
+    if (fa === 0) return String(a.model || a.name).localeCompare(String(b.model || b.name));
+    return (
+      sortDir * ((Number(a.base_price) || 0) - (Number(b.base_price) || 0)) ||
+      String(a.model || a.name).localeCompare(String(b.model || b.name))
+    );
+  });
   document.getElementById('inventorySummaryGrid').innerHTML = `
     <div class="mini-kpi">
       <div class="mini-kpi-top">
@@ -697,46 +1120,110 @@ function renderInventory() {
       </div>
       <div class="mini-kpi-sub">${fmtNum(availableModels)} models available${isAdmin ? ` • Cost: ${fmtCurrency(totalCostVal)}` : ''}</div>
     </div>
+    ${isAdmin ? `
     <div class="mini-kpi">
       <div class="mini-kpi-top">
         <span class="mini-kpi-label">POTENTIAL SALES</span>
         <span class="mini-kpi-val">${fmtCurrency(potentialSales)}</span>
       </div>
       <div class="mini-kpi-sub">Net of cash discount (5% / 3%)</div>
-    </div>
+    </div>` : ''}
   `;
 
   const grid = document.getElementById('brandGrid');
-  if (scopedItems.length === 0) {
+  if (filteredScoped.length === 0) {
     grid.innerHTML = '<div class="muted small">No products match the current filters.</div>';
     updateBulkBar();
     return;
   }
 
+  const branchObj = visibleBranches[0] || { id: 'br-molave', name: 'Molave', cash_discount_pct: 5 };
+  const cashPct = Number(branchObj.cash_discount_pct) || 5;
+  const discountRate = cashPct / 100;
+  const rates = state.installmentRates || [
+    { months: 4, monthly_rate: 0.09 },
+    { months: 6, monthly_rate: 0.08 },
+    { months: 9, monthly_rate: 0.07 },
+    { months: 12, monthly_rate: 0.06 },
+  ];
+
+  const renderCashierShopeeCard = (item) => {
+    const brandKey = String(item.brand || '').toLowerCase();
+    const accMap = {
+      infinix: '#77e82a', tecno: '#3b82f6', realme: '#ffd600', itel: '#ff3355',
+      redmi: '#ff6900', vivo: '#60a5fa', honor: '#38bdf8', samsung: '#3b82f6',
+      nubia: '#ef4444', zte: '#06b6d4', poco: '#facc15', oppo: '#10b981', apple: '#f8fafc',
+    };
+    const accent = accMap[brandKey] || '#e7c55f';
+    const brandLabel = brandKey === 'apple' ? 'Apple' : (item.brand || '');
+    const cashPrice = Math.round((Number(item.base_price) || 0) * (1 - discountRate));
+    const isPhone = (item.product_type || 'Cellphones') === 'Cellphones';
+    const mo4 = isPhone ? calc4MoAmortization(item.base_price, rates) : 0;
+    const imgHtml = item.imageUrl
+      ? `<img src="${item.imageUrl}" alt="${item.name}" loading="lazy" />`
+      : `<div style="font-size:40px;color:var(--gold);">${isPhone ? '📱' : '🎧'}</div>`;
+    const installBanner = mo4 > 0
+      ? `<div class="shopee-badge-installment"><span>4-Mo Est</span><span>${fmtCurrency(mo4)}/mo</span></div>`
+      : '';
+    const availText = item.scopedAvail > 0 ? `${fmtNum(item.scopedAvail)} avail` : 'Out of stock';
+    const availStyle = item.scopedAvail > 0 ? '' : 'color:#f87171;border-color:rgba(248,113,113,.35);';
+    const isFreebie = isFreebieAccessory(item);
+    return `
+      <div class="shopee-card" data-inv-calc-id="${item.id}">
+        <div class="shopee-thumb">
+          ${imgHtml}
+          <span class="shopee-badge-brand" style="color:${accent};">${isFreebie ? 'FREEBIE' : brandLabel}</span>
+          <span class="shopee-badge-avail" style="${availStyle}">${availText}</span>
+          ${installBanner}
+        </div>
+        <div class="shopee-body">
+          <div class="shopee-title"><img src="${LOGO_SQUARE_SRC}" alt="Logo" class="shopee-mall-logo" />${item.model || item.name}</div>
+          <div>
+            ${isFreebie
+              ? `<div class="shopee-price-row"><span class="shopee-price-main" style="color:var(--green);">FREEBIE</span></div>`
+              : `<div class="shopee-price-row">
+                  <span class="shopee-price-main">${fmtCurrency(cashPrice)}</span>
+                  <span class="shopee-discount-pill">-${cashPct}% Cash</span>
+                </div>
+                <div class="shopee-srp-sub">
+                  <span>SRP ${fmtCurrency(item.base_price)}</span>
+                  <span style="color:var(--gold);">Installment ›</span>
+                </div>`}
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
   if (groupingMode === 'flat') {
     grid.innerHTML = `
       <div class="brand-group expanded">
         <div class="brand-tile" style="cursor:default;">
-          <span class="brand-tile-name">${productTypeLabel} (${scopedItems.length})</span>
+          <span class="brand-tile-name">${productTypeLabel} (${filteredScoped.length})</span>
+          ${isAdmin ? `
           <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--gold-bright);cursor:pointer;font-size:12px;">
-            <input type="checkbox" id="flatSelectAll" ${scopedItems.every((x) => state.selectedProducts.has(x.id)) ? 'checked' : ''} style="width:16px;height:16px;margin:0;" />
+            <input type="checkbox" id="flatSelectAll" ${filteredScoped.every((x) => state.selectedProducts.has(x.id)) ? 'checked' : ''} style="width:16px;height:16px;margin:0;" />
             Select All Shown
-          </label>
+          </label>` : ''}
         </div>
-        ${scopedItems.map((item) => renderModelCard(item, visibleBranches)).join('')}
+        ${isCashier
+          ? `<div class="shopee-grid inv-shopee-grid">${filteredScoped.map(renderCashierShopeeCard).join('')}</div>`
+          : filteredScoped.map((item) => renderModelCard(item, visibleBranches)).join('')}
       </div>
     `;
-    document.getElementById('flatSelectAll')?.addEventListener('change', (e) => {
-      for (const x of scopedItems) {
-        if (e.target.checked) state.selectedProducts.add(x.id);
-        else state.selectedProducts.delete(x.id);
-      }
-      renderInventory();
-    });
+    if (isAdmin) {
+      document.getElementById('flatSelectAll')?.addEventListener('change', (e) => {
+        for (const x of filteredScoped) {
+          if (e.target.checked) state.selectedProducts.add(x.id);
+          else state.selectedProducts.delete(x.id);
+        }
+        renderInventory();
+      });
+    }
   } else {
     const groups = new Map();
-    for (const item of scopedItems) {
-      const brand = item.brand || item.category || 'Other';
+    for (const item of filteredScoped) {
+      const brand = isFreebieAccessory(item) ? 'FREEBIES' : (item.brand || item.category || 'Other');
       if (!groups.has(brand)) groups.set(brand, []);
       groups.get(brand).push(item);
     }
@@ -767,6 +1254,8 @@ function renderInventory() {
     };
     grid.innerHTML = Array.from(groups.entries())
       .sort((a, b) => {
+        if (a[0] === 'FREEBIES') return -1;
+        if (b[0] === 'FREEBIES') return 1;
         const ra = BRAND_ORDER.indexOf(a[0].toLowerCase());
         const rb = BRAND_ORDER.indexOf(b[0].toLowerCase());
         const oa = ra < 0 ? BRAND_ORDER.length : ra;
@@ -779,7 +1268,7 @@ function renderInventory() {
         const allSelected = list.length > 0 && list.every((x) => state.selectedProducts.has(x.id));
         const theme = BRAND_THEMES[brand.toLowerCase()] || { label: brand, accent: '#e7c55f', bg: '#252c35', style: '' };
 
-        const selectAllControl = isExpanded
+        const selectAllControl = isAdmin && isExpanded
           ? `<label class="brand-select-all" data-brand="${brand}" style="display:flex;align-items:center;gap:5px;margin:0;color:var(--text);font-size:11px;cursor:pointer;" onclick="event.stopPropagation()">
                <input type="checkbox" class="brand-select-all-chk" data-brand="${brand}" ${allSelected ? 'checked' : ''} style="width:15px;height:15px;margin:0;" />
                Select All
@@ -787,7 +1276,9 @@ function renderInventory() {
           : '';
 
         const cardsHtml = isExpanded
-          ? list.map((item) => renderModelCard(item, visibleBranches)).join('')
+          ? isCashier
+            ? `<div class="shopee-grid inv-shopee-grid">${list.map(renderCashierShopeeCard).join('')}</div>`
+            : list.map((item) => renderModelCard(item, visibleBranches)).join('')
           : '';
 
         return `
@@ -834,6 +1325,52 @@ function renderInventory() {
       renderInventory();
     });
   });
+
+  if (isAdmin) {
+    grid.querySelectorAll('.model-card[data-admin-photo-id]').forEach((card) => {
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('.model-select-chk')) return;
+        openAdminPhotoModal(card.dataset.adminPhotoId);
+      });
+    });
+  }
+
+  if (isCashier) {
+    grid.querySelectorAll('[data-inv-calc-id]').forEach((card) => {
+      card.addEventListener('click', async () => {
+        const item = filteredScoped.find((x) => x.id === card.dataset.invCalcId);
+        if (!item) return;
+        const branchObj = visibleBranches[0] || { id: 'br-molave', name: 'Molave', cash_discount_pct: 5 };
+        if (!state.installmentRates) {
+          try {
+            const catRes = await api(`/api/catalog/branch/${branchObj.id}`);
+            state.installmentRates = catRes?.installmentRates || [];
+          } catch {
+            state.installmentRates = [
+              { months: 4, monthly_rate: 0.09 },
+              { months: 6, monthly_rate: 0.08 },
+              { months: 9, monthly_rate: 0.07 },
+              { months: 12, monthly_rate: 0.06 },
+            ];
+          }
+        }
+        const discountRate = (Number(branchObj.cash_discount_pct) || 5) / 100;
+        const calcItem = {
+          productId: item.id,
+          brand: item.brand,
+          model: item.model || item.name,
+          name: item.name,
+          productType: item.product_type || 'Cellphones',
+          basePrice: item.base_price,
+          cashPrice: Math.round((Number(item.base_price) || 0) * (1 - discountRate)),
+          imageUrl: item.imageUrl || '',
+          imageUrls: item.imageUrls || [],
+          branchAvailable: item.scopedAvail,
+        };
+        openCustomerCalcModal(calcItem, branchObj, state.installmentRates);
+      });
+    });
+  }
 
   updateBulkBar();
 }
@@ -884,62 +1421,3778 @@ function renderHealth() {
     </table>`;
 }
 
-async function loadPlanning() {
-  const [planning, budget] = await Promise.all([api('/api/planning'), api('/api/budget')]);
-  state.planning = planning;
-  state.budget = budget;
-  renderPlanning();
+function computeStockSwapSuggestions({ typeFilter = 'Cellphones', targetBranchId = 'ALL', modeFilter = 'ZERO_ONLY' } = {}) {
+  if (!state.inventory) return [];
+  const { branches, items } = state.inventory;
+  const suggestions = [];
+
+  for (const item of items) {
+    if ((item.lifecycle_status || 'Active') !== 'Active') continue;
+    const pType = item.product_type || 'Cellphones';
+    if (typeFilter !== 'ALL' && pType !== typeFilter) continue;
+
+    // Build branch stock list for this product
+    const branchStates = branches.map((b) => {
+      const cell = item.byBranch[b.id] || { qtyAvailable: 0 };
+      return {
+        branchId: b.id,
+        branchName: b.name,
+        avail: Number(cell.qtyAvailable) || 0,
+      };
+    });
+
+    // Donors: branches with surplus >= 2 (keep at least 1 in donor, or 2 if donor is Molave and has >= 3)
+    const donors = branchStates
+      .map((bs) => {
+        const keepMin = bs.branchId === 'br-molave' && bs.avail >= 3 ? 2 : 1;
+        const surplus = Math.max(0, bs.avail - keepMin);
+        return { ...bs, remainingSurplus: surplus };
+      })
+      .filter((d) => d.remainingSurplus >= 1)
+      .sort((a, b) => b.remainingSurplus - a.remainingSurplus || b.avail - a.avail);
+
+    if (!donors.length) continue;
+
+    // Needy branches: 0 stock (priority 1), or 1 stock when donor has >= 3 (priority 2)
+    const needy = branchStates
+      .filter((bs) => {
+        if (targetBranchId !== 'ALL' && bs.branchId !== targetBranchId) return false;
+        if (bs.avail === 0) return true;
+        if (modeFilter === 'ALL_BALANCE' && bs.avail === 1 && donors.some((d) => d.branchId !== bs.branchId && d.avail >= 3)) {
+          return true;
+        }
+        return false;
+      })
+      .sort((a, b) => a.avail - b.avail);
+
+    for (const target of needy) {
+      const donor = donors.find((d) => d.branchId !== target.branchId && d.remainingSurplus >= 1);
+      if (!donor) continue;
+      const desired = target.avail === 0 ? 1 : 1;
+      const swapQty = Math.min(donor.remainingSurplus, desired);
+      if (swapQty <= 0) continue;
+
+      donor.remainingSurplus -= swapQty;
+      suggestions.push({
+        productId: item.id,
+        sku: item.website_codes || item.sku,
+        model: item.model || item.name,
+        brand: item.brand || '',
+        productType: pType,
+        price: Number(item.base_price) || 0,
+        fromBranchId: donor.branchId,
+        fromBranch: donor.branchName,
+        fromBefore: donor.avail,
+        fromAfter: donor.avail - swapQty,
+        toBranchId: target.branchId,
+        toBranch: target.branchName,
+        toBefore: target.avail,
+        toAfter: target.avail + swapQty,
+        swapQty,
+        priority: target.avail === 0 ? '0-STOCK FILL' : 'BALANCE',
+        reason: target.avail === 0
+          ? `0 in ${target.branchName} • ${donor.branchName} has ${donor.avail}`
+          : `Low (${target.avail}) in ${target.branchName} • ${donor.branchName} has ${donor.avail}`,
+      });
+    }
+  }
+
+  // Sort: 0-Stock Fills first, then highest donor stock, then lowest price
+  suggestions.sort((a, b) => {
+    if (a.toBefore !== b.toBefore) return a.toBefore - b.toBefore;
+    if (b.fromBefore !== a.fromBefore) return b.fromBefore - a.fromBefore;
+    return a.price - b.price || a.model.localeCompare(b.model);
+  });
+  return suggestions;
 }
 
-function renderPlanning() {
-  if (state.budget) {
-    const s = state.budget.summary;
-    document.getElementById('budgetSummaryGrid').innerHTML = `
+function formatSwapModelName(s) {
+  const brand = String(s.brand || '').trim();
+  const model = String(s.model || '').trim();
+  if (!brand) return model;
+  if (model.toLowerCase().startsWith(brand.toLowerCase())) return model;
+  return `${brand} ${model}`;
+}
+
+function buildBranchSwapCopyText(branchName, swaps) {
+  const outgoing = (swaps || []).filter((s) => s.fromBranch === branchName);
+  if (!outgoing.length) return '';
+  const byDest = new Map();
+  for (const s of outgoing) {
+    if (!byDest.has(s.toBranch)) byDest.set(s.toBranch, []);
+    byDest.get(s.toBranch).push(s);
+  }
+  const blocks = [];
+  for (const [toBranch, rows] of byDest.entries()) {
+    const lines = rows.map((s) => `${formatSwapModelName(s)} - ${s.swapQty} ${s.swapQty === 1 ? 'pc' : 'pcs'}`);
+    blocks.push(`Stockswap to ${toBranch}:\n${lines.join('\n')}`);
+  }
+  return `${branchName} Branch\n\n${blocks.join('\n\n')}`;
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // fallback below
+    }
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch {
+    ok = false;
+  }
+  ta.remove();
+  return ok;
+}
+
+function renderStockSwapTool() {
+  const typeFilter = document.getElementById('swapTypeFilter')?.value || 'Cellphones';
+  const targetBranchId = document.getElementById('swapBranchFilter')?.value || 'ALL';
+  const modeFilter = document.getElementById('swapModeFilter')?.value || 'ZERO_ONLY';
+  const list = computeStockSwapSuggestions({ typeFilter, targetBranchId, modeFilter });
+  state.lastStockSwaps = list;
+
+  const branches = state.inventory?.branches || [
+    { id: 'br-molave', name: 'Molave' },
+    { id: 'br-tambulig', name: 'Tambulig' },
+    { id: 'br-bonifacio', name: 'Bonifacio' },
+  ];
+
+  const stats = new Map(branches.map((b) => [b.name, { inQty: 0, outQty: 0 }]));
+  for (const s of list) {
+    if (stats.has(s.toBranch)) stats.get(s.toBranch).inQty += s.swapQty;
+    if (stats.has(s.fromBranch)) stats.get(s.fromBranch).outQty += s.swapQty;
+  }
+
+  const copyIconSvg = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
+
+  const sumEl = document.getElementById('stockSwapSummaryGrid');
+  if (sumEl) {
+    sumEl.innerHTML = branches
+      .map((b) => {
+        const st = stats.get(b.name) || { inQty: 0, outQty: 0 };
+        const net = st.inQty - st.outQty;
+        return `
+          <div class="summary-box" style="display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;">
+            <span class="small muted">${b.name} &middot; IN / OUT / NET</span>
+            <strong style="font-size:15px;">${st.inQty} / ${st.outQty} / ${net} pcs</strong>
+            <button type="button" class="btn btn-secondary btn-compact swap-copy-btn" data-branch="${b.name}" title="Copy ${b.name} Branch stockswap message" ${st.outQty === 0 ? 'disabled style="opacity:0.45;"' : ''}>
+              ${copyIconSvg}
+            </button>
+          </div>
+        `;
+      })
+      .join('');
+
+    sumEl.querySelectorAll('.swap-copy-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const branchName = btn.dataset.branch;
+        const text = buildBranchSwapCopyText(branchName, state.lastStockSwaps || []);
+        const statusEl = document.getElementById('stockSwapCopyStatus');
+        if (!text) {
+          if (statusEl) statusEl.textContent = `No outgoing stockswaps for ${branchName} Branch.`;
+          return;
+        }
+        const ok = await copyTextToClipboard(text);
+        if (statusEl) {
+          statusEl.textContent = ok
+            ? `Copied ${branchName} Branch swaps. Paste the message to the other branch.`
+            : `Unable to copy automatically. Please copy from the list above.`;
+          statusEl.style.color = ok ? 'var(--gold-bright)' : 'var(--danger)';
+        }
+      });
+    });
+  }
+
+  const listEl = document.getElementById('stockSwapGroupedList');
+  if (!listEl) return;
+
+  const statusEl = document.getElementById('stockSwapCopyStatus');
+  if (statusEl) statusEl.textContent = '';
+
+  if (!list.length) {
+    listEl.innerHTML = '<div class="muted small" style="padding:10px 0;">All branches are balanced—no stock swaps needed right now.</div>';
+    return;
+  }
+
+  const byFrom = new Map();
+  for (const b of branches) byFrom.set(b.name, new Map());
+  for (const s of list) {
+    if (!byFrom.has(s.fromBranch)) byFrom.set(s.fromBranch, new Map());
+    const destMap = byFrom.get(s.fromBranch);
+    if (!destMap.has(s.toBranch)) destMap.set(s.toBranch, []);
+    destMap.get(s.toBranch).push(s);
+  }
+
+  const sections = [];
+  for (const [fromBranch, destMap] of byFrom.entries()) {
+    if (!destMap.size) continue;
+    const destHtml = [];
+    for (const [toBranch, rows] of destMap.entries()) {
+      destHtml.push(`
+        <div style="margin-top:8px;">
+          <div style="font-weight:700;font-size:13px;color:var(--text);margin-bottom:4px;">Stockswap to ${toBranch}:</div>
+          ${rows
+            .map(
+              (s) => `
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+              <span style="font-size:13px;">${formatSwapModelName(s)}</span>
+              <strong style="color:var(--gold-bright);white-space:nowrap;">${s.swapQty} ${s.swapQty === 1 ? 'pc' : 'pcs'}</strong>
+            </div>`
+            )
+            .join('')}
+        </div>
+      `);
+    }
+    sections.push(`
+      <div class="sub-panel" style="margin-top:8px;padding:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+          <strong style="color:var(--gold-bright);font-size:14px;">${fromBranch} Branch</strong>
+          <button type="button" class="btn btn-secondary btn-compact swap-copy-btn" data-branch="${fromBranch}" title="Copy ${fromBranch} Branch stockswap">
+            ${copyIconSvg} <span>Copy</span>
+          </button>
+        </div>
+        ${destHtml.join('')}
+      </div>
+    `);
+  }
+  listEl.innerHTML = sections.join('');
+
+  listEl.querySelectorAll('.swap-copy-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const branchName = btn.dataset.branch;
+      const text = buildBranchSwapCopyText(branchName, state.lastStockSwaps || []);
+      if (!text) return;
+      const ok = await copyTextToClipboard(text);
+      if (statusEl) {
+        statusEl.textContent = ok
+          ? `Copied ${branchName} Branch swaps. Paste the message to the other branch.`
+          : `Unable to copy automatically.`;
+        statusEl.style.color = ok ? 'var(--gold-bright)' : 'var(--danger)';
+      }
+    });
+  });
+}
+
+function downloadStockSwapPdf() {
+  const jspdfNs = window.jspdf;
+  if (!jspdfNs || typeof jspdfNs.jsPDF !== 'function') {
+    alert('PDF generator library is still loading. Please try again in a second.');
+    return;
+  }
+  const list = state.lastStockSwaps || computeStockSwapSuggestions();
+  if (!list.length) {
+    alert('No stock swap suggestions to download right now.');
+    return;
+  }
+  const doc = new jspdfNs.jsPDF({ orientation: 'portrait', unit: 'in', format: [8.5, 13], compress: true });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const margin = 24 / 72;
+  const nowLabel = new Date().toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.setTextColor(27, 25, 19);
+  doc.text('AB-GADGETZ · BRANCH STOCK SWAP SUMMARY', pageWidth / 2, 30 / 72, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(79, 73, 58);
+  doc.text(`Prepared ${nowLabel}`, pageWidth / 2, 43 / 72, { align: 'center' });
+  doc.text('Suggested transfers only · Record accepted swaps', pageWidth / 2, 54 / 72, { align: 'center' });
+
+  const branches = state.inventory?.branches || [
+    { id: 'br-molave', name: 'Molave' },
+    { id: 'br-tambulig', name: 'Tambulig' },
+    { id: 'br-bonifacio', name: 'Bonifacio' },
+  ];
+  const stats = new Map(branches.map((b) => [b.name, { inQty: 0, outQty: 0 }]));
+  for (const s of list) {
+    if (stats.has(s.toBranch)) stats.get(s.toBranch).inQty += s.swapQty;
+    if (stats.has(s.fromBranch)) stats.get(s.fromBranch).outQty += s.swapQty;
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(27, 25, 19);
+  doc.text('BRANCH SUMMARY', margin, 72 / 72);
+
+  doc.autoTable({
+    startY: 78 / 72,
+    margin: { left: margin, right: margin },
+    head: [['Branch', 'Swap In', 'Swap Out', 'Net']],
+    body: branches.map((b) => {
+      const st = stats.get(b.name) || { inQty: 0, outQty: 0 };
+      const net = st.inQty - st.outQty;
+      return [b.name, `${st.inQty} pcs`, `${st.outQty} pcs`, `${net} pcs`];
+    }),
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 8.5,
+      cellPadding: 4 / 72,
+      textColor: [27, 25, 19],
+      lineColor: [75, 70, 58],
+      lineWidth: 0.65 / 72,
+      halign: 'center',
+    },
+    columnStyles: { 0: { halign: 'left' } },
+    headStyles: { fillColor: [235, 226, 190], textColor: [30, 30, 30], fontStyle: 'bold' },
+  });
+
+  const afterSummaryY = (doc.lastAutoTable?.finalY || 1.8) + 16 / 72;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(27, 25, 19);
+  doc.text('SWAPS BY RECEIVING BRANCH', margin, afterSummaryY);
+
+  const byDest = new Map();
+  for (const s of list) {
+    if (!byDest.has(s.toBranch)) byDest.set(s.toBranch, []);
+    byDest.get(s.toBranch).push(s);
+  }
+  const detailBody = [];
+  for (const [toBranch, rows] of byDest.entries()) {
+    detailBody.push([
+      {
+        content: `${toBranch} RECEIVES`,
+        colSpan: 3,
+        styles: { fillColor: [235, 226, 190], fontStyle: 'bold', textColor: [27, 25, 19] },
+      },
+    ]);
+    for (const s of rows) {
+      detailBody.push([
+        s.fromBranch,
+        formatSwapModelName(s),
+        `${s.swapQty} ${s.swapQty === 1 ? 'pc' : 'pcs'}`,
+      ]);
+    }
+  }
+
+  doc.autoTable({
+    startY: afterSummaryY + 6 / 72,
+    margin: { left: margin, right: margin, bottom: margin },
+    head: [['From Branch', 'Brand / Model', 'Quantity']],
+    body: detailBody,
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 8.5,
+      cellPadding: 4 / 72,
+      textColor: [27, 25, 19],
+      lineColor: [75, 70, 58],
+      lineWidth: 0.65 / 72,
+    },
+    columnStyles: { 2: { halign: 'center' } },
+    headStyles: { fillColor: [235, 226, 190], textColor: [30, 30, 30], fontStyle: 'bold' },
+  });
+
+  doc.save(`AB_Gadgetz_Stock_Swap_Summary_${todayStr}.pdf`);
+}
+
+document.getElementById('swapTypeFilter')?.addEventListener('change', renderStockSwapTool);
+document.getElementById('swapBranchFilter')?.addEventListener('change', renderStockSwapTool);
+document.getElementById('swapModeFilter')?.addEventListener('change', renderStockSwapTool);
+document.getElementById('stockSwapPdfBtn')?.addEventListener('click', downloadStockSwapPdf);
+
+const SUPPLIER_ORDER = ['AB Main Supplier', 'A&K', 'Online Purchase'];
+const BRANCH_ORDER = ['Molave', 'Tambulig', 'Bonifacio'];
+
+function resolveSupplierForProduct(item, mode = 'LOWEST') {
+  const ab = Number(item.cost_ab) || 0;
+  const ak = Number(item.cost_ak) || 0;
+  const on = Number(item.cost_online) || 0;
+  const fallbackCost = Number(item.cost_price) || 0;
+
+  if (mode === 'AB') return ab > 0 ? { supplier: 'AB Main Supplier', unitCost: ab } : null;
+  if (mode === 'AK') return ak > 0 ? { supplier: 'A&K', unitCost: ak } : null;
+  if (mode === 'ONLINE') return on > 0 ? { supplier: 'Online Purchase', unitCost: on } : null;
+
+  const candidates = [];
+  if (ab > 0) candidates.push({ supplier: 'AB Main Supplier', unitCost: ab });
+  if (ak > 0) candidates.push({ supplier: 'A&K', unitCost: ak });
+  if (on > 0) candidates.push({ supplier: 'Online Purchase', unitCost: on });
+  if (candidates.length) {
+    candidates.sort((a, b) => a.unitCost - b.unitCost);
+    return candidates[0];
+  }
+  if (fallbackCost > 0) {
+    return { supplier: 'AB Main Supplier', unitCost: fallbackCost };
+  }
+  return { supplier: 'AB Main Supplier', unitCost: 0 };
+}
+
+function normRestockUnitName(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/\bplus\b/g, '+')
+    .replace(/\bgalaxy\b/g, '')
+    .replace(/gb\b/g, '')
+    .replace(/\b4g\b/g, '')
+    .replace(/[^a-z0-9+]/g, '');
+}
+
+function isNonOrderablePromoOrRepo(item) {
+  const txt = `${item?.name || ''} ${item?.model || ''} ${item?.sku || ''}`.toUpperCase();
+  const price = Number(item?.base_price) || 0;
+  if (/\(REPO\)|\bREPO\b/.test(txt)) return true;
+  if (/\bFREE\b|FREEBIE|FREE\s*BAG|BUNDLE/.test(txt) && price <= 500) return true;
+  if (price > 0 && price <= 50 && (item?.product_type || 'Cellphones') === 'Cellphones') return true;
+  return false;
+}
+
+function getCellphonePriceTier(item) {
+  const pType = item?.product_type || 'Cellphones';
+  const srp = Number(item?.base_price) || 0;
+  if (pType !== 'Cellphones') {
+    return { key: 'ACCESSORY', rank: 2, label: 'Accessory', color: 'var(--muted)' };
+  }
+  if (srp > 0 && srp <= 10000) {
+    return { key: 'LOW_END', rank: 1, label: 'Low-End', color: 'var(--green)' };
+  }
+  if (srp > 10000 && srp <= 16000) {
+    return { key: 'MID_RANGE', rank: 2, label: 'Mid-Range', color: '#60a5fa' };
+  }
+  return { key: 'HIGH_END', rank: 3, label: 'High-End', color: 'var(--muted)' };
+}
+
+function buildRestockDemandIndex() {
+  const byProdBranch = new Map();
+  const byProd = new Map();
+
+  // 1. Prefer authoritative server-computed 30d/90d/all-time demand (Cash + deduplicated Installments)
+  const srvPB = state.planning?.demandByProductBranch;
+  const srvP = state.planning?.demandByProduct;
+  if (srvPB && Object.keys(srvPB).length > 0) {
+    for (const [k, v] of Object.entries(srvPB)) {
+      byProdBranch.set(k, {
+        sold30: Number(v.sold30) || 0,
+        sold90: Number(v.sold90) || 0,
+        allSold: Number(v.allSold) || 0,
+        restocked: Number(v.restocked) || 0,
+      });
+    }
+    if (srvP) {
+      for (const [pid, v] of Object.entries(srvP)) {
+        byProd.set(pid, {
+          sold30: Number(v.sold30) || 0,
+          sold90: Number(v.sold90) || 0,
+          allSold: Number(v.allSold) || 0,
+          restocked: Number(v.restocked) || 0,
+        });
+      }
+    }
+    return { byProdBranch, byProd };
+  }
+
+  // 2. Fallback / Static GitHub Pages mode: compute exact same 30d/90d demand from activity + installments
+  const items = state.inventory?.items || [];
+  const prodByNorm = new Map();
+  for (const p of items) {
+    const keys = [normRestockUnitName(p.name), normRestockUnitName(`${p.brand || ''} ${p.model || ''}`)].filter(Boolean);
+    for (const k of keys) {
+      const ex = prodByNorm.get(k);
+      if (!ex || ((ex.lifecycle_status || 'Active') !== 'Active' && (p.lifecycle_status || 'Active') === 'Active')) {
+        prodByNorm.set(k, p);
+      }
+    }
+  }
+
+  const nowMs = Date.now();
+  const since30 = new Date(nowMs - 30 * 86400000).toISOString().slice(0, 10);
+  const since90 = new Date(nowMs - 90 * 86400000).toISOString().slice(0, 10);
+
+  const rawPB = new Map();
+  const ensurePB = (pid, bid) => {
+    const k = `${pid}::${bid}`;
+    if (!rawPB.has(k)) {
+      rawPB.set(k, { cash30: 0, instMv30: 0, instPt30: 0, cash90: 0, instMv90: 0, instPt90: 0, allSold: 0, restocked: 0 });
+    }
+    return rawPB.get(k);
+  };
+
+  const act = state.planningActivity || state.activityData;
+  const mvList = act?.allMovements || act?.movements || [];
+  for (const m of mvList) {
+    const mt = String(m.movement_type || m.action || m.type || '').toUpperCase();
+    if (mt.includes('TRANSFER') || mt.includes('FREE')) continue;
+    if (!m.product_id || !m.branch_id) continue;
+    const d = ensurePB(m.product_id, m.branch_id);
+    const dt = String(m.recorded_at || '').slice(0, 10);
+    const dq = Number(m.delta_qty) || 0;
+    const q = Math.abs(dq);
+    if (dq < 0) {
+      d.allSold += q;
+      const isInst = mt.includes('INSTALLMENT');
+      if (dt >= since90) {
+        if (isInst) d.instMv90 += q;
+        else d.cash90 += q;
+      }
+      if (dt >= since30) {
+        if (isInst) d.instMv30 += q;
+        else d.cash30 += q;
+      }
+    } else if (dq > 0 && (mt.includes('DELIVERY') || mt.includes('STOCK'))) {
+      d.restocked += q;
+    }
+  }
+
+  const instList = act?.allInstallments || act?.installmentSales || state.salesData?.receivables?.installments || state.receivables?.installments || [];
+  for (const ir of instList) {
+    const dt = String(ir.sale_date || '').slice(0, 10);
+    if (dt < since90) continue;
+    const p = prodByNorm.get(normRestockUnitName(ir.unit));
+    if (!p || !ir.branch_id) continue;
+    const d = ensurePB(p.id, ir.branch_id);
+    d.instPt90 += 1;
+    if (dt >= since30) d.instPt30 += 1;
+    d.allSold = Math.max(d.allSold, d.cash90 + Math.max(d.instMv90, d.instPt90));
+  }
+
+  for (const [k, d] of rawPB.entries()) {
+    const [pid] = k.split('::');
+    const sold30 = d.cash30 + Math.max(d.instMv30, d.instPt30);
+    const sold90 = d.cash90 + Math.max(d.instMv90, d.instPt90);
+    const allSold = Math.max(d.allSold, sold90);
+    byProdBranch.set(k, { sold30, sold90, allSold, restocked: d.restocked });
+    if (!byProd.has(pid)) byProd.set(pid, { sold30: 0, sold90: 0, allSold: 0, restocked: 0 });
+    const agg = byProd.get(pid);
+    agg.sold30 += sold30;
+    agg.sold90 += sold90;
+    agg.allSold += allSold;
+    agg.restocked += d.restocked;
+  }
+
+  return { byProdBranch, byProd };
+}
+
+function buildMovementStatsMap() {
+  return buildRestockDemandIndex();
+}
+
+function getProductMovementSummary(item, demandIdx) {
+  const agg = demandIdx?.byProd?.get(item.id);
+  if (agg) {
+    return {
+      sold: agg.allSold || 0,
+      sold90: agg.sold90 || 0,
+      sold30: agg.sold30 || 0,
+      restocked: agg.restocked || 0,
+      totalMovements: (agg.allSold || 0) + (agg.restocked || 0),
+    };
+  }
+  return { sold: 0, sold90: 0, sold30: 0, restocked: 0, totalMovements: 0 };
+}
+
+function isObsoleteOrNonMoving(item, branches, demandIdx) {
+  let totalAvail = 0;
+  for (const b of branches) totalAvail += Number(item.byBranch?.[b.id]?.qtyAvailable) || 0;
+  const hasSupplierCost = Number(item.cost_ab) > 0 || Number(item.cost_ak) > 0 || Number(item.cost_online) > 0;
+  const mv = getProductMovementSummary(item, demandIdx);
+
+  // Never classify any unit with sales (cash or installment) as Obsolete/Dead!
+  if (totalAvail === 0 && mv.sold === 0 && mv.sold90 === 0 && mv.restocked === 0 && !hasSupplierCost) {
+    return { status: 'DEAD_OBSOLETE', label: 'Obsolete / Dead (0 stock, 0 sales, 0 reorders)', totalAvail, mv };
+  }
+  if (totalAvail > 0 && mv.sold === 0 && mv.sold90 === 0 && mv.restocked === 0 && !hasSupplierCost) {
+    return { status: 'NON_MOVING', label: `Non-Moving (${totalAvail} unsold on hand, 0 sales/reorders)`, totalAvail, mv };
+  }
+  return { status: 'ACTIVE_MOVING', label: 'Active / Moving', totalAvail, mv };
+}
+
+async function markProductsPhaseout(productIds) {
+  if (!productIds || !productIds.length) return;
+  for (const id of productIds) {
+    const prod = state.inventory?.items?.find((i) => i.id === id);
+    if (prod) prod.lifecycle_status = 'Phaseout / Do Not Reorder';
+  }
+  if (!IS_STATIC_GH) {
+    try {
+      await api('/api/products/lifecycle', {
+        method: 'PATCH',
+        body: JSON.stringify({ productIds, status: 'Phaseout / Do Not Reorder' }),
+      });
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+  buildRestockDraftPlan();
+  renderRestockCards();
+  renderInventory();
+}
+
+function renderObsoleteAuditUI(obsoleteList) {
+  const bannerEl = document.getElementById('restockObsoleteBanner');
+  const panelEl = document.getElementById('restockObsoletePanel');
+  const tbody = document.querySelector('#restockObsoleteTable tbody');
+  const excludeChk = document.getElementById('restockExcludeObsoleteChk')?.checked;
+  if (!bannerEl) return;
+
+  const deadCount = obsoleteList.filter((x) => x.status === 'DEAD_OBSOLETE').length;
+  const nonMovingCount = obsoleteList.filter((x) => x.status === 'NON_MOVING').length;
+  state.lastObsoleteList = obsoleteList;
+
+  if (!obsoleteList.length) {
+    bannerEl.classList.add('hidden');
+    if (panelEl) panelEl.classList.add('hidden');
+    return;
+  }
+
+  bannerEl.classList.remove('hidden');
+  bannerEl.innerHTML = `
+    <div>
+      <strong>Web-Sync Cleanup:</strong> ${excludeChk ? 'Auto-hiding' : 'Found'}
+      <strong>${fmtNum(deadCount)}</strong> obsolete dead model(s) (0 stock, 0 sales, 0 reorders) &amp;
+      <strong>${fmtNum(nonMovingCount)}</strong> non-moving model(s) (unsold stock, 0 sales).
+    </div>
+    <button type="button" id="toggleObsoleteAuditBtn" class="secondary" style="padding:4px 10px;font-size:11px;min-height:0;">
+      ${panelEl && !panelEl.classList.contains('hidden') ? 'HIDE ANALYSIS' : 'ANALYZE / MARK PHASEOUT'}
+    </button>
+  `;
+
+  document.getElementById('toggleObsoleteAuditBtn')?.addEventListener('click', () => {
+    panelEl?.classList.toggle('hidden');
+    renderObsoleteAuditUI(state.lastObsoleteList || []);
+  });
+
+  if (tbody) {
+    tbody.innerHTML = obsoleteList
+      .slice(0, 200)
+      .map(
+        (x) => `
+        <tr>
+          <td><strong>${x.displayModel}</strong><div class="small muted">${x.sku}</div></td>
+          <td>${fmtNum(x.totalAvail)} pcs</td>
+          <td class="small muted">${x.mv.sold} sold • ${x.mv.restocked} restocked</td>
+          <td><span class="badge ${x.status === 'DEAD_OBSOLETE' ? 'badge-danger' : 'badge-warn'}">${x.status === 'DEAD_OBSOLETE' ? 'Obsolete / Dead' : 'Non-Moving'}</span></td>
+          <td><button type="button" class="secondary single-phaseout-btn" data-pid="${x.id}" style="padding:3px 8px;font-size:11px;min-height:0;">Phaseout</button></td>
+        </tr>`
+      )
+      .join('');
+
+    tbody.querySelectorAll('.single-phaseout-btn').forEach((btn) => {
+      btn.addEventListener('click', () => markProductsPhaseout([btn.dataset.pid]));
+    });
+  }
+}
+
+function buildPendingOrdersLookup() {
+  const byProdBranch = new Map();
+  const byProd = new Map();
+  const addPending = (pid, bid, qty, label) => {
+    if (!pid || !bid || !(qty > 0)) return;
+    const kb = `${pid}::${bid}`;
+    if (!byProdBranch.has(kb)) byProdBranch.set(kb, { qty: 0, refs: new Set() });
+    const cell = byProdBranch.get(kb);
+    cell.qty += qty;
+    if (label) cell.refs.add(label);
+
+    if (!byProd.has(pid)) byProd.set(pid, { qty: 0, refs: new Set() });
+    const pAgg = byProd.get(pid);
+    pAgg.qty += qty;
+    if (label) pAgg.refs.add(label);
+  };
+
+  const pendingStatuses = new Set(['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received']);
+  for (const o of state.savedOrders || []) {
+    if (!pendingStatuses.has(o.status)) continue;
+    for (const it of o.items || []) {
+      if (it.approved === false || it.isExtraItem) continue;
+      const appQty = Math.max(0, Number(it.qty) || 0);
+      const recQty =
+        it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== ''
+          ? Math.max(0, Number(it.receivedQty) || 0)
+          : 0;
+      const rem = Math.max(0, appQty - recQty);
+      if (rem > 0) addPending(it.productId, it.branchId, rem, o.id);
+    }
+  }
+
+  // Also include any in-transit AB Web deliveries whose header status is not RECEIVED yet
+  for (const d of state.abDeliveries || []) {
+    if (String(d.status || '').toUpperCase() === 'RECEIVED') continue;
+    for (const dl of d.items || []) {
+      if (dl.productId && (Number(dl.deliveredQty) || 0) > (Number(dl.receivedQty) || 0)) {
+        addPending(dl.productId, d.branchId, (Number(dl.deliveredQty) || 0) - (Number(dl.receivedQty) || 0), d.deliveryNo);
+      }
+    }
+  }
+
+  return { byProdBranch, byProd };
+}
+
+function buildRestockDraftPlan() {
+  if (!state.inventory) return [];
+  const mode = document.querySelector('input[name="restockSupplierMode"]:checked')?.value || 'LOWEST';
+  const priorityMode = document.getElementById('restockPriorityMode')?.value || 'LOW_END_DEMAND';
+  const typeFilter = document.getElementById('restockTypeFilter')?.value || 'Cellphones';
+  const budgetVal = parseMoneyInput(document.getElementById('restockBudgetInput')?.value);
+  const globalBranchId = document.getElementById('globalBranch')?.value || '';
+  const excludeObsolete = document.getElementById('restockExcludeObsoleteChk')?.checked !== false;
+  const deductPending = document.getElementById('restockDeductPendingChk')?.checked !== false;
+
+  const { branches, items } = state.inventory;
+  const targetBranches = globalBranchId ? branches.filter((b) => b.id === globalBranchId) : branches;
+  const demandIdx = buildRestockDemandIndex();
+  const pendingIdx = buildPendingOrdersLookup();
+
+  const candidates = [];
+  const obsoleteList = [];
+  for (const item of items) {
+    if ((item.lifecycle_status || 'Active') !== 'Active') continue;
+    const pType = item.product_type || 'Cellphones';
+    if (typeFilter !== 'ALL' && pType !== typeFilter) continue;
+    // Never suggest repo units or freebie/promo bundles for supplier restock
+    if (isNonOrderablePromoOrRepo(item)) continue;
+
+    const health = isObsoleteOrNonMoving(item, branches, demandIdx);
+    const prodPending = pendingIdx.byProd.get(item.id)?.qty || 0;
+    if (health.status !== 'ACTIVE_MOVING' && prodPending === 0) {
+      obsoleteList.push({
+        id: item.id,
+        displayModel: formatSwapModelName({ brand: item.brand || '', model: item.model || item.name }),
+        sku: item.website_codes || item.sku,
+        ...health,
+      });
+      if (excludeObsolete) continue;
+    }
+
+    const sup = resolveSupplierForProduct(item, mode);
+    if (!sup) continue;
+
+    const price = Number(item.base_price) || 0;
+    const tier = getCellphonePriceTier(item);
+    const prodDemand = demandIdx.byProd.get(item.id) || { sold30: 0, sold90: 0, allSold: 0, restocked: 0 };
+    const storewideDemand90 = prodDemand.sold90 || 0;
+    const storewideDemand30 = prodDemand.sold30 || 0;
+    const storewideAllSold = prodDemand.allSold || 0;
+
+    // Resolve effective unit cost: if missing (0) or wildly above SRP from a FIFO glitch, estimate 85% SRP in LOWEST mode so 0-stock demand items are NEVER dropped
+    const websiteCost = Number(item.cost_price) || 0;
+    const hasManualSupCost = Number(item.cost_ab) > 0 || Number(item.cost_ak) > 0 || Number(item.cost_online) > 0;
+    let unitCost = Number(sup.unitCost) || 0;
+    let isEstimatedCost = false;
+    if (mode === 'LOWEST' && price > 0 && (unitCost <= 0 || (!hasManualSupCost && unitCost > price * 1.05))) {
+      unitCost = Math.round(price * 0.85);
+      isEstimatedCost = true;
+    }
+    const savingsVsWebsite = !isEstimatedCost && websiteCost > 0 && websiteCost <= price * 1.05 && unitCost > 0 ? websiteCost - unitCost : 0;
+
+    for (const b of targetBranches) {
+      const cell = item.byBranch?.[b.id];
+      const avail = cell ? Math.max(0, Number(cell.qtyAvailable) || 0) : 0;
+      const pendInfo = pendingIdx.byProdBranch.get(`${item.id}::${b.id}`) || { qty: 0, refs: new Set() };
+      const pendingQty = pendInfo.qty || 0;
+      const pendingRefs = [...pendInfo.refs];
+      const effectiveAvail = avail + (deductPending ? pendingQty : 0);
+
+      const brDemand = demandIdx.byProdBranch.get(`${item.id}::${b.id}`) || { sold30: 0, sold90: 0, allSold: 0 };
+      const branchDemand90 = brDemand.sold90 || 0;
+      const branchDemand30 = brDemand.sold30 || 0;
+      const branchAllSold = brDemand.allSold || 0;
+      const branchMonthlyDemand = branchDemand90 / 3;
+
+      // Dynamic Reorder Point & Target Stock driven by actual per-store demand + price tier
+      const defaultRp = tier.key === 'LOW_END' ? (b.id === 'br-molave' ? 2 : 1) : tier.key === 'MID_RANGE' ? (b.id === 'br-molave' ? 2 : 1) : 1;
+      const demandRp = branchMonthlyDemand > 0 ? Math.ceil(branchMonthlyDemand * 0.4) : 0;
+      const reorderPoint = Math.max(Number(cell?.reorderPoint) || defaultRp, demandRp);
+
+      // Skip items whose current + pending stock isn't even low (unless they specifically have pending orders to inspect)
+      if (avail > 0 && avail > reorderPoint && pendingQty === 0) continue;
+
+      const baseFloor =
+        tier.key === 'LOW_END'
+          ? b.id === 'br-molave'
+            ? 3
+            : 2
+          : tier.key === 'MID_RANGE'
+            ? b.id === 'br-molave'
+              ? 2
+              : 1
+            : 1;
+      const demandTarget = branchMonthlyDemand > 0 ? Math.min(10, Math.ceil(branchMonthlyDemand * 0.85)) : 0;
+      const targetQty = branchDemand90 > 0
+        ? Math.max(baseFloor, demandTarget, reorderPoint + (avail === 0 ? 1 : 0))
+        : Math.max(baseFloor, avail === 0 ? baseFloor : reorderPoint + 1);
+
+      const coveredByPending = deductPending && pendingQty > 0 && effectiveAvail > reorderPoint;
+      const suggestedQty = coveredByPending ? 0 : Math.max(1, targetQty - effectiveAvail);
+      const rawNeededWithoutPending = Math.max(0, targetQty - avail);
+      const savedByPendingQty = deductPending ? Math.max(0, rawNeededWithoutPending - suggestedQty) : 0;
+
+      // Skip items only kept for healthy stock + pending if they had >0 avail and no order needed (unless coveredByPending so user can inspect pending coverage)
+      if (avail > reorderPoint && !coveredByPending && pendingQty === 0) continue;
+
+      candidates.push({
+        key: `${item.id}::${b.id}`,
+        productId: item.id,
+        brand: item.brand || '',
+        model: item.model || item.name,
+        displayModel: formatSwapModelName({ brand: item.brand || '', model: item.model || item.name }),
+        sku: item.website_codes || item.sku,
+        imageUrl: item.imageUrl || '',
+        branchId: b.id,
+        branchName: b.name,
+        supplier: sup.supplier,
+        unitCost,
+        isEstimatedCost,
+        srp: price,
+        tierKey: tier.key,
+        tierRank: tier.rank,
+        tierLabel: tier.label,
+        tierColor: tier.color,
+        websiteCost,
+        savingsVsWebsite,
+        avail,
+        pendingQty,
+        pendingRefs,
+        effectiveAvail,
+        coveredByPending,
+        savedByPendingQty,
+        reorderPoint,
+        branchDemand30,
+        branchDemand90,
+        branchAllSold,
+        storewideDemand30,
+        storewideDemand90,
+        storewideAllSold,
+        qty: suggestedQty,
+        selected: !coveredByPending && suggestedQty > 0,
+      });
+    }
+  }
+
+  // Sort by selected priority strategy (push fully-covered-by-pending rows after actionable rows)
+  candidates.sort((a, b) => {
+    const aNeed = a.coveredByPending || a.qty <= 0 ? 1 : 0;
+    const bNeed = b.coveredByPending || b.qty <= 0 ? 1 : 0;
+    if (aNeed !== bNeed) return aNeed - bNeed;
+
+    const aHasDemand = a.branchDemand90 > 0 || a.storewideDemand90 > 0 || a.storewideAllSold > 0 ? 1 : 0;
+    const bHasDemand = b.branchDemand90 > 0 || b.storewideDemand90 > 0 || b.storewideAllSold > 0 ? 1 : 0;
+    const aZero = a.effectiveAvail === 0 ? 1 : 0;
+    const bZero = b.effectiveAvail === 0 ? 1 : 0;
+
+    if (priorityMode === 'SAVINGS_FIRST') {
+      const ap = a.unitCost > 0 ? 0 : 1;
+      const bp = b.unitCost > 0 ? 0 : 1;
+      if (ap !== bp) return ap - bp;
+      if (aZero !== bZero) return bZero - aZero;
+      if (a.savingsVsWebsite !== b.savingsVsWebsite) return b.savingsVsWebsite - a.savingsVsWebsite;
+      if (a.branchDemand90 !== b.branchDemand90) return b.branchDemand90 - a.branchDemand90;
+      if (a.tierRank !== b.tierRank) return a.tierRank - b.tierRank;
+      return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel);
+    }
+
+    if (priorityMode === 'DEMAND_FIRST') {
+      if (aHasDemand !== bHasDemand) return bHasDemand - aHasDemand;
+      if (aZero !== bZero) return bZero - aZero;
+      if (a.branchDemand90 !== b.branchDemand90) return b.branchDemand90 - a.branchDemand90;
+      if (a.storewideDemand90 !== b.storewideDemand90) return b.storewideDemand90 - a.storewideDemand90;
+      if (a.tierRank !== b.tierRank) return a.tierRank - b.tierRank;
+      if (a.effectiveAvail !== b.effectiveAvail) return a.effectiveAvail - b.effectiveAvail;
+      return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel);
+    }
+
+    // DEFAULT: LOW_END_DEMAND — Prioritize Active-Demand Low-End Cellphones (SRP <= ₱10k), Out-of-Stock (after pending) first, then Store Demand
+    if (aHasDemand !== bHasDemand) return bHasDemand - aHasDemand;
+    if (a.tierRank !== b.tierRank) return a.tierRank - b.tierRank;
+    if (aZero !== bZero) return bZero - aZero;
+    if (a.branchDemand90 !== b.branchDemand90) return b.branchDemand90 - a.branchDemand90;
+    if (a.storewideDemand90 !== b.storewideDemand90) return b.storewideDemand90 - a.storewideDemand90;
+    if (a.branchAllSold !== b.branchAllSold) return b.branchAllSold - a.branchAllSold;
+    if (a.storewideAllSold !== b.storewideAllSold) return b.storewideAllSold - a.storewideAllSold;
+    if (a.savingsVsWebsite !== b.savingsVsWebsite) return b.savingsVsWebsite - a.savingsVsWebsite;
+    if (a.effectiveAvail !== b.effectiveAvail) return a.effectiveAvail - b.effectiveAvail;
+    return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel);
+  });
+
+  if (budgetVal > 0) {
+    let spent = 0;
+    for (const c of candidates) {
+      if (c.coveredByPending || c.qty <= 0) {
+        c.selected = false;
+        continue;
+      }
+      if (c.unitCost <= 0) {
+        c.selected = false;
+        continue;
+      }
+      if (spent + c.unitCost > budgetVal) {
+        c.selected = false;
+        continue;
+      }
+      const maxAffordable = Math.floor((budgetVal - spent) / c.unitCost);
+      if (maxAffordable < c.qty) {
+        c.qty = Math.max(1, maxAffordable);
+      }
+      spent += c.qty * c.unitCost;
+    }
+  }
+
+  state.restockPlan = candidates;
+  renderObsoleteAuditUI(obsoleteList);
+  return candidates;
+}
+
+function getFilteredRestockRows() {
+  const plan = state.restockPlan || [];
+  const search = (document.getElementById('restockSearchInput')?.value || '').trim().toLowerCase();
+  const brandFilter = document.getElementById('restockBrandFilter')?.value || 'ALL';
+  const showFilter = document.getElementById('restockShowFilter')?.value || 'SELECTED';
+
+  return plan
+    .map((r, idx) => ({ ...r, _idx: idx }))
+    .filter((r) => {
+      if (showFilter === 'SELECTED' && (!r.selected || r.qty <= 0)) return false;
+      if (showFilter === 'ALL' && r.coveredByPending) return false;
+      if (showFilter === 'ZERO' && (r.avail > 0 || r.coveredByPending)) return false;
+      if (showFilter === 'PENDING_COVERED' && !(r.pendingQty > 0)) return false;
+      if (brandFilter !== 'ALL' && (r.brand || 'Other') !== brandFilter) return false;
+      if (
+        search &&
+        !r.displayModel.toLowerCase().includes(search) &&
+        !r.sku.toLowerCase().includes(search) &&
+        !(r.brand || '').toLowerCase().includes(search)
+      ) {
+        return false;
+      }
+      return true;
+    });
+}
+
+function renderRestockCards() {
+  const plan = state.restockPlan || [];
+  const grid = document.getElementById('reorderCardGrid');
+  const sumEl = document.getElementById('restockDraftSummary');
+  const brandSel = document.getElementById('restockBrandFilter');
+  if (!grid) return;
+
+  if (brandSel) {
+    const prevBrand = brandSel.value || 'ALL';
+    const brands = [...new Set(plan.map((r) => r.brand || 'Other'))].sort();
+    brandSel.innerHTML =
+      '<option value="ALL">All Brands</option>' +
+      brands.map((b) => `<option value="${b}">${b}</option>`).join('');
+    if (brands.includes(prevBrand)) brandSel.value = prevBrand;
+  }
+
+  const selected = plan.filter((r) => r.selected && r.qty > 0);
+  const totalUnits = selected.reduce((s, r) => s + r.qty, 0);
+  const totalCost = selected.reduce((s, r) => s + r.qty * r.unitCost, 0);
+  const lowEndUnits = selected.filter((r) => r.tierKey === 'LOW_END').reduce((s, r) => s + r.qty, 0);
+  const midUnits = selected.filter((r) => r.tierKey === 'MID_RANGE').reduce((s, r) => s + r.qty, 0);
+  const highUnits = selected.filter((r) => r.tierKey === 'HIGH_END').reduce((s, r) => s + r.qty, 0);
+  const zeroLines = selected.filter((r) => r.avail === 0).length;
+  const totalZeroLines = plan.filter((r) => r.avail === 0 && !r.coveredByPending).length;
+  const pendingSavedPcs = plan.reduce((s, r) => s + (Number(r.savedByPendingQty) || 0), 0);
+  const pendingLineCount = plan.filter((r) => r.pendingQty > 0).length;
+  if (sumEl) {
+    const tierNote =
+      lowEndUnits + midUnits + highUnits > 0
+        ? ` • <span style="color:var(--green);">Low-End: <strong>${fmtNum(lowEndUnits)}</strong></span>${midUnits ? ` • Mid: <strong>${fmtNum(midUnits)}</strong>` : ''}${highUnits ? ` • High: <strong>${fmtNum(highUnits)}</strong>` : ''}`
+        : '';
+    const pendNote =
+      pendingSavedPcs > 0
+        ? ` • <span style="color:#60a5fa;">Pending On-Order deducted: <strong>${fmtNum(pendingSavedPcs)} pcs</strong> (${pendingLineCount} branch line${pendingLineCount === 1 ? '' : 's'})</span>`
+        : '';
+    sumEl.innerHTML = `Selected <strong>${fmtNum(selected.length)}</strong> line(s) (<strong>${fmtNum(zeroLines)}/${fmtNum(totalZeroLines)}</strong> out-of-stock) • <strong>${fmtNum(totalUnits)} pcs</strong>${tierNote}${pendNote} • Est. Total: <strong style="color:var(--gold-bright);">${fmtCurrency(totalCost)}</strong>`;
+  }
+
+  const visible = getFilteredRestockRows();
+  if (!visible.length) {
+    grid.innerHTML = '<div class="muted small" style="padding:10px 0;">No products match. Try switching Show filter to "All Low-Stock" or clearing search.</div>';
+    return;
+  }
+
+  if (!state.restockOpenBrands) state.restockOpenBrands = new Set();
+
+  // Group by Brand -> Model (preserves priority sort order!)
+  const byBrand = new Map();
+  for (const r of visible) {
+    const bName = r.brand || 'Other';
+    if (!byBrand.has(bName)) byBrand.set(bName, new Map());
+    const modelMap = byBrand.get(bName);
+    if (!modelMap.has(r.productId)) {
+      modelMap.set(r.productId, {
+        productId: r.productId,
+        displayModel: r.displayModel,
+        sku: r.sku,
+        imageUrl: r.imageUrl,
+        supplier: r.supplier,
+        unitCost: r.unitCost,
+        isEstimatedCost: r.isEstimatedCost,
+        srp: r.srp,
+        tierKey: r.tierKey,
+        tierLabel: r.tierLabel,
+        tierColor: r.tierColor,
+        storewideDemand90: r.storewideDemand90,
+        storewideAllSold: r.storewideAllSold,
+        rows: [],
+      });
+    }
+    modelMap.get(r.productId).rows.push(r);
+  }
+
+  const searchActive = Boolean((document.getElementById('restockSearchInput')?.value || '').trim());
+  const cardsHtml = [];
+
+  for (const [bName, modelMap] of byBrand.entries()) {
+    const models = [...modelMap.values()];
+    const brandRows = models.flatMap((m) => m.rows);
+    const brandSelectedUnits = brandRows.filter((r) => r.selected).reduce((s, r) => s + r.qty, 0);
+    const brandZeroCount = brandRows.filter((r) => r.avail === 0).length;
+    const brandAllSelected = brandRows.length > 0 && brandRows.every((r) => r.selected);
+    const isOpen = searchActive || byBrand.size <= 3 || state.restockOpenBrands.has(bName);
+    const accent = typeof getBrandMeta === 'function' ? getBrandMeta(bName).color : 'var(--gold)';
+
+    const modelsHtml = models
+      .map((m) => {
+        const thumbHtml = m.imageUrl
+          ? `<img src="${m.imageUrl}" alt="${m.displayModel}" style="width:48px;height:48px;object-fit:contain;border-radius:8px;background:#fff;flex-shrink:0;padding:2px;" loading="lazy" />`
+          : `<div style="width:48px;height:48px;border-radius:8px;background:rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">📱</div>`;
+        const branchRowsHtml = m.rows
+          .map((r) => {
+            const zeroTag = r.avail === 0 ? `<span style="color:#ef4444;font-weight:700;font-size:10px;margin-left:2px;">OUT</span>` : '';
+            const pendTag =
+              r.pendingQty > 0
+                ? `<span style="color:#60a5fa;font-weight:700;font-size:10px;">+${fmtNum(r.pendingQty)} on order${r.coveredByPending ? ' (covered)' : ''}</span>`
+                : '';
+            const brDemTag =
+              r.branchDemand90 > 0
+                ? `<span style="color:var(--gold-bright);font-size:10.5px;">• ${fmtNum(r.branchDemand90)} sold/90d</span>`
+                : r.branchAllSold > 0
+                  ? `<span class="muted" style="font-size:10px;">• ${fmtNum(r.branchAllSold)} hist</span>`
+                  : '';
+            return `
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px 0;border-top:1px solid rgba(255,255,255,0.06);font-size:12px;">
+              <label style="display:flex;align-items:center;gap:5px;margin:0;cursor:pointer;flex-wrap:wrap;">
+                <input type="checkbox" class="reorder-row-chk" data-idx="${r._idx}" ${r.selected ? 'checked' : ''} style="width:14px;height:14px;margin:0;accent-color:var(--gold);" />
+                <span>${r.branchName}</span>
+                <span class="muted small">(${fmtNum(r.avail)}/${fmtNum(r.reorderPoint)})</span>
+                ${zeroTag}
+                ${pendTag}
+                ${brDemTag}
+              </label>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <input type="number" class="reorder-qty-inp" data-idx="${r._idx}" value="${r.qty}" min="0" max="99" style="width:52px;padding:2px 5px;font-size:12px;text-align:center;" />
+                <span class="small muted" style="min-width:22px;">pcs</span>
+              </div>
+            </div>`;
+          })
+          .join('');
+        const prodObj = state.inventory?.items?.find((i) => i.id === m.productId) || {};
+        const cAb = Number(prodObj.cost_ab) > 0 ? prodObj.cost_ab : '';
+        const cAk = Number(prodObj.cost_ak) > 0 ? prodObj.cost_ak : '';
+        const cOn = Number(prodObj.cost_online) > 0 ? prodObj.cost_online : '';
+        const webCost = Number(prodObj.cost_price) || 0;
+        const diffWeb = !m.isEstimatedCost && webCost > 0 && m.unitCost > 0 ? webCost - m.unitCost : 0;
+        const diffBadge = m.isEstimatedCost
+          ? `<span style="color:#f59e0b;font-size:10.5px;font-weight:700;">• Est. 85% SRP (enter cost)</span>`
+          : diffWeb > 0
+            ? `<span style="color:var(--green);font-size:10.5px;font-weight:700;">• Saves ${fmtCurrency(diffWeb)} vs Web</span>`
+            : diffWeb < 0
+              ? `<span style="color:#f59e0b;font-size:10.5px;font-weight:700;">• +${fmtCurrency(Math.abs(diffWeb))} vs Web</span>`
+              : '';
+        const tierPill = `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;background:rgba(255,255,255,0.08);color:${m.tierColor};">${m.tierLabel}${m.srp > 0 ? ` • ${fmtCurrency(m.srp)}` : ''}</span>`;
+        const demandPill =
+          m.storewideDemand90 > 0
+            ? `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;background:rgba(231,197,95,0.14);color:var(--gold-bright);">Demand: ${fmtNum(m.storewideDemand90)} / 90d</span>`
+            : m.storewideAllSold > 0
+              ? `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;background:rgba(255,255,255,0.06);color:var(--muted);">Hist: ${fmtNum(m.storewideAllSold)} sold</span>`
+              : '';
+        return `
+          <div class="model-card" style="padding:10px;display:flex;flex-direction:column;gap:8px;">
+            <div style="display:flex;gap:10px;align-items:center;">
+              ${thumbHtml}
+              <div style="min-width:0;flex:1;">
+                <div style="font-weight:700;font-size:13px;line-height:1.25;">${m.displayModel}</div>
+                <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:3px;">${tierPill}${demandPill}</div>
+                <div class="small muted" style="margin-top:2px;">${m.sku} • <span style="color:var(--gold-bright);">${m.supplier}</span></div>
+                <div class="small" style="margin-top:2px;">Active Cost: <strong>${m.unitCost > 0 ? fmtCurrency(m.unitCost) : '—'}</strong> ${diffBadge}</div>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:4px;align-items:end;padding-top:4px;border-top:1px solid rgba(255,255,255,0.06);">
+              <div>
+                <div style="font-size:9.5px;color:var(--muted);">AB ₱</div>
+                <input type="number" class="restock-cost-ab" data-pid="${m.productId}" value="${cAb}" min="0" step="0.01" placeholder="0" style="width:100%;padding:3px 5px;font-size:11px;" />
+              </div>
+              <div>
+                <div style="font-size:9.5px;color:var(--muted);">A&amp;K ₱</div>
+                <input type="number" class="restock-cost-ak" data-pid="${m.productId}" value="${cAk}" min="0" step="0.01" placeholder="0" style="width:100%;padding:3px 5px;font-size:11px;" />
+              </div>
+              <div>
+                <div style="font-size:9.5px;color:var(--muted);">Online ₱</div>
+                <input type="number" class="restock-cost-on" data-pid="${m.productId}" value="${cOn}" min="0" step="0.01" placeholder="0" style="width:100%;padding:3px 5px;font-size:11px;" />
+              </div>
+              <button type="button" class="secondary restock-save-cost-btn" data-pid="${m.productId}" style="padding:4px 7px;font-size:10.5px;min-height:0;" title="Save supplier costs">Save</button>
+            </div>
+            <div>${branchRowsHtml}</div>
+          </div>
+        `;
+      })
+      .join('');
+
+    cardsHtml.push(`
+      <div class="brand-card ${isOpen ? 'open' : ''}" style="border-top:3px solid ${accent};grid-column:1 / -1;">
+        <div class="brand-card-head restock-brand-toggle" data-brand="${bName}" style="cursor:pointer;">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <input type="checkbox" class="restock-brand-chk" data-brand="${bName}" ${brandAllSelected ? 'checked' : ''} style="width:16px;height:16px;accent-color:var(--gold);" />
+            <strong style="color:${accent};font-size:15px;">${bName}</strong>
+            <span class="muted small">${models.length} model(s) • ${brandSelectedUnits} pcs selected${brandZeroCount ? ` • <span style="color:#ef4444;font-weight:700;">${brandZeroCount} out-of-stock</span>` : ''}</span>
+          </div>
+          <span class="muted small">${isOpen ? '▲ Hide' : '▼ Show'}</span>
+        </div>
+        ${isOpen ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:10px;">${modelsHtml}</div>` : ''}
+      </div>
+    `);
+  }
+
+  grid.innerHTML = cardsHtml.join('');
+
+  grid.querySelectorAll('.restock-brand-toggle').forEach((hdr) => {
+    hdr.addEventListener('click', (e) => {
+      if (e.target.closest('.restock-brand-chk')) return;
+      const b = hdr.dataset.brand;
+      if (state.restockOpenBrands.has(b)) state.restockOpenBrands.delete(b);
+      else state.restockOpenBrands.add(b);
+      renderRestockCards();
+    });
+  });
+
+  grid.querySelectorAll('.restock-brand-chk').forEach((chk) => {
+    chk.addEventListener('change', (e) => {
+      const b = e.target.dataset.brand;
+      const checked = e.target.checked;
+      for (const r of visible) {
+        if ((r.brand || 'Other') === b && state.restockPlan?.[r._idx]) {
+          state.restockPlan[r._idx].selected = checked;
+        }
+      }
+      renderRestockCards();
+    });
+  });
+
+  grid.querySelectorAll('.reorder-row-chk').forEach((chk) => {
+    chk.addEventListener('change', (e) => {
+      const idx = Number(e.target.dataset.idx);
+      if (state.restockPlan?.[idx]) state.restockPlan[idx].selected = e.target.checked;
+      renderRestockCards();
+    });
+  });
+
+  grid.querySelectorAll('.reorder-qty-inp').forEach((inp) => {
+    inp.addEventListener('change', (e) => {
+      const idx = Number(e.target.dataset.idx);
+      const parsed = parseInt(e.target.value, 10);
+      const val = Number.isFinite(parsed) ? Math.max(0, parsed) : 1;
+      if (state.restockPlan?.[idx]) {
+        state.restockPlan[idx].qty = val;
+        if (val === 0) state.restockPlan[idx].selected = false;
+      }
+      renderRestockCards();
+    });
+  });
+
+  grid.querySelectorAll('.restock-save-cost-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const pid = btn.dataset.pid;
+      const card = btn.closest('.model-card');
+      const costAb = card?.querySelector('.restock-cost-ab')?.value ?? '';
+      const costAk = card?.querySelector('.restock-cost-ak')?.value ?? '';
+      const costOnline = card?.querySelector('.restock-cost-on')?.value ?? '';
+      btn.textContent = '...';
+      try {
+        await saveProductSupplierCosts(pid, { costAb, costAk, costOnline });
+        renderRestockCards();
+        renderInventory();
+      } catch (err) {
+        btn.textContent = 'Err';
+        alert(err.message);
+      }
+    });
+  });
+}
+
+function computeOrderSummaryMetrics(items, orderStatus = 'Supplier Approved') {
+  let requestedUnits = 0;
+  let approvedUnits = 0;
+  let deliveredUnits = 0;
+  let pendingUnits = 0;
+  let requestedTotal = 0;
+  let approvedTotal = 0;
+  let deliveredTotal = 0;
+  const isPendingStatus = ['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received'].includes(orderStatus);
+
+  for (const it of items || []) {
+    const rq = Math.max(0, Number(it.requestedQty ?? it.qty) || 0);
+    const rc = Math.max(0, Number(it.requestedCost ?? it.unitCost) || 0);
+    const isApp = it.approved !== false && it.selected !== false && !it.isExtraItem;
+    const aq = isApp ? Math.max(0, Number(it.qty) || 0) : 0;
+    const ac = Math.max(0, Number(it.unitCost) || 0);
+    const dq =
+      it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== ''
+        ? Math.max(0, Number(it.receivedQty) || 0)
+        : 0;
+    const dc = Math.max(0, Number(it.receivedCost ?? ac) || 0);
+
+    requestedUnits += rq;
+    requestedTotal += rq * rc;
+    approvedUnits += aq;
+    approvedTotal += aq * ac;
+    deliveredUnits += dq;
+    deliveredTotal += dq * dc;
+    if (isPendingStatus && isApp) {
+      pendingUnits += Math.max(0, aq - dq);
+    }
+  }
+  return {
+    requestedUnits,
+    approvedUnits,
+    deliveredUnits,
+    pendingUnits,
+    requestedTotal: Number(requestedTotal.toFixed(2)),
+    approvedTotal: Number(approvedTotal.toFixed(2)),
+    deliveredTotal: Number(deliveredTotal.toFixed(2)),
+    qtyVariance: deliveredUnits - approvedUnits,
+    costVariance: Number((deliveredTotal - approvedTotal).toFixed(2)),
+  };
+}
+
+function getLocalSavedOrders() {
+  try {
+    const raw = localStorage.getItem('ab_purchase_orders_v1');
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function setLocalSavedOrders(orders) {
+  try {
+    localStorage.setItem('ab_purchase_orders_v1', JSON.stringify(orders || []));
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+function getDeletedLocalPoIds() {
+  try {
+    const raw = localStorage.getItem('ab_deleted_po_ids_v1');
+    return new Set(raw ? JSON.parse(raw) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function markLocalPoDeleted(poId) {
+  const s = getDeletedLocalPoIds();
+  s.add(poId);
+  try {
+    localStorage.setItem('ab_deleted_po_ids_v1', JSON.stringify([...s]));
+  } catch {}
+}
+
+async function loadAbDeliveries() {
+  if (IS_STATIC_GH) {
+    try {
+      const b = await getGhBundle();
+      state.abDeliveries = Array.isArray(b?.allDeliveries) ? b.allDeliveries : [];
+    } catch {
+      state.abDeliveries = [];
+    }
+    return state.abDeliveries;
+  }
+  try {
+    const res = await api('/api/deliveries');
+    state.abDeliveries = Array.isArray(res?.deliveries) ? res.deliveries : [];
+  } catch {
+    state.abDeliveries = [];
+  }
+  return state.abDeliveries;
+}
+
+async function loadSavedPurchaseOrders() {
+  if (IS_STATIC_GH) {
+    let local = getLocalSavedOrders();
+    try {
+      const b = await getGhBundle();
+      const deleted = getDeletedLocalPoIds();
+      const seeded = Array.isArray(b?.purchaseOrders) ? b.purchaseOrders : [];
+      const haveIds = new Set(local.map((o) => o.id));
+      let added = false;
+      for (const s of seeded) {
+        if (!haveIds.has(s.id) && !deleted.has(s.id)) {
+          let parsedItems = [];
+          try {
+            parsedItems = typeof s.items_json === 'string' ? JSON.parse(s.items_json || '[]') : Array.isArray(s.items) ? s.items : [];
+          } catch {
+            parsedItems = [];
+          }
+          local.push({
+            id: s.id,
+            title: s.title,
+            status: s.status,
+            supplierFilter: s.supplier_filter || s.supplierFilter || 'LOWEST',
+            notes: s.notes || '',
+            expectedDate: s.expected_date || s.expectedDate || '',
+            abDeliveryRefs: s.ab_delivery_refs || s.abDeliveryRefs || '',
+            items: parsedItems,
+            createdAt: s.created_at || s.createdAt || new Date().toISOString(),
+            updatedAt: s.updated_at || s.updatedAt || new Date().toISOString(),
+          });
+          added = true;
+        }
+      }
+      if (added) setLocalSavedOrders(local);
+    } catch {}
+    state.savedOrders = local
+      .map((o) => ({ ...o, ...computeOrderSummaryMetrics(o.items, o.status) }))
+      .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
+    return state.savedOrders;
+  }
+  try {
+    const res = await api('/api/purchase-orders');
+    state.savedOrders = Array.isArray(res?.orders) ? res.orders : [];
+  } catch {
+    state.savedOrders = getLocalSavedOrders();
+  }
+  return state.savedOrders;
+}
+
+function applyEditedPricesToLocalInventory(items) {
+  if (!state.inventory?.items || !Array.isArray(items)) return;
+  const localMap = IS_STATIC_GH ? getLocalSupplierCostsMap() : null;
+  for (const it of items) {
+    const useCost = Number(it.receivedCost) > 0 ? Number(it.receivedCost) : Number(it.unitCost) || 0;
+    if (!it.productId || it.approved === false || !(useCost > 0)) continue;
+    const prod = state.inventory.items.find((p) => p.id === it.productId);
+    if (!prod) continue;
+    const sup = String(it.supplier || '').toUpperCase();
+    if (sup.includes('A&K')) prod.cost_ak = useCost;
+    else if (sup.includes('ONLINE')) prod.cost_online = useCost;
+    else prod.cost_ab = useCost;
+    if (localMap) {
+      localMap[prod.id] = {
+        cost_ab: Number(prod.cost_ab) || 0,
+        cost_ak: Number(prod.cost_ak) || 0,
+        cost_online: Number(prod.cost_online) || 0,
+      };
+    }
+  }
+  if (localMap) {
+    try {
+      localStorage.setItem('ab_supplier_costs_v1', JSON.stringify(localMap));
+    } catch {}
+  }
+}
+
+function reconcileStaticOrdersWithDeliveries(onlyPoId = null) {
+  const deliveries = (state.abDeliveries || []).filter((d) => String(d.status || '').toUpperCase() === 'RECEIVED');
+  if (!deliveries.length) return 0;
+  const orders = getLocalSavedOrders();
+  const claimed = new Set();
+  for (const o of orders) {
+    if (onlyPoId && o.id === onlyPoId) continue;
+    for (const ref of String(o.abDeliveryRefs || '').split(',').map((s) => s.trim()).filter(Boolean)) claimed.add(ref);
+  }
+  let updatedOrders = 0;
+  const now = new Date().toISOString();
+  for (const po of orders) {
+    if (onlyPoId && po.id !== onlyPoId) continue;
+    if (!['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received', 'Received (Pending AB Web)'].includes(po.status)) continue;
+    const orderDate = String(po.createdAt || '').slice(0, 10);
+    const refs = new Set(String(po.abDeliveryRefs || '').split(',').map((s) => s.trim()).filter(Boolean));
+    let changed = false;
+    for (const deliv of deliveries) {
+      if (orderDate && deliv.deliveryDate < orderDate) continue;
+      if (claimed.has(deliv.deliveryNo) && !refs.has(deliv.deliveryNo)) continue;
+      let matched = false;
+      for (const dl of deliv.items || []) {
+        if (!dl.productId) continue;
+        const target = (po.items || []).find(
+          (it) =>
+            it.approved !== false &&
+            it.branchId === deliv.branchId &&
+            it.productId === dl.productId &&
+            (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB' || it.abDeliveryNo === deliv.deliveryNo)
+        );
+        if (!target) continue;
+        matched = true;
+        if (target.abDeliveryNo !== deliv.deliveryNo) {
+          target.abDeliveryNo = deliv.deliveryNo;
+          target.receivedDate = target.receivedDate || deliv.deliveryDate;
+          if (target.receivedQty === undefined || target.receivedQty === null || target.receivedQty === '') {
+            target.receivedQty = Number(dl.receivedQty ?? dl.deliveredQty) || 0;
+          }
+          if (target.receivedCost === undefined || target.receivedCost === null || target.receivedCost === '') {
+            target.receivedCost = Number(target.unitCost) || 0;
+          }
+          target.abReportedQty = Number(dl.receivedQty ?? dl.deliveredQty) || 0;
+          changed = true;
+        }
+      }
+      if (matched && !refs.has(deliv.deliveryNo)) {
+        refs.add(deliv.deliveryNo);
+        claimed.add(deliv.deliveryNo);
+        changed = true;
+      }
+    }
+    if (changed) {
+      po.abDeliveryRefs = [...refs].join(', ');
+      po.updatedAt = now;
+      const appItems = (po.items || []).filter((it) => it.approved !== false && (Number(it.qty) || 0) > 0);
+      const anyRec = (po.items || []).some((it) => Number(it.receivedQty) > 0 || (it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== ''));
+      const allDone = appItems.length > 0 && appItems.every((it) => it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== '');
+      const hasMissingAb = (po.items || []).some((it) => Number(it.receivedQty) > 0 && (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB'));
+      if (allDone) po.status = hasMissingAb ? 'Received (Pending AB Web)' : 'Received';
+      else if (anyRec) po.status = 'Partially Received';
+      updatedOrders++;
+    }
+  }
+  if (updatedOrders > 0) setLocalSavedOrders(orders);
+  return updatedOrders;
+}
+
+function renderSavedOrdersPanel() {
+  const listEl = document.getElementById('savedOrdersList');
+  const badgeEl = document.getElementById('savedOrdersCountBadge');
+  const pendBadgeEl = document.getElementById('pendingUnitsBadge');
+  const hdrEl = document.getElementById('savedOrdersSummaryHdr');
+  const orders = state.savedOrders || [];
+
+  const pendingOrders = orders.filter((o) => ['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received'].includes(o.status));
+  const totalPendingUnits = pendingOrders.reduce((s, o) => s + (computeOrderSummaryMetrics(o.items, o.status).pendingUnits || 0), 0);
+  const totalPendingCost = orders.reduce((s, o) => {
+    if (!['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received'].includes(o.status)) return s;
+    for (const it of o.items || []) {
+      if (it.approved === false || it.isExtraItem) continue;
+      const app = Math.max(0, Number(it.qty) || 0);
+      const rec = it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== '' ? Math.max(0, Number(it.receivedQty) || 0) : 0;
+      const rem = Math.max(0, app - rec);
+      s += rem * (Number(it.unitCost) || 0);
+    }
+    return s;
+  }, 0);
+
+  if (badgeEl) {
+    badgeEl.textContent = `${orders.length} order${orders.length === 1 ? '' : 's'}`;
+    badgeEl.className = `badge ${orders.length ? 'badge-ok' : 'badge-warn'}`;
+  }
+  if (pendBadgeEl) {
+    if (totalPendingUnits > 0) {
+      pendBadgeEl.textContent = `${fmtNum(totalPendingUnits)} pcs waiting delivery`;
+      pendBadgeEl.classList.remove('hidden');
+    } else {
+      pendBadgeEl.classList.add('hidden');
+    }
+  }
+  if (hdrEl) {
+    if (!orders.length) {
+      hdrEl.textContent = 'Log pending orders, edit supplier approvals & reconcile deliveries';
+    } else {
+      hdrEl.innerHTML = `${pendingOrders.length} pending (<strong style="color:#60a5fa;">${fmtNum(totalPendingUnits)} pcs / ${fmtCurrency(totalPendingCost)}</strong> on order) • Considers Restock automatically`;
+    }
+  }
+
+  renderOrderVarianceReport();
+  renderAbDeliveriesView();
+
+  if (!listEl) return;
+
+  if (!orders.length) {
+    listEl.innerHTML = '<div class="muted small" style="padding:6px 0;">No orders logged yet. Click <strong>+ LOG PENDING ORDER</strong>, <strong>PASTE EXCEL / TEXT</strong>, or build a Restock plan &amp; click <strong>SAVE ORDER</strong>.</div>';
+    renderSavedOrderInlineEditor();
+    return;
+  }
+
+  const statusColor = (st) => {
+    if (st === 'Received' || st === 'Supplier Approved') return 'badge-ok';
+    if (st === 'Cancelled') return 'badge-danger';
+    return 'badge-warn';
+  };
+
+  listEl.innerHTML = orders
+    .map((o) => {
+      const m = computeOrderSummaryMetrics(o.items, o.status);
+      const qtyDiff = m.approvedUnits - m.requestedUnits;
+      const costDiff = m.approvedTotal - m.requestedTotal;
+      const hasAdj = qtyDiff !== 0 || Math.abs(costDiff) >= 0.01;
+      const diffText = hasAdj
+        ? `<span style="color:${costDiff <= 0 ? 'var(--green)' : '#f59e0b'};font-weight:700;">(${qtyDiff >= 0 ? '+' : ''}${qtyDiff} pcs • ${costDiff >= 0 ? '+' : ''}${fmtCurrency(costDiff)})</span>`
+        : '';
+      const delivPart =
+        m.deliveredUnits > 0 || o.status === 'Received' || o.status === 'Received (Pending AB Web)' || o.status === 'Partially Received'
+          ? ` → Delivered: <strong style="color:${m.qtyVariance === 0 ? 'var(--green)' : '#f59e0b'};">${fmtNum(m.deliveredUnits)} pcs</strong> (${fmtCurrency(m.deliveredTotal)}${m.qtyVariance !== 0 ? `, Var ${m.qtyVariance >= 0 ? '+' : ''}${m.qtyVariance} pcs` : ''})`
+          : '';
+      const missingAbCount = (o.items || []).filter(
+        (it) => Number(it.receivedQty) > 0 && (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB')
+      ).length;
+      const pendTag =
+        m.pendingUnits > 0
+          ? `<span class="badge badge-warn" style="font-size:10px;">⏳ ${fmtNum(m.pendingUnits)} pcs pending delivery</span>`
+          : '';
+      const abMissTag =
+        missingAbCount > 0
+          ? `<span class="badge badge-danger" style="font-size:10px;">${missingAbCount} line(s) not yet in AB Web</span>`
+          : o.abDeliveryRefs
+            ? `<span class="badge badge-ok" style="font-size:10px;">AB: ${o.abDeliveryRefs}</span>`
+            : '';
+      const dtLabel = String(o.createdAt || o.updatedAt || '').slice(0, 10);
+      return `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.03);">
+          <div style="min-width:240px;flex:1;">
+            <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
+              <strong style="color:var(--gold-bright);font-size:13px;">${o.id}</strong>
+              <strong style="font-size:13px;">${o.title}</strong>
+              <span class="badge ${statusColor(o.status)}" style="font-size:10px;">${o.status}</span>
+              ${pendTag}
+              ${abMissTag}
+            </div>
+            <div class="small muted" style="margin-top:3px;">
+              Order Date: <strong>${dtLabel}</strong> • Approved: <strong style="color:var(--text);">${fmtNum(m.approvedUnits)} pcs</strong> (<strong style="color:var(--gold-bright);">${fmtCurrency(m.approvedTotal)}</strong>)
+              ${diffText}
+              ${delivPart}
+            </div>
+            ${o.notes ? `<div class="small muted" style="margin-top:2px;">Note: ${o.notes}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button type="button" class="saved-po-edit-btn" data-poid="${o.id}" style="padding:5px 10px;font-size:11px;min-height:0;">EDIT / RECORD DELIVERY</button>
+            <button type="button" class="secondary saved-po-preview-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">PREVIEW</button>
+            <button type="button" class="secondary saved-po-copy-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">COPY</button>
+            <button type="button" class="secondary saved-po-pdf-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">PDF</button>
+            <button type="button" class="secondary saved-po-del-btn" data-poid="${o.id}" style="padding:5px 8px;font-size:11px;min-height:0;color:var(--danger);">✕</button>
+          </div>
+        </div>`;
+    })
+    .join('');
+
+  listEl.querySelectorAll('.saved-po-edit-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const ord = (state.savedOrders || []).find((o) => o.id === btn.dataset.poid);
+      if (!ord) return;
+      openSavedOrderInlineEditor(ord);
+    });
+  });
+
+  listEl.querySelectorAll('.saved-po-preview-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const ord = (state.savedOrders || []).find((o) => o.id === btn.dataset.poid);
+      if (!ord) return;
+      state.previewOrderOverride = ord;
+      renderReorderPreviewModal();
+      document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
+    });
+  });
+
+  listEl.querySelectorAll('.saved-po-copy-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const ord = (state.savedOrders || []).find((o) => o.id === btn.dataset.poid);
+      if (!ord) return;
+      const text = buildReorderCopyText(ord);
+      const ok = await copyTextToClipboard(text);
+      btn.textContent = ok ? 'COPIED ✓' : 'ERR';
+      setTimeout(() => { btn.textContent = 'COPY'; }, 1400);
+    });
+  });
+
+  listEl.querySelectorAll('.saved-po-pdf-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const ord = (state.savedOrders || []).find((o) => o.id === btn.dataset.poid);
+      if (!ord) return;
+      downloadReorderPlanPdf(ord);
+    });
+  });
+
+  listEl.querySelectorAll('.saved-po-del-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const poId = btn.dataset.poid;
+      if (!confirm(`Delete saved order ${poId}?`)) return;
+      if (IS_STATIC_GH) {
+        markLocalPoDeleted(poId);
+        const next = getLocalSavedOrders().filter((o) => o.id !== poId);
+        setLocalSavedOrders(next);
+        state.savedOrders = next.map((o) => ({ ...o, ...computeOrderSummaryMetrics(o.items, o.status) }));
+      } else {
+        await api(`/api/purchase-orders/${encodeURIComponent(poId)}`, { method: 'DELETE' });
+        await loadSavedPurchaseOrders();
+      }
+      if (state.editingSavedOrder?.id === poId) {
+        state.editingSavedOrder = null;
+        renderSavedOrderInlineEditor();
+      }
+      if (state.previewOrderOverride?.id === poId) state.previewOrderOverride = null;
+      renderSavedOrdersPanel();
+      buildRestockDraftPlan();
+      renderRestockCards();
+    });
+  });
+
+  // Don't interrupt user typing inside the inline editor
+  const wrap = document.getElementById('savedOrderInlineEditor');
+  const activeInside = wrap && document.activeElement && wrap.contains(document.activeElement);
+  if (!activeInside) renderSavedOrderInlineEditor();
+}
+
+function openSavedOrderInlineEditor(order) {
+  state.editingSavedOrder = JSON.parse(JSON.stringify(order));
+  const body = document.getElementById('savedOrdersBody');
+  const caret = document.getElementById('savedOrdersCaret');
+  if (body) body.classList.remove('hidden');
+  if (caret) caret.textContent = '−';
+  renderSavedOrderInlineEditor();
+  document.getElementById('savedOrderInlineEditor')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function openNewPendingOrderCreator() {
+  const now = new Date().toISOString();
+  const dayTag = now.slice(0, 10).replace(/-/g, '');
+  const existingCnt = (state.savedOrders || []).filter((o) => String(o.id || '').startsWith(`PO-${dayTag}-`)).length;
+  const id = `PO-${dayTag}-${String(existingCnt + 1).padStart(2, '0')}`;
+  state.editingSavedOrder = {
+    id,
+    _isNew: true,
+    title: `AB Main Supplier Order (${todayStr})`,
+    status: 'Supplier Approved',
+    supplierFilter: 'AB',
+    notes: 'Pending delivery',
+    expectedDate: '',
+    abDeliveryRefs: '',
+    createdAt: now,
+    updatedAt: now,
+    items: [],
+  };
+  const body = document.getElementById('savedOrdersBody');
+  const caret = document.getElementById('savedOrdersCaret');
+  if (body) body.classList.remove('hidden');
+  if (caret) caret.textContent = '−';
+  renderSavedOrderInlineEditor('Add products below, then click SAVE ORDER CHANGES');
+}
+
+function matchProductByFreeText(rawName) {
+  const items = state.inventory?.items || [];
+  const norm = (s) =>
+    String(s || '')
+      .toLowerCase()
+      .replace(/\bplus\b/g, '+')
+      .replace(/\bgalaxy\b/g, '')
+      .replace(/\b4g\b/g, '')
+      .replace(/gb\b/g, '')
+      .replace(/\s+/g, '')
+      .replace(/[^a-z0-9+]/g, '');
+  const tgt = norm(rawName);
+  if (!tgt) return null;
+
+  const activePhones = items.filter((p) => (p.lifecycle_status || 'Active') === 'Active' && !isNonOrderablePromoOrRepo(p));
+  const pool = [...activePhones, ...items.filter((p) => !isNonOrderablePromoOrRepo(p))];
+
+  // 1. Exact normalized match
+  for (const p of pool) {
+    if (norm(p.name) === tgt || norm(`${p.brand || ''} ${p.model || ''}`) === tgt || norm(p.model) === tgt) return p;
+  }
+  // 2. Spec-preserving includes match (e.g. 4128 vs 464)
+  for (const p of pool) {
+    const k1 = norm(p.name);
+    const k2 = norm(`${p.brand || ''} ${p.model || ''}`);
+    if ((k1.includes(tgt) || tgt.includes(k1)) && tgt.length >= 5) return p;
+    if ((k2.includes(tgt) || tgt.includes(k2)) && tgt.length >= 5) return p;
+  }
+  // 3. Token overlap scoring
+  const tokens = String(rawName || '')
+    .toLowerCase()
+    .replace(/\bgb\b/g, '')
+    .split(/[^a-z0-9+]+/)
+    .filter(Boolean);
+  let best = null;
+  let bestScore = 0;
+  for (const p of activePhones) {
+    const pStr = `${p.brand || ''} ${p.name || ''} ${p.model || ''}`.toLowerCase();
+    let score = 0;
+    for (const tk of tokens) {
+      if (pStr.includes(tk)) score += tk.includes('/') || /^\d+$/.test(tk) ? 3 : 2;
+    }
+    if (score > bestScore && score >= Math.max(4, tokens.length * 1.5)) {
+      bestScore = score;
+      best = p;
+    }
+  }
+  return best;
+}
+
+async function parseAndCreatePastedOrder() {
+  const txt = (document.getElementById('pasteOrderText')?.value || '').trim();
+  const titleInp = (document.getElementById('pasteOrderTitleInp')?.value || '').trim();
+  const defaultBrId = document.getElementById('pasteOrderBranchSel')?.value || 'br-molave';
+  const supplier = document.getElementById('pasteOrderSupplierSel')?.value || 'AB Main Supplier';
+  const stEl = document.getElementById('pasteOrderStatus');
+  if (!txt) {
+    if (stEl) stEl.textContent = 'Paste at least one order line first.';
+    return;
+  }
+
+  const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
+  let curBranchId = defaultBrId;
+  const parsedItems = [];
+  const unmatchedLines = [];
+  let detectedDate = '';
+
+  for (const rawLine of txt.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const up = line.toUpperCase();
+
+    const dtMatch = line.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})|(\d{4}-\d{2}-\d{2})/);
+    if (dtMatch) {
+      detectedDate = dtMatch[4]
+        ? dtMatch[4]
+        : `${dtMatch[3]}-${String(dtMatch[1]).padStart(2, '0')}-${String(dtMatch[2]).padStart(2, '0')}`;
+    }
+    if (up.includes('MOLAVE') && (up.includes('ORDER') || up.includes('BRANCH') || up.length <= 24)) {
+      curBranchId = 'br-molave';
+      continue;
+    }
+    if (up.includes('TAMBULIG') && (up.includes('ORDER') || up.includes('BRANCH') || up.length <= 24)) {
+      curBranchId = 'br-tambulig';
+      continue;
+    }
+    if (up.includes('BONIFACIO') && (up.includes('ORDER') || up.includes('BRANCH') || up.length <= 24)) {
+      curBranchId = 'br-bonifacio';
+      continue;
+    }
+    if (up.startsWith('TOTAL')) continue;
+
+    // Try tab-separated or whitespace-separated: Model | Qty | [Price] | [Total]
+    let modelPart = '';
+    let qty = 1;
+    let price = 0;
+
+    if (line.includes('\t')) {
+      const cols = line.split('\t').map((c) => c.trim()).filter(Boolean);
+      modelPart = cols[0] || '';
+      const nums = cols.slice(1).map((c) => parseMoneyInput(c)).filter((n) => n > 0);
+      if (nums.length >= 1) qty = Math.max(1, Math.round(nums[0]));
+      if (nums.length >= 2) price = nums[1];
+    } else {
+      const m = line.match(/^(.*?)\s+(\d{1,3})(?:\s+([\d,]+(?:\.\d+)?))?(?:\s+([\d,]+(?:\.\d+)?))?$/);
+      if (m) {
+        modelPart = m[1].trim();
+        qty = Math.max(1, parseInt(m[2], 10) || 1);
+        price = m[3] ? parseMoneyInput(m[3]) : 0;
+      } else {
+        modelPart = line;
+      }
+    }
+
+    const prod = matchProductByFreeText(modelPart);
+    if (!prod) {
+      unmatchedLines.push(modelPart);
+      continue;
+    }
+    if (!(price > 0)) {
+      const sup = resolveSupplierForProduct(prod, supplier.includes('A&K') ? 'AK' : supplier.includes('Online') ? 'ONLINE' : 'AB') ||
+        resolveSupplierForProduct(prod, 'LOWEST');
+      price = Number(sup?.unitCost) > 0 ? sup.unitCost : Math.round((Number(prod.base_price) || 0) * 0.85);
+    }
+    const tier = getCellphonePriceTier(prod);
+    parsedItems.push({
+      key: `${prod.id}::${curBranchId}`,
+      productId: prod.id,
+      brand: prod.brand || '',
+      model: prod.model || prod.name,
+      displayModel: formatSwapModelName({ brand: prod.brand || '', model: prod.model || prod.name }),
+      sku: prod.website_codes || prod.sku || '',
+      branchId: curBranchId,
+      branchName: branchNames[curBranchId] || curBranchId,
+      supplier,
+      tierKey: tier.key,
+      tierLabel: tier.label,
+      avail: Number(prod.byBranch?.[curBranchId]?.qtyAvailable) || 0,
+      branchDemand90: 0,
+      storewideDemand90: 0,
+      requestedQty: qty,
+      qty,
+      requestedCost: price,
+      unitCost: price,
+      approved: true,
+      receivedQty: null,
+      receivedCost: price,
+      receivedDate: '',
+      abDeliveryNo: '',
+      abReportedQty: null,
+      isExtraItem: false,
+    });
+  }
+
+  if (!parsedItems.length) {
+    if (stEl) {
+      stEl.style.color = 'var(--danger)';
+      stEl.textContent = `Could not match any product rows${unmatchedLines.length ? ` (Unmatched: ${unmatchedLines.join(', ')})` : ''}.`;
+    }
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const createdAt = detectedDate ? `${detectedDate}T10:00:00.000Z` : now;
+  const orderDateTag = (detectedDate || todayStr).replace(/-/g, '');
+  const seq = String((state.savedOrders || []).filter((o) => String(o.id || '').startsWith(`PO-${orderDateTag}`)).length + 1).padStart(2, '0');
+  const title = titleInp || `${supplier} Order (${detectedDate || todayStr})`;
+
+  let createdOrder = null;
+  if (IS_STATIC_GH) {
+    const id = `PO-${orderDateTag}-${seq}`;
+    createdOrder = {
+      id,
+      title,
+      status: 'Supplier Approved',
+      supplierFilter: supplier,
+      notes: unmatchedLines.length ? `Unmatched lines skipped: ${unmatchedLines.join(', ')}` : '',
+      expectedDate: '',
+      abDeliveryRefs: '',
+      items: parsedItems,
+      ...computeOrderSummaryMetrics(parsedItems, 'Supplier Approved'),
+      createdAt,
+      updatedAt: now,
+    };
+    const all = getLocalSavedOrders();
+    all.unshift(createdOrder);
+    setLocalSavedOrders(all);
+    state.savedOrders = all;
+  } else {
+    const res = await api('/api/purchase-orders', {
+      method: 'POST',
+      body: JSON.stringify({
+        title,
+        status: 'Supplier Approved',
+        supplierFilter: supplier,
+        notes: unmatchedLines.length ? `Unmatched lines skipped: ${unmatchedLines.join(', ')}` : '',
+        items: parsedItems,
+        createdAt,
+        syncSupplierCosts: true,
+      }),
+    });
+    createdOrder = res?.order || null;
+    await loadSavedPurchaseOrders();
+  }
+
+  applyEditedPricesToLocalInventory(parsedItems);
+  document.getElementById('pasteOrderBox')?.classList.add('hidden');
+  document.getElementById('pasteOrderText').value = '';
+  if (createdOrder) openSavedOrderInlineEditor(createdOrder);
+  renderSavedOrdersPanel();
+  buildRestockDraftPlan();
+  renderRestockCards();
+  if (stEl) {
+    stEl.style.color = 'var(--green)';
+    stEl.textContent = `Imported ${parsedItems.length} item(s)${unmatchedLines.length ? ` (skipped: ${unmatchedLines.join(', ')})` : ''}!`;
+  }
+}
+
+function renderSavedOrderInlineEditor(statusMsg = '') {
+  const wrap = document.getElementById('savedOrderInlineEditor');
+  if (!wrap) return;
+  const po = state.editingSavedOrder;
+  if (!po) {
+    wrap.classList.add('hidden');
+    wrap.innerHTML = '';
+    return;
+  }
+
+  wrap.classList.remove('hidden');
+  const m = computeOrderSummaryMetrics(po.items, po.status);
+  const qtyVar = m.approvedUnits - m.requestedUnits;
+  const costVar = m.approvedTotal - m.requestedTotal;
+  const activeProds = (state.inventory?.items || [])
+    .filter((i) => (i.lifecycle_status || 'Active') === 'Active' && !isNonOrderablePromoOrRepo(i))
+    .sort((a, b) => formatSwapModelName({ brand: a.brand || '', model: a.model || a.name }).localeCompare(formatSwapModelName({ brand: b.brand || '', model: b.model || b.name })));
+
+  const indexed = (po.items || []).map((r, idx) => ({ ...r, _idx: idx }));
+  const bySup = new Map();
+  for (const sup of SUPPLIER_ORDER) bySup.set(sup, new Map());
+  for (const r of indexed) {
+    const supName = r.supplier || 'AB Main Supplier';
+    if (!bySup.has(supName)) bySup.set(supName, new Map());
+    const bMap = bySup.get(supName);
+    const brName = r.branchName || 'Molave';
+    if (!bMap.has(brName)) bMap.set(brName, []);
+    bMap.get(brName).push(r);
+  }
+
+  const orderDate = String(po.createdAt || todayStr).slice(0, 10);
+  const recentDeliveries = (state.abDeliveries || []).filter((d) => d.deliveryDate >= orderDate || d.status !== 'RECEIVED');
+
+  const groupsHtml = [...bySup.entries()]
+    .filter(([, bMap]) => bMap.size > 0)
+    .map(([supName, bMap]) => {
+      const sortedBranches = [...bMap.keys()].sort((a, b) => {
+        const ia = BRANCH_ORDER.indexOf(a);
+        const ib = BRANCH_ORDER.indexOf(b);
+        return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b);
+      });
+      return `
+        <div style="margin-bottom:10px;">
+          <div style="padding:5px 9px;border-radius:6px;background:rgba(231,197,95,0.14);color:var(--gold-bright);font-weight:700;font-size:12px;">${supName}</div>
+          ${sortedBranches
+            .map((bName) => {
+              const rows = bMap.get(bName);
+              return `
+                <div style="margin-top:6px;padding:0 4px;">
+                  <div style="font-weight:700;font-size:11.5px;color:var(--muted);margin-bottom:4px;">${bName}</div>
+                  ${rows
+                    .map((r) => {
+                      const isExtra = Boolean(r.isExtraItem);
+                      const isApp = r.approved !== false && !isExtra;
+                      const curQty = isExtra ? 0 : Number(r.qty) || 0;
+                      const curCost = Number(r.unitCost) || 0;
+                      const recQtyRaw = r.receivedQty !== undefined && r.receivedQty !== null && r.receivedQty !== '' ? Number(r.receivedQty) : '';
+                      const recCostRaw = r.receivedCost !== undefined && r.receivedCost !== null && r.receivedCost !== '' ? Number(r.receivedCost) : curCost;
+                      const delivQtyNum = recQtyRaw === '' ? 0 : Math.max(0, Number(recQtyRaw) || 0);
+                      const hasRec = recQtyRaw !== '';
+                      const qVar = hasRec ? delivQtyNum - (isApp ? curQty : 0) : 0;
+                      const cVar = hasRec ? recCostRaw - curCost : 0;
+                      const varTag = hasRec
+                        ? qVar === 0 && Math.abs(cVar) < 0.01
+                          ? `<span style="color:var(--green);font-weight:700;font-size:10.5px;">✓ Match</span>`
+                          : `<span style="color:${qVar < 0 || cVar > 0 ? '#ef4444' : '#f59e0b'};font-weight:700;font-size:10.5px;">${qVar !== 0 ? `${qVar > 0 ? '+' : ''}${qVar} pcs` : ''}${Math.abs(cVar) >= 0.01 ? ` ${cVar > 0 ? '+' : ''}${fmtCurrency(cVar)}/pc` : ''}</span>`
+                        : `<span class="muted" style="font-size:10px;">pending delivery</span>`;
+                      const abTag = hasRec
+                        ? r.abDeliveryNo && r.abDeliveryNo !== 'PENDING IN AB WEB'
+                          ? `<span class="badge badge-ok" style="font-size:9.5px;">${r.abDeliveryNo}</span>`
+                          : `<span class="badge badge-danger" style="font-size:9.5px;">Not in AB Web</span>`
+                        : '';
+                      return `
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);font-size:12px;${isApp || isExtra ? '' : 'opacity:0.48;'}">
+                          <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer;flex:1;min-width:190px;flex-wrap:wrap;">
+                            <input type="checkbox" class="main-po-chk" data-idx="${r._idx}" ${r.approved !== false ? 'checked' : ''} style="width:15px;height:15px;margin:0;accent-color:var(--gold);" title="Supplier approved" />
+                            <span style="${r.approved !== false ? '' : 'text-decoration:line-through;'}font-weight:600;">${r.displayModel || r.model}</span>
+                            ${isExtra ? '<span class="badge badge-warn" style="font-size:9.5px;">EXTRA / SUB</span>' : ''}
+                            ${varTag}
+                            ${abTag}
+                          </label>
+                          <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;justify-content:flex-end;">
+                            <span class="small muted" title="Approved Supplier Unit Price">Appr ₱</span>
+                            <input type="number" class="main-po-price" data-idx="${r._idx}" value="${curCost}" min="0" step="0.01" style="width:76px;padding:3px 5px;font-size:11.5px;text-align:right;" title="Approved supplier price" />
+                            <span class="small muted">×</span>
+                            <input type="number" class="main-po-qty" data-idx="${r._idx}" value="${curQty}" min="0" max="999" style="width:46px;padding:3px 4px;font-size:11.5px;text-align:center;" title="Approved qty" />
+                            <span class="small muted" style="margin-left:4px;color:#60a5fa;">Rec:</span>
+                            <input type="number" class="main-po-rec-qty" data-idx="${r._idx}" value="${recQtyRaw}" placeholder="—" min="0" max="999" style="width:48px;padding:3px 4px;font-size:11.5px;text-align:center;border-color:#3b82f6;" title="Actually Delivered / Reported Qty (leave blank if still waiting)" />
+                            <span class="small muted" title="Billed Price Upon Delivery">Billed ₱</span>
+                            <input type="number" class="main-po-rec-cost" data-idx="${r._idx}" value="${recCostRaw}" min="0" step="0.01" style="width:74px;padding:3px 5px;font-size:11.5px;text-align:right;border-color:#3b82f6;" title="Billed unit price on delivery receipt" />
+                            <input type="text" class="main-po-ab-ref" data-idx="${r._idx}" value="${String(r.abDeliveryNo || '').replace(/"/g, '&quot;')}" placeholder="AB Web Ref / Pending" style="width:118px;padding:3px 5px;font-size:11px;" title="AB Web Delivery # (leave blank if still not recorded in AB Web)" />
+                            <button type="button" class="secondary main-po-del-line" data-idx="${r._idx}" style="padding:2px 6px;font-size:10.5px;min-height:0;color:var(--danger);" title="Remove line">✕</button>
+                          </div>
+                        </div>`;
+                    })
+                    .join('')}
+                </div>`;
+            })
+            .join('')}
+        </div>`;
+    })
+    .join('');
+
+  wrap.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+      <div>
+        <strong style="color:var(--gold-bright);font-size:13.5px;">${po._isNew ? `NEW PENDING ORDER (${po.id})` : `ORDER ${po.id}`} — SUPPLIER APPROVALS &amp; DELIVERY RECONCILIATION</strong>
+        <div class="small muted">
+          Approved: <strong style="color:var(--text);">${fmtNum(m.approvedUnits)} pcs</strong> (<strong style="color:var(--gold-bright);">${fmtCurrency(m.approvedTotal)}</strong>)
+          • Pending Delivery: <strong style="color:#60a5fa;">${fmtNum(m.pendingUnits)} pcs</strong>
+          • Delivered: <strong style="color:var(--green);">${fmtNum(m.deliveredUnits)} pcs</strong> (${fmtCurrency(m.deliveredTotal)})
+          ${qtyVar !== 0 || Math.abs(costVar) >= 0.01 ? `<span class="muted">• Adj vs Req: ${qtyVar >= 0 ? '+' : ''}${qtyVar} pcs</span>` : ''}
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button type="button" id="mainPoFillDeliveredBtn" class="secondary" style="padding:5px 9px;font-size:11px;min-height:0;" title="Mark all lines as physically delivered equal to Approved Qty (tagged Not Yet in AB Web)">MARK ALL DELIVERED</button>
+        <button type="button" id="mainPoMatchAbBtn" class="secondary" style="padding:5px 9px;font-size:11px;min-height:0;" title="Sync & match from AB Web /panel/deliveries">MATCH AB WEB (${recentDeliveries.length})</button>
+        <button type="button" id="mainPoPreviewBtn" class="secondary" style="padding:5px 9px;font-size:11px;min-height:0;">PREVIEW</button>
+        <button type="button" id="mainPoCopyBtn" class="secondary" style="padding:5px 9px;font-size:11px;min-height:0;">COPY</button>
+        <button type="button" id="mainPoCloseBtn" class="secondary" style="padding:5px 9px;font-size:11px;min-height:0;">CLOSE</button>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1.5fr 1fr 0.8fr 1.4fr;gap:8px;margin-bottom:10px;">
+      <div>
+        <label for="mainPoTitleInp" style="font-size:10.5px;">ORDER NAME</label>
+        <input type="text" id="mainPoTitleInp" value="${String(po.title || '').replace(/"/g, '&quot;')}" style="padding:5px 8px;font-size:12px;" />
+      </div>
+      <div>
+        <label for="mainPoStatusSel" style="font-size:10.5px;">ORDER / DELIVERY STATUS</label>
+        <select id="mainPoStatusSel" style="padding:5px 8px;font-size:12px;">
+          ${['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received', 'Received (Pending AB Web)', 'Received', 'Cancelled']
+            .map((st) => `<option value="${st}" ${po.status === st ? 'selected' : ''}>${st}</option>`)
+            .join('')}
+        </select>
+      </div>
+      <div>
+        <label for="mainPoDateInp" style="font-size:10.5px;">ORDER DATE</label>
+        <input type="date" id="mainPoDateInp" value="${orderDate}" style="padding:5px 8px;font-size:12px;" />
+      </div>
+      <div>
+        <label for="mainPoNotesInp" style="font-size:10.5px;">SUPPLIER / DELIVERY NOTES</label>
+        <input type="text" id="mainPoNotesInp" value="${String(po.notes || '').replace(/"/g, '&quot;')}" placeholder="Approved notes, DR#, missing items..." style="padding:5px 8px;font-size:12px;" />
+      </div>
+    </div>
+
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:6px 8px;border-radius:6px;background:rgba(255,255,255,0.03);border:1px dashed var(--border);margin-bottom:10px;">
+      <select id="mainPoAddProdSel" style="flex:2;min-width:170px;padding:5px 8px;font-size:12px;">
+        <option value="">+ Add unit (ordered or extra/substituted delivery)...</option>
+        ${activeProds
+          .map((i) => {
+            const nm = formatSwapModelName({ brand: i.brand || '', model: i.model || i.name });
+            return `<option value="${i.id}">${nm} (SRP ${fmtCurrency(i.base_price)})</option>`;
+          })
+          .join('')}
+      </select>
+      <select id="mainPoAddBranchSel" style="width:auto;padding:5px 8px;font-size:12px;">
+        <option value="br-molave">Molave</option>
+        <option value="br-tambulig">Tambulig</option>
+        <option value="br-bonifacio">Bonifacio</option>
+      </select>
+      <select id="mainPoAddSupSel" style="width:auto;padding:5px 8px;font-size:12px;">
+        <option value="AB Main Supplier">AB Main Supplier</option>
+        <option value="A&K">A&amp;K</option>
+        <option value="Online Purchase">Online Purchase</option>
+      </select>
+      <input type="number" id="mainPoAddPriceInp" placeholder="Price ₱" min="0" step="0.01" style="width:82px;padding:5px 6px;font-size:12px;" />
+      <input type="number" id="mainPoAddQtyInp" value="1" min="1" max="999" style="width:52px;padding:5px 6px;font-size:12px;text-align:center;" />
+      <label style="display:flex;align-items:center;gap:4px;margin:0;font-size:11px;cursor:pointer;" title="Check if this item was delivered as an unexpected/substituted item not on the original order">
+        <input type="checkbox" id="mainPoAddExtraChk" style="width:14px;height:14px;margin:0;accent-color:#f59e0b;" />
+        <span>Extra Deliv</span>
+      </label>
+      <button type="button" id="mainPoAddBtn" class="secondary" style="padding:5px 10px;font-size:11.5px;min-height:0;">+ ADD</button>
+    </div>
+
+    <div style="max-height:380px;overflow-y:auto;padding-right:4px;">${groupsHtml || '<div class="muted small">No items yet — add items above.</div>'}</div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border-soft);">
+      <label style="display:flex;align-items:center;gap:6px;margin:0;font-size:12px;cursor:pointer;">
+        <input type="checkbox" id="mainPoSyncCostsChk" checked style="width:15px;height:15px;margin:0;accent-color:var(--gold);" />
+        <span>Also update Product Supplier Costs from edited/billed prices</span>
+      </label>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span id="mainPoSaveStatus" class="small" style="color:var(--green);font-weight:700;">${statusMsg}</span>
+        <button type="button" id="mainPoSaveBtn" style="padding:7px 16px;font-size:12px;">SAVE ORDER &amp; DELIVERY</button>
+      </div>
+    </div>
+  `;
+
+  wrap.querySelector('#mainPoTitleInp')?.addEventListener('input', (e) => { po.title = e.target.value; });
+  wrap.querySelector('#mainPoStatusSel')?.addEventListener('change', (e) => { po.status = e.target.value; });
+  wrap.querySelector('#mainPoDateInp')?.addEventListener('change', (e) => {
+    if (e.target.value) po.createdAt = `${e.target.value}T10:00:00.000Z`;
+  });
+  wrap.querySelector('#mainPoNotesInp')?.addEventListener('input', (e) => { po.notes = e.target.value; });
+
+  wrap.querySelectorAll('.main-po-chk').forEach((chk) => {
+    chk.addEventListener('change', () => {
+      const idx = Number(chk.dataset.idx);
+      if (po.items[idx]) po.items[idx].approved = chk.checked;
+      renderSavedOrderInlineEditor();
+    });
+  });
+  wrap.querySelectorAll('.main-po-price').forEach((inp) => {
+    inp.addEventListener('change', () => {
+      const idx = Number(inp.dataset.idx);
+      const val = Math.max(0, Number(inp.value) || 0);
+      if (po.items[idx]) {
+        const oldU = po.items[idx].unitCost;
+        po.items[idx].unitCost = val;
+        if (po.items[idx].receivedCost === undefined || po.items[idx].receivedCost === oldU) {
+          po.items[idx].receivedCost = val;
+        }
+        po.items[idx].isEstimatedCost = false;
+      }
+      renderSavedOrderInlineEditor();
+    });
+  });
+  wrap.querySelectorAll('.main-po-qty').forEach((inp) => {
+    inp.addEventListener('change', () => {
+      const idx = Number(inp.dataset.idx);
+      const v = Math.max(0, parseInt(inp.value, 10) || 0);
+      if (po.items[idx]) {
+        po.items[idx].qty = v;
+        po.items[idx].approved = v > 0;
+      }
+      renderSavedOrderInlineEditor();
+    });
+  });
+  wrap.querySelectorAll('.main-po-rec-qty').forEach((inp) => {
+    inp.addEventListener('change', () => {
+      const idx = Number(inp.dataset.idx);
+      const it = po.items[idx];
+      if (!it) return;
+      if (inp.value === '') {
+        it.receivedQty = null;
+      } else {
+        it.receivedQty = Math.max(0, parseInt(inp.value, 10) || 0);
+        if (!it.receivedDate) it.receivedDate = todayStr;
+        if (!it.abDeliveryNo) it.abDeliveryNo = 'PENDING IN AB WEB';
+      }
+      renderSavedOrderInlineEditor();
+    });
+  });
+  wrap.querySelectorAll('.main-po-rec-cost').forEach((inp) => {
+    inp.addEventListener('change', () => {
+      const idx = Number(inp.dataset.idx);
+      if (po.items[idx]) po.items[idx].receivedCost = Math.max(0, Number(inp.value) || 0);
+      renderSavedOrderInlineEditor();
+    });
+  });
+  wrap.querySelectorAll('.main-po-ab-ref').forEach((inp) => {
+    inp.addEventListener('change', () => {
+      const idx = Number(inp.dataset.idx);
+      if (po.items[idx]) po.items[idx].abDeliveryNo = inp.value.trim();
+    });
+  });
+  wrap.querySelectorAll('.main-po-del-line').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.idx);
+      po.items.splice(idx, 1);
+      renderSavedOrderInlineEditor();
+    });
+  });
+
+  wrap.querySelector('#mainPoFillDeliveredBtn')?.addEventListener('click', () => {
+    for (const it of po.items || []) {
+      if (it.approved === false || it.isExtraItem) continue;
+      it.receivedQty = Number(it.qty) || 0;
+      it.receivedCost = Number(it.receivedCost ?? it.unitCost) || 0;
+      if (!it.receivedDate) it.receivedDate = todayStr;
+      if (!it.abDeliveryNo) it.abDeliveryNo = 'PENDING IN AB WEB';
+    }
+    const anyMissingAb = (po.items || []).some((it) => Number(it.receivedQty) > 0 && (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB'));
+    po.status = anyMissingAb ? 'Received (Pending AB Web)' : 'Received';
+    renderSavedOrderInlineEditor('All approved quantities filled as Delivered (click SAVE ORDER & DELIVERY)');
+  });
+
+  wrap.querySelector('#mainPoMatchAbBtn')?.addEventListener('click', async () => {
+    if (po._isNew) {
+      alert('Please save the order first before auto-matching AB Web deliveries.');
+      return;
+    }
+    await matchSingleOrderWithAbWeb(po.id);
+  });
+
+  wrap.querySelector('#mainPoAddProdSel')?.addEventListener('change', (e) => {
+    const pid = e.target.value;
+    const item = (state.inventory?.items || []).find((i) => i.id === pid);
+    if (!item) return;
+    const sup = resolveSupplierForProduct(item, 'LOWEST');
+    const pVal = Number(sup?.unitCost) > 0 ? sup.unitCost : Math.round((Number(item.base_price) || 0) * 0.85);
+    const pInp = wrap.querySelector('#mainPoAddPriceInp');
+    const sSel = wrap.querySelector('#mainPoAddSupSel');
+    if (pInp) pInp.value = pVal > 0 ? pVal : '';
+    if (sSel && sup?.supplier) sSel.value = sup.supplier;
+  });
+
+  wrap.querySelector('#mainPoAddBtn')?.addEventListener('click', () => {
+    const pid = wrap.querySelector('#mainPoAddProdSel')?.value;
+    const branchId = wrap.querySelector('#mainPoAddBranchSel')?.value || 'br-molave';
+    const supplier = wrap.querySelector('#mainPoAddSupSel')?.value || 'AB Main Supplier';
+    const unitCost = Math.max(0, Number(wrap.querySelector('#mainPoAddPriceInp')?.value) || 0);
+    const qty = Math.max(1, parseInt(wrap.querySelector('#mainPoAddQtyInp')?.value, 10) || 1);
+    const isExtra = Boolean(wrap.querySelector('#mainPoAddExtraChk')?.checked);
+    const item = (state.inventory?.items || []).find((i) => i.id === pid);
+    if (!item) return;
+    const branchName = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' }[branchId] || branchId;
+    const tier = getCellphonePriceTier(item);
+    po.items.push({
+      key: `${item.id}::${branchId}`,
+      productId: item.id,
+      brand: item.brand || '',
+      model: item.model || item.name,
+      displayModel: formatSwapModelName({ brand: item.brand || '', model: item.model || item.name }),
+      sku: item.website_codes || item.sku || '',
+      branchId,
+      branchName,
+      supplier,
+      tierKey: tier.key,
+      tierLabel: tier.label,
+      avail: Number(item.byBranch?.[branchId]?.qtyAvailable) || 0,
+      branchDemand90: 0,
+      storewideDemand90: 0,
+      requestedQty: isExtra ? 0 : qty,
+      qty: isExtra ? 0 : qty,
+      requestedCost: unitCost,
+      unitCost,
+      approved: true,
+      receivedQty: isExtra ? qty : null,
+      receivedCost: unitCost,
+      receivedDate: isExtra ? todayStr : '',
+      abDeliveryNo: isExtra ? 'PENDING IN AB WEB' : '',
+      abReportedQty: null,
+      isExtraItem: isExtra,
+    });
+    renderSavedOrderInlineEditor();
+  });
+
+  wrap.querySelector('#mainPoPreviewBtn')?.addEventListener('click', () => {
+    state.previewOrderOverride = po;
+    renderReorderPreviewModal();
+    document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
+  });
+
+  wrap.querySelector('#mainPoCopyBtn')?.addEventListener('click', async (e) => {
+    const ok = await copyTextToClipboard(buildReorderCopyText(po));
+    e.target.textContent = ok ? 'COPIED ✓' : 'ERR';
+    setTimeout(() => { e.target.textContent = 'COPY'; }, 1400);
+  });
+
+  wrap.querySelector('#mainPoCloseBtn')?.addEventListener('click', () => {
+    state.editingSavedOrder = null;
+    renderSavedOrderInlineEditor();
+  });
+
+  wrap.querySelector('#mainPoSaveBtn')?.addEventListener('click', async () => {
+    const syncSupplierCosts = Boolean(wrap.querySelector('#mainPoSyncCostsChk')?.checked);
+    const title = (po.title || '').trim() || `Restock Order • ${todayStr}`;
+    let status = po.status || 'Supplier Approved';
+    const notes = (po.notes || '').trim();
+
+    // Auto-update status if delivery quantities were entered
+    const appItems = (po.items || []).filter((it) => it.approved !== false && !it.isExtraItem && (Number(it.qty) || 0) > 0);
+    const anyRec = (po.items || []).some((it) => it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== '');
+    const allRec = appItems.length > 0 && appItems.every((it) => it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== '');
+    const missingAb = (po.items || []).some((it) => Number(it.receivedQty) > 0 && (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB'));
+    if (!['Cancelled', 'Draft'].includes(status)) {
+      if (allRec && status !== 'Received') status = missingAb ? 'Received (Pending AB Web)' : 'Received';
+      else if (anyRec && !allRec && ['Sent to Supplier', 'Supplier Approved'].includes(status)) status = 'Partially Received';
+    }
+    const refs = [...new Set((po.items || []).map((it) => String(it.abDeliveryNo || '').trim()).filter((r) => r && r !== 'PENDING IN AB WEB'))].join(', ');
+
+    if (IS_STATIC_GH) {
+      const now = new Date().toISOString();
+      const updatedObj = {
+        ...po,
+        _isNew: undefined,
+        title,
+        status,
+        notes,
+        abDeliveryRefs: refs,
+        updatedAt: now,
+        ...computeOrderSummaryMetrics(po.items, status),
+      };
+      delete updatedObj._isNew;
+      const all = getLocalSavedOrders();
+      const idx = all.findIndex((o) => o.id === po.id);
+      if (idx >= 0) all[idx] = updatedObj;
+      else all.unshift(updatedObj);
+      setLocalSavedOrders(all);
+      state.savedOrders = all;
+      state.editingSavedOrder = JSON.parse(JSON.stringify(updatedObj));
+    } else if (po._isNew) {
+      const res = await api('/api/purchase-orders', {
+        method: 'POST',
+        body: JSON.stringify({
+          id: po.id,
+          title,
+          status,
+          supplierFilter: po.supplierFilter || 'LOWEST',
+          notes,
+          abDeliveryRefs: refs,
+          items: po.items,
+          createdAt: po.createdAt,
+          syncSupplierCosts,
+        }),
+      });
+      await loadSavedPurchaseOrders();
+      if (res?.order) state.editingSavedOrder = JSON.parse(JSON.stringify(res.order));
+    } else {
+      const res = await api(`/api/purchase-orders/${encodeURIComponent(po.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          title,
+          status,
+          notes,
+          abDeliveryRefs: refs,
+          items: po.items,
+          createdAt: po.createdAt,
+          syncSupplierCosts,
+        }),
+      });
+      await loadSavedPurchaseOrders();
+      if (res?.order) state.editingSavedOrder = JSON.parse(JSON.stringify(res.order));
+    }
+    if (syncSupplierCosts) {
+      applyEditedPricesToLocalInventory(po.items);
+      renderInventory();
+    }
+    renderSavedOrdersPanel();
+    buildRestockDraftPlan();
+    renderRestockCards();
+    renderSavedOrderInlineEditor(`Saved ${po.id}${syncSupplierCosts ? ' & updated supplier costs' : ''} ✓`);
+  });
+}
+
+async function matchSingleOrderWithAbWeb(poId = 'ALL') {
+  const btn = document.getElementById('syncAbDeliveriesBtn');
+  if (btn) btn.textContent = 'SYNCING...';
+  try {
+    if (IS_STATIC_GH) {
+      await loadAbDeliveries();
+      const cnt = reconcileStaticOrdersWithDeliveries(poId === 'ALL' ? null : poId);
+      await loadSavedPurchaseOrders();
+      if (state.editingSavedOrder && poId !== 'ALL') {
+        const refreshed = state.savedOrders.find((o) => o.id === poId);
+        if (refreshed) state.editingSavedOrder = JSON.parse(JSON.stringify(refreshed));
+      }
+      renderSavedOrdersPanel();
+      buildRestockDraftPlan();
+      renderRestockCards();
+      if (btn) btn.textContent = cnt > 0 ? `MATCHED ${cnt} ✓` : 'SYNCED (0 NEW)';
+    } else {
+      const res = await api(`/api/purchase-orders/${encodeURIComponent(poId)}/match-deliveries`, { method: 'POST', body: JSON.stringify({}) });
+      await Promise.all([loadAbDeliveries(), loadSavedPurchaseOrders()]);
+      if (state.editingSavedOrder && res?.order) {
+        state.editingSavedOrder = JSON.parse(JSON.stringify(res.order));
+      }
+      renderSavedOrdersPanel();
+      buildRestockDraftPlan();
+      renderRestockCards();
+      if (btn) btn.textContent = res?.matchedLines > 0 ? `MATCHED ${res.matchedLines} LINE(S) ✓` : 'UP TO DATE ✓';
+    }
+  } catch (err) {
+    if (btn) btn.textContent = 'SYNC ERROR';
+    alert(err.message);
+  }
+  setTimeout(() => {
+    if (btn) btn.textContent = 'SYNC & MATCH AB WEB';
+  }, 2200);
+}
+
+function buildVarianceReportRows() {
+  const orderFilter = document.getElementById('varianceOrderFilter')?.value || 'ALL';
+  const typeFilter = document.getElementById('varianceTypeFilter')?.value || 'ALL';
+  const orders = (state.savedOrders || []).filter((o) => o.status !== 'Cancelled' && (orderFilter === 'ALL' || o.id === orderFilter));
+
+  const out = [];
+  for (const o of orders) {
+    const ordDate = String(o.createdAt || '').slice(0, 10);
+    for (const it of o.items || []) {
+      const reqQty = Math.max(0, Number(it.requestedQty ?? it.qty) || 0);
+      const isApp = it.approved !== false && !it.isExtraItem;
+      const appQty = isApp ? Math.max(0, Number(it.qty) || 0) : 0;
+      const appCost = Math.max(0, Number(it.unitCost) || 0);
+      const hasRec = it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== '';
+      const delQty = hasRec ? Math.max(0, Number(it.receivedQty) || 0) : 0;
+      const delCost = hasRec ? Math.max(0, Number(it.receivedCost ?? appCost) || 0) : appCost;
+      const qtyVar = hasRec ? delQty - appQty : 0;
+      const unitPriceVar = hasRec ? delCost - appCost : 0;
+      const pesoImpact = hasRec ? delQty * delCost - appQty * appCost : 0;
+      const abRef = String(it.abDeliveryNo || '').trim();
+      const missingInAb = hasRec && delQty > 0 && (!abRef || abRef === 'PENDING IN AB WEB');
+
+      let rowStatus = 'Waiting Delivery';
+      if (it.isExtraItem) rowStatus = 'Extra / Substituted';
+      else if (!isApp) rowStatus = 'Cancelled by Supplier';
+      else if (hasRec) {
+        if (qtyVar < 0) rowStatus = `Short (${qtyVar})`;
+        else if (qtyVar > 0) rowStatus = `Over (+${qtyVar})`;
+        else if (Math.abs(unitPriceVar) >= 0.01) rowStatus = 'Price Diff';
+        else rowStatus = 'Matched ✓';
+      }
+
+      const isVariance = Boolean(it.isExtraItem) || (hasRec && (qtyVar !== 0 || Math.abs(unitPriceVar) >= 0.01)) || !isApp;
+      if (typeFilter === 'VARIANCES_ONLY' && !isVariance) continue;
+      if (typeFilter === 'PENDING_ONLY' && (hasRec || !isApp)) continue;
+      if (typeFilter === 'NOT_IN_AB' && !missingInAb) continue;
+
+      out.push({
+        orderId: o.id,
+        orderTitle: o.title,
+        orderDate: ordDate,
+        orderStatus: o.status,
+        branchName: it.branchName || '',
+        displayModel: it.displayModel || it.model || '',
+        supplier: it.supplier || '',
+        reqQty,
+        appQty,
+        delQty: hasRec ? delQty : null,
+        qtyVar,
+        appCost,
+        delCost: hasRec ? delCost : null,
+        unitPriceVar,
+        pesoImpact,
+        hasRec,
+        isApp,
+        isExtra: Boolean(it.isExtraItem),
+        abRef,
+        missingInAb,
+        rowStatus,
+      });
+    }
+  }
+  return out;
+}
+
+function renderOrderVarianceReport() {
+  const orderSel = document.getElementById('varianceOrderFilter');
+  const kpiGrid = document.getElementById('varianceKpiGrid');
+  const banner = document.getElementById('varianceInsightBanner');
+  const tbody = document.querySelector('#orderVarianceTable tbody');
+  if (!tbody) return;
+
+  const orders = (state.savedOrders || []).filter((o) => o.status !== 'Cancelled');
+  if (orderSel) {
+    const prev = orderSel.value || 'ALL';
+    orderSel.innerHTML =
+      '<option value="ALL">All Orders (Ordered vs Delivered)</option>' +
+      orders.map((o) => `<option value="${o.id}">${o.id} — ${o.title} (${o.status})</option>`).join('');
+    if ([...orderSel.options].some((opt) => opt.value === prev)) orderSel.value = prev;
+  }
+
+  const rows = buildVarianceReportRows();
+  let sumAppQty = 0, sumDelQty = 0, sumPendingQty = 0, sumAppVal = 0, sumDelVal = 0, sumPriceImpact = 0;
+  let shortUnits = 0, overUnits = 0, missingAbCount = 0;
+
+  for (const r of rows) {
+    sumAppQty += r.appQty;
+    sumAppVal += r.appQty * r.appCost;
+    if (r.hasRec) {
+      sumDelQty += r.delQty;
+      sumDelVal += r.delQty * r.delCost;
+      sumPriceImpact += r.delQty * (r.delCost - r.appCost);
+      if (r.qtyVar < 0) shortUnits += Math.abs(r.qtyVar);
+      if (r.qtyVar > 0) overUnits += r.qtyVar;
+      if (r.missingInAb) missingAbCount++;
+    } else if (r.isApp) {
+      sumPendingQty += r.appQty;
+    }
+  }
+
+  const reportedAppQty = Math.max(0, sumAppQty - sumPendingQty);
+  const fillRate = reportedAppQty > 0 ? (sumDelQty / reportedAppQty) * 100 : 0;
+  const netQtyVar = sumDelQty - reportedAppQty;
+  const netValVar = sumDelVal - (sumAppVal - rows.filter((r) => !r.hasRec && r.isApp).reduce((s, r) => s + r.appQty * r.appCost, 0));
+
+  if (kpiGrid) {
+    kpiGrid.innerHTML = `
       <div class="summary-box">
-        TOTAL CASH + UNDEPOSITED
-        <strong>${fmtCurrency(s.totalCash)}</strong>
-        <span class="summary-note">Banks: ${fmtCurrency(s.totalBanks)} • Undeposited: ${fmtCurrency(s.totalUndeposited)}</span>
+        DELIVERY FILL RATE (REPORTED LINES)
+        <strong style="color:${fillRate >= 98 ? 'var(--green)' : '#f59e0b'};">${fillRate.toFixed(1)}%</strong>
+        <span class="summary-note">${fmtNum(sumDelQty)} delivered vs ${fmtNum(reportedAppQty)} reported • ${fmtNum(sumPendingQty)} pcs still pending</span>
       </div>
       <div class="summary-box">
-        CREDIT CARD BILLS
-        <strong style="color:var(--danger);">${fmtCurrency(s.totalCreditCards)}</strong>
-        <span class="summary-note">Deducted before ordering</span>
+        QUANTITY VARIANCE (SHORT vs OVER)
+        <strong style="color:${netQtyVar === 0 ? 'var(--green)' : netQtyVar < 0 ? 'var(--danger)' : '#f59e0b'};">${netQtyVar >= 0 ? '+' : ''}${fmtNum(netQtyVar)} pcs</strong>
+        <span class="summary-note">Short: −${fmtNum(shortUnits)} pcs • Over/Extra: +${fmtNum(overUnits)} pcs</span>
       </div>
       <div class="summary-box">
-        NET ORDER BUDGET
-        <strong>${fmtCurrency(s.netOrderBudget)}</strong>
-        <span class="summary-note">Available for supplier POs</span>
+        INVOICE / PRICE VARIANCE
+        <strong style="color:${sumPriceImpact <= 0 ? 'var(--green)' : 'var(--danger)'};">${sumPriceImpact >= 0 ? '+' : ''}${fmtCurrency(sumPriceImpact)}</strong>
+        <span class="summary-note">Total Peso Var (incl. qty): ${netValVar >= 0 ? '+' : ''}${fmtCurrency(netValVar)}</span>
+      </div>
+      <div class="summary-box" style="border-color:${missingAbCount > 0 ? 'var(--danger)' : 'var(--green)'};">
+        AB WEB RECORD SYNC STATUS
+        <strong style="color:${missingAbCount > 0 ? '#f59e0b' : 'var(--green)'};">${missingAbCount > 0 ? `${fmtNum(missingAbCount)} Missing in AB` : 'Synced'}</strong>
+        <span class="summary-note">${missingAbCount > 0 ? 'Delivered physically, still not in AB Web /panel/deliveries' : 'All recorded deliveries matched in AB Web'}</span>
       </div>
     `;
   }
-  const { reorderSuggestions, transferSuggestions } = state.planning;
-  const globalBranchId = document.getElementById('globalBranch').value;
 
-  const filteredReorders = globalBranchId
-    ? reorderSuggestions.filter((r) => r.branchId === globalBranchId)
-    : reorderSuggestions;
+  if (banner) {
+    const latestAb = (state.abDeliveries || [])[0];
+    const brNameMap = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
+    const latestStr = latestAb ? `Latest AB Web delivery synced: <strong>${latestAb.deliveryDate} (${latestAb.deliveryNo} • ${latestAb.branchName || brNameMap[latestAb.branchId] || latestAb.branchId || ''})</strong>.` : '';
+    banner.innerHTML = `<strong>Order vs. Delivery Audit:</strong> Showing <strong>${rows.length}</strong> line item(s). ${
+      missingAbCount > 0
+        ? `<strong style="color:#f59e0b;">${missingAbCount} line(s)</strong> are physically recorded as delivered but <strong>not yet in AB Web</strong> (keep tracking until they appear on AB Web). `
+        : ''
+    }${shortUnits > 0 ? `<strong style="color:var(--danger);">${shortUnits} unit(s) short-delivered</strong> — check backorder or next Restock. ` : ''}${latestStr}`;
+  }
 
-  document.querySelector('#reorderTable tbody').innerHTML = filteredReorders.length
-    ? filteredReorders.slice(0, 50).map((r) => `
-        <tr>
-          <td><strong>${r.sku}</strong> — ${r.productName}</td>
-          <td>${r.branchName}</td>
-          <td>${fmtNum(r.qtyAvailable)} / ${fmtNum(r.reorderPoint)}</td>
-          <td><strong>+${fmtNum(r.suggestedOrderQty)}</strong></td>
-          <td>${fmtCurrency(r.estimatedCost)}</td>
-        </tr>`).join('')
-    : '<tr><td colspan="5" class="muted">No reorder suggestions right now.</td></tr>';
-
-  document.querySelector('#transferTable tbody').innerHTML = transferSuggestions.length
-    ? transferSuggestions.map((t) => `
-        <tr>
-          <td><strong>${t.sku}</strong> — ${t.productName}</td>
-          <td>${t.fromBranch} <span class="badge badge-ok">${t.fromAvailable}</span></td>
-          <td>${t.toBranch} <span class="badge badge-warn">${t.toAvailable}</span></td>
-          <td><strong>Transfer ${t.suggestedTransferQty}</strong></td>
-        </tr>`).join('')
-    : '<tr><td colspan="4" class="muted">No inter-branch transfers needed right now.</td></tr>';
+  tbody.innerHTML = rows.length
+    ? rows
+        .map((r) => {
+          const varColor = !r.hasRec
+            ? 'var(--muted)'
+            : r.qtyVar < 0
+              ? 'var(--danger)'
+              : r.qtyVar > 0 || r.isExtra
+                ? '#f59e0b'
+                : 'var(--green)';
+          const priceDisp = r.hasRec
+            ? `${fmtCurrency(r.appCost)} → <strong style="color:${Math.abs(r.unitPriceVar) < 0.01 ? 'var(--text)' : r.unitPriceVar < 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(r.delCost)}</strong>`
+            : fmtCurrency(r.appCost);
+          const abBadge = !r.hasRec
+            ? `<span class="badge badge-warn" style="font-size:10px;">Waiting Delivery</span>`
+            : r.missingInAb
+              ? `<span class="badge badge-danger" style="font-size:10px;">Not Yet in AB Web</span>`
+              : `<span class="badge badge-ok" style="font-size:10px;">${r.abRef}</span>`;
+          return `
+            <tr>
+              <td><strong>${r.orderId}</strong><div class="small muted">${r.orderDate}</div></td>
+              <td>${r.branchName}</td>
+              <td><strong>${r.displayModel}</strong><div class="small muted">${r.supplier}</div></td>
+              <td>${fmtNum(r.reqQty)}</td>
+              <td><strong>${fmtNum(r.appQty)}</strong></td>
+              <td>${r.hasRec ? `<strong>${fmtNum(r.delQty)}</strong>` : '<span class="muted">—</span>'}</td>
+              <td style="color:${varColor};font-weight:700;">${r.hasRec ? `${r.qtyVar > 0 ? '+' : ''}${r.qtyVar}` : '—'}</td>
+              <td>${priceDisp}</td>
+              <td style="color:${r.pesoImpact === 0 ? 'var(--muted)' : r.pesoImpact < 0 ? '#f59e0b' : 'var(--danger)'};"><strong>${r.hasRec ? `${r.pesoImpact >= 0 ? '+' : ''}${fmtCurrency(r.pesoImpact)}` : '—'}</strong></td>
+              <td>${abBadge}<div class="small" style="color:${varColor};margin-top:2px;">${r.rowStatus}</div></td>
+            </tr>`;
+        })
+        .join('')
+    : '<tr><td colspan="10" class="muted">No order lines match this variance filter.</td></tr>';
 }
+
+function renderAbDeliveriesView() {
+  const tbody = document.querySelector('#abDeliveriesTable tbody');
+  if (!tbody) return;
+  const brFilter = document.getElementById('abDeliveryBranchFilter')?.value || 'ALL';
+  const bNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
+  const linkedRefs = new Map();
+  for (const o of state.savedOrders || []) {
+    for (const ref of String(o.abDeliveryRefs || '').split(',').map((s) => s.trim()).filter(Boolean)) {
+      linkedRefs.set(ref, o.id);
+    }
+  }
+
+  const list = (state.abDeliveries || []).filter((d) => brFilter === 'ALL' || d.branchId === brFilter);
+  tbody.innerHTML = list.length
+    ? list
+        .slice(0, 60)
+        .map((d) => {
+          const linkedPo = linkedRefs.get(d.deliveryNo);
+          const itemChips = (d.items || [])
+            .filter((it) => !/FREE/i.test(it.code) && !/FREE\s*BUNDLE/i.test(it.productName))
+            .slice(0, 6)
+            .map((it) => `<span style="display:inline-block;padding:1px 6px;margin:1px;border-radius:4px;background:rgba(255,255,255,0.06);font-size:11px;">${it.productName} ×<strong>${it.receivedQty || it.deliveredQty}</strong></span>`)
+            .join('');
+          const moreCnt = Math.max(0, (d.items || []).filter((it) => !/FREE/i.test(it.code)).length - 6);
+          return `
+            <tr>
+              <td><strong>${d.deliveryDate}</strong></td>
+              <td><strong>${d.deliveryNo}</strong>${linkedPo ? `<div class="small" style="color:var(--green);">Linked: ${linkedPo}</div>` : ''}</td>
+              <td>${bNames[d.branchId] || d.branchId}</td>
+              <td><span class="badge ${d.status === 'RECEIVED' ? 'badge-ok' : 'badge-warn'}">${d.status}</span></td>
+              <td><strong>${fmtNum(d.totalDeliveredQty)} / ${fmtNum(d.totalReceivedQty)} pcs</strong><div class="small muted">${fmtCurrency(d.totalAmount)} SRP</div></td>
+              <td>${itemChips || '<span class="muted small">No line items</span>'}${moreCnt > 0 ? ` <span class="small muted">+${moreCnt} more</span>` : ''}</td>
+            </tr>`;
+        })
+        .join('')
+    : '<tr><td colspan="6" class="muted">No AB Web deliveries synced yet (click Sync Now or Sync &amp; Match AB Web).</td></tr>';
+}
+
+function downloadVariancePdf() {
+  const jspdfNs = window.jspdf;
+  if (!jspdfNs || typeof jspdfNs.jsPDF !== 'function') return alert('PDF library loading...');
+  const rows = buildVarianceReportRows();
+  if (!rows.length) return alert('No variance rows to export.');
+  const doc = new jspdfNs.jsPDF({ orientation: 'landscape', unit: 'in', format: [8.5, 13], compress: true });
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text('AB-GADGETZ · ORDER VS. DELIVERY VARIANCE REPORT', 6.5, 0.45, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.text(`Generated ${todayStr} • ${rows.length} line item(s)`, 6.5, 0.63, { align: 'center' });
+
+  doc.autoTable({
+    startY: 0.78,
+    margin: { left: 0.35, right: 0.35, bottom: 0.35 },
+    head: [['Order ID', 'Date', 'Branch', 'Model', 'Req', 'Appr', 'Deliv', 'Qty Var', 'Appr ₱', 'Billed ₱', '₱ Impact', 'AB Web Ref / Status']],
+    body: rows.map((r) => [
+      r.orderId,
+      r.orderDate,
+      r.branchName,
+      r.displayModel,
+      r.reqQty,
+      r.appQty,
+      r.hasRec ? r.delQty : '—',
+      r.hasRec ? (r.qtyVar > 0 ? `+${r.qtyVar}` : r.qtyVar) : '—',
+      `PHP ${fmtNum(Math.round(r.appCost))}`,
+      r.hasRec ? `PHP ${fmtNum(Math.round(r.delCost))}` : '—',
+      r.hasRec ? `PHP ${fmtNum(Math.round(r.pesoImpact))}` : '—',
+      r.hasRec ? (r.missingInAb ? `Not in AB Web (${r.rowStatus})` : `${r.abRef} (${r.rowStatus})`) : 'Waiting Delivery',
+    ]),
+    theme: 'grid',
+    styles: { font: 'helvetica', fontSize: 7.5, cellPadding: 3 / 72, lineColor: [60, 60, 60], lineWidth: 0.65 / 72 },
+    headStyles: { fillColor: [235, 226, 190], textColor: [27, 25, 19], fontStyle: 'bold' },
+  });
+  doc.save(`AB_Gadgetz_Order_Delivery_Variance_${todayStr}.pdf`);
+}
+
+async function downloadVarianceExcel() {
+  if (!window.ExcelJS) return alert('Excel library loading...');
+  const rows = buildVarianceReportRows();
+  if (!rows.length) return alert('No variance rows to export.');
+  const wb = new window.ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Order vs Delivery Variance');
+  ws.mergeCells(1, 1, 1, 12);
+  ws.getCell(1, 1).value = `AB-GADGETZ · ORDER VS. DELIVERY VARIANCE REPORT (${todayStr})`;
+  ws.getCell(1, 1).font = { bold: true, size: 13 };
+  ws.getCell(1, 1).alignment = { horizontal: 'center' };
+  const hdr = ws.addRow(['Order ID', 'Order Date', 'Branch', 'Model', 'Requested', 'Approved', 'Delivered', 'Qty Variance', 'Approved Price', 'Billed Price', 'Peso Impact', 'AB Web Ref / Status']);
+  hdr.eachCell((c) => {
+    c.font = { bold: true, size: 10 };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEBE2BE' } };
+    c.border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+  });
+  for (const r of rows) {
+    const er = ws.addRow([
+      r.orderId,
+      r.orderDate,
+      r.branchName,
+      r.displayModel,
+      r.reqQty,
+      r.appQty,
+      r.hasRec ? r.delQty : '',
+      r.hasRec ? r.qtyVar : '',
+      r.appCost,
+      r.hasRec ? r.delCost : '',
+      r.hasRec ? r.pesoImpact : '',
+      r.hasRec ? (r.missingInAb ? `Not Yet in AB Web (${r.rowStatus})` : `${r.abRef} (${r.rowStatus})`) : 'Waiting Delivery',
+    ]);
+    er.getCell(9).numFmt = '"₱"#,##0.00';
+    if (r.hasRec) {
+      er.getCell(10).numFmt = '"₱"#,##0.00';
+      er.getCell(11).numFmt = '"₱"#,##0.00';
+    }
+  }
+  ws.columns = [
+    { width: 16 }, { width: 12 }, { width: 12 }, { width: 32 }, { width: 10 }, { width: 10 },
+    { width: 10 }, { width: 12 }, { width: 14 }, { width: 14 }, { width: 15 }, { width: 26 },
+  ];
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `AB_Gadgetz_Order_Delivery_Variance_${todayStr}.xlsx`;
+  a.click();
+}
+
+async function createSavedOrderFromDraft() {
+  if (!state.restockPlan) buildRestockDraftPlan();
+  const draftSelected = (state.restockPlan || []).filter((r) => r.selected && Number(r.qty) > 0);
+  if (!draftSelected.length) {
+    alert('Select at least one product in the Restock cards before saving an order.');
+    return;
+  }
+  const mode = document.querySelector('input[name="restockSupplierMode"]:checked')?.value || 'LOWEST';
+  const title = `Restock Order • ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  const itemsPayload = draftSelected.map((r) => ({
+    key: r.key,
+    productId: r.productId,
+    brand: r.brand,
+    model: r.model,
+    displayModel: r.displayModel,
+    sku: r.sku,
+    branchId: r.branchId,
+    branchName: r.branchName,
+    supplier: r.supplier,
+    tierKey: r.tierKey,
+    tierLabel: r.tierLabel,
+    avail: r.avail,
+    branchDemand90: r.branchDemand90,
+    storewideDemand90: r.storewideDemand90,
+    requestedQty: Number(r.qty) || 0,
+    qty: Number(r.qty) || 0,
+    requestedCost: Number(r.unitCost) || 0,
+    unitCost: Number(r.unitCost) || 0,
+    approved: true,
+    receivedQty: null,
+    receivedCost: Number(r.unitCost) || 0,
+    receivedDate: '',
+    abDeliveryNo: '',
+    abReportedQty: null,
+    isExtraItem: false,
+  }));
+
+  let createdOrder = null;
+  if (IS_STATIC_GH) {
+    const now = new Date().toISOString();
+    const dayTag = now.slice(0, 10).replace(/-/g, '');
+    const all = getLocalSavedOrders();
+    const todayCnt = all.filter((o) => String(o.id || '').startsWith(`PO-${dayTag}-`)).length;
+    const id = `PO-${dayTag}-${String(todayCnt + 1).padStart(2, '0')}`;
+    createdOrder = {
+      id,
+      title,
+      status: 'Sent to Supplier',
+      supplierFilter: mode,
+      notes: '',
+      expectedDate: '',
+      abDeliveryRefs: '',
+      items: itemsPayload,
+      ...computeOrderSummaryMetrics(itemsPayload, 'Sent to Supplier'),
+      createdAt: now,
+      updatedAt: now,
+    };
+    all.unshift(createdOrder);
+    setLocalSavedOrders(all);
+    state.savedOrders = all;
+  } else {
+    const res = await api('/api/purchase-orders', {
+      method: 'POST',
+      body: JSON.stringify({ title, status: 'Sent to Supplier', supplierFilter: mode, notes: '', items: itemsPayload }),
+    });
+    createdOrder = res?.order || null;
+    await loadSavedPurchaseOrders();
+  }
+
+  if (createdOrder) {
+    openSavedOrderInlineEditor(createdOrder);
+    renderSavedOrdersPanel();
+    buildRestockDraftPlan();
+    renderRestockCards();
+    renderSavedOrderInlineEditor(`Order ${createdOrder.id} saved — Restock now deducts these pending units automatically ✓`);
+  }
+}
+
+function getGroupedReorderPlan(overrideOrder = null) {
+  const activeOrd = overrideOrder && Array.isArray(overrideOrder.items)
+    ? overrideOrder
+    : state.previewOrderOverride && Array.isArray(state.previewOrderOverride.items)
+      ? state.previewOrderOverride
+      : null;
+
+  const selected = activeOrd
+    ? activeOrd.items.filter((r) => r.approved !== false && Number(r.qty) > 0)
+    : (state.restockPlan || []).filter((r) => r.selected && Number(r.qty) > 0);
+
+  const bySupplier = new Map();
+  for (const sup of SUPPLIER_ORDER) bySupplier.set(sup, new Map());
+
+  for (const r of selected) {
+    const supName = r.supplier || 'AB Main Supplier';
+    if (!bySupplier.has(supName)) bySupplier.set(supName, new Map());
+    const branchMap = bySupplier.get(supName);
+    const brName = r.branchName || 'Molave';
+    if (!branchMap.has(brName)) branchMap.set(brName, []);
+    branchMap.get(brName).push(r);
+  }
+
+  const ordered = [];
+  for (const [supplier, branchMap] of bySupplier.entries()) {
+    if (!branchMap.size) continue;
+    const branchesOut = [];
+    const sortedBranchNames = [...branchMap.keys()].sort((a, b) => {
+      const ia = BRANCH_ORDER.indexOf(a);
+      const ib = BRANCH_ORDER.indexOf(b);
+      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b);
+    });
+    for (const bName of sortedBranchNames) {
+      branchesOut.push({ branchName: bName, rows: branchMap.get(bName) });
+    }
+    ordered.push({ supplier, branches: branchesOut });
+  }
+  return { selected, grouped: ordered, isSaved: Boolean(activeOrd), order: activeOrd };
+}
+
+function buildReorderCopyText(overrideOrder = null) {
+  const { grouped } = getGroupedReorderPlan(overrideOrder);
+  if (!grouped.length) return '';
+  const parts = ['Reorder request'];
+  for (const supGroup of grouped) {
+    parts.push(supGroup.supplier);
+    for (const bGroup of supGroup.branches) {
+      const lines = [bGroup.branchName];
+      for (const r of bGroup.rows) {
+        lines.push(`${r.displayModel} — ${r.qty} ${r.qty === 1 ? 'pc' : 'pcs'}`);
+      }
+      parts.push(lines.join('\n'));
+    }
+  }
+  return parts.join('\n\n');
+}
+
+function renderReorderPreviewModal() {
+  const modal = document.getElementById('reorderPreviewModal');
+  if (!modal) return;
+  const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked);
+  const { selected, grouped } = getGroupedReorderPlan();
+
+  const prepEl = document.getElementById('reorderPreviewPrepared');
+  if (prepEl) {
+    prepEl.textContent = `Prepared ${new Date().toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    })}`;
+  }
+
+  const totalUnits = selected.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+  const totalCost = selected.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.unitCost) || 0), 0);
+  const branchTotals = new Map(BRANCH_ORDER.map((b) => [b, { qty: 0, cost: 0 }]));
+  for (const r of selected) {
+    if (!branchTotals.has(r.branchName)) branchTotals.set(r.branchName, { qty: 0, cost: 0 });
+    const bt = branchTotals.get(r.branchName);
+    bt.qty += Number(r.qty) || 0;
+    bt.cost += (Number(r.qty) || 0) * (Number(r.unitCost) || 0);
+  }
+
+  const metricsEl = document.getElementById('reorderPreviewMetrics');
+  if (metricsEl) {
+    const branchPills = [...branchTotals.entries()]
+      .filter(([, v]) => v.qty > 0)
+      .map(
+        ([b, v]) =>
+          `<span style="display:inline-block;padding:4px 8px;border-radius:6px;background:#fff;border:1px solid #d5ceb8;font-size:12px;"><strong>${b}:</strong> ${v.qty} pcs${showCosts ? ` (${fmtCurrency(v.cost)})` : ''}</span>`
+      )
+      .join(' ');
+    metricsEl.innerHTML = `
+      <div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:130px;">
+        <div style="font-size:10px;font-weight:700;color:#6b6351;">ORDER UNITS</div>
+        <div style="font-size:18px;font-weight:800;color:#1b1913;">${fmtNum(totalUnits)}</div>
+      </div>
+      ${
+        showCosts
+          ? `<div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:150px;">
+              <div style="font-size:10px;font-weight:700;color:#6b6351;">EST. TOTAL COST</div>
+              <div style="font-size:18px;font-weight:800;color:#1d6f42;">${fmtCurrency(totalCost)}</div>
+            </div>`
+          : ''
+      }
+      <div style="flex:1;min-width:220px;">
+        <div style="font-size:10px;font-weight:700;color:#6b6351;margin-bottom:4px;">BRANCH SUBTOTALS</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">${branchPills || '<span style="font-size:12px;color:#6b6351;">None</span>'}</div>
+      </div>
+    `;
+  }
+
+  const bodyEl = document.getElementById('reorderPreviewBody');
+  if (bodyEl) {
+    if (!grouped.length) {
+      bodyEl.innerHTML = '<div style="padding:16px;text-align:center;color:#6b6351;">No products selected in this reorder plan.</div>';
+    } else {
+      bodyEl.innerHTML = grouped
+        .map(
+          (sup) => `
+          <div style="margin-bottom:12px;">
+            <div style="background:#ebe2be;color:#1b1913;font-weight:700;font-size:12px;padding:6px 10px;border-radius:6px;">
+              ${sup.supplier}
+            </div>
+            ${sup.branches
+              .map(
+                (b) => `
+              <div style="margin-top:8px;padding:0 4px;">
+                <div style="font-weight:700;font-size:12px;color:#1b1913;margin-bottom:4px;">${b.branchName}</div>
+                ${b.rows
+                  .map((r) => {
+                    const nameLabel = r.brand && !String(r.model || '').toLowerCase().startsWith(String(r.brand || '').toLowerCase())
+                      ? `${r.brand} · ${r.model}`
+                      : r.model || r.displayModel;
+                    return `
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid #e6e0ce;font-size:12.5px;">
+                      <span>${nameLabel}</span>
+                      <span style="display:flex;align-items:center;gap:12px;white-space:nowrap;">
+                        ${showCosts ? `<span style="color:#4f493a;font-size:11.5px;">${fmtCurrency(r.unitCost)} × ${r.qty} = <strong>${fmtCurrency(r.unitCost * r.qty)}</strong></span>` : ''}
+                        <strong style="color:#b45309;">${r.qty} ${r.qty === 1 ? 'pc' : 'pcs'}</strong>
+                      </span>
+                    </div>`;
+                  })
+                  .join('')}
+              </div>`
+              )
+              .join('')}
+          </div>`
+        )
+        .join('');
+    }
+  }
+  const stEl = document.getElementById('reorderPreviewStatus');
+  if (stEl) stEl.textContent = '';
+}
+
+function downloadReorderPlanPdf(overrideOrder = null) {
+  const jspdfNs = window.jspdf;
+  if (!jspdfNs || typeof jspdfNs.jsPDF !== 'function') {
+    alert('PDF generator library is still loading. Please try again.');
+    return;
+  }
+  const { selected, grouped, isSaved, order } = getGroupedReorderPlan(overrideOrder, false);
+  if (!selected.length) {
+    alert('No approved products selected to download.');
+    return;
+  }
+  const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked) || Boolean(overrideOrder);
+  const doc = new jspdfNs.jsPDF({ orientation: 'portrait', unit: 'in', format: [8.5, 13], compress: true });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const margin = 24 / 72;
+  const nowLabel = new Date().toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.setTextColor(27, 25, 19);
+  const pdfTitle = isSaved && order ? `AB-GADGETZ · ${order.id} (${order.status.toUpperCase()})` : 'AB-GADGETZ · REORDER PLAN';
+  doc.text(pdfTitle, pageWidth / 2, 30 / 72, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(79, 73, 58);
+  const totalUnits = selected.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+  const totalCost = selected.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.unitCost) || 0), 0);
+  doc.text(
+    `${isSaved && order?.title ? `${order.title} · ` : ''}Prepared ${nowLabel} · ${totalUnits} pcs${showCosts ? ` · Total PHP ${fmtNum(Math.round(totalCost))}` : ''}`,
+    pageWidth / 2,
+    43 / 72,
+    { align: 'center' }
+  );
+
+  const head = showCosts
+    ? [['Branch', 'Brand / Model', 'Qty', 'Unit Price', 'Subtotal']]
+    : [['Branch', 'Brand / Model', 'Qty']];
+  const colsCount = showCosts ? 5 : 3;
+  const body = [];
+
+  for (const sup of grouped) {
+    body.push([
+      {
+        content: sup.supplier,
+        colSpan: colsCount,
+        styles: { fillColor: [235, 226, 190], fontStyle: 'bold', textColor: [27, 25, 19] },
+      },
+    ]);
+    for (const b of sup.branches) {
+      for (const r of b.rows) {
+        const row = [
+          b.branchName,
+          r.displayModel,
+          `${r.qty} ${r.qty === 1 ? 'pc' : 'pcs'}`,
+        ];
+        if (showCosts) {
+          row.push(r.unitCost > 0 ? `PHP ${fmtNum(Math.round(r.unitCost))}` : '—');
+          row.push(r.unitCost > 0 ? `PHP ${fmtNum(Math.round(r.unitCost * r.qty))}` : '—');
+        }
+        body.push(row);
+      }
+    }
+  }
+  if (showCosts) {
+    body.push([
+      { content: 'TOTAL APPROVED ORDER', colSpan: 2, styles: { fontStyle: 'bold', fillColor: [245, 240, 220] } },
+      { content: `${totalUnits} pcs`, styles: { fontStyle: 'bold', halign: 'center', fillColor: [245, 240, 220] } },
+      { content: '', styles: { fillColor: [245, 240, 220] } },
+      { content: `PHP ${fmtNum(Math.round(totalCost))}`, styles: { fontStyle: 'bold', halign: 'right', fillColor: [245, 240, 220] } },
+    ]);
+  }
+
+  doc.autoTable({
+    startY: 56 / 72,
+    margin: { left: margin, right: margin, bottom: margin },
+    head,
+    body,
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 8.5,
+      cellPadding: 4 / 72,
+      textColor: [27, 25, 19],
+      lineColor: [75, 70, 58],
+      lineWidth: 0.65 / 72,
+    },
+    columnStyles: showCosts
+      ? { 2: { halign: 'center' }, 3: { halign: 'right' }, 4: { halign: 'right' } }
+      : { 2: { halign: 'center' } },
+    headStyles: { fillColor: [235, 226, 190], textColor: [30, 30, 30], fontStyle: 'bold' },
+  });
+
+  const fileTag = isSaved && order ? order.id : `Reorder_Plan_${todayStr}`;
+  doc.save(`AB_Gadgetz_${fileTag}.pdf`);
+}
+
+async function downloadReorderPlanExcel(overrideOrder = null) {
+  if (!window.ExcelJS) {
+    alert('Excel library is still loading. Please try again in a second.');
+    return;
+  }
+  const { selected, grouped, isSaved, order } = getGroupedReorderPlan(overrideOrder, false);
+  if (!selected.length) {
+    alert('No approved products selected to export.');
+    return;
+  }
+  const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked) || Boolean(overrideOrder);
+  const wb = new window.ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Purchase Order');
+
+  ws.mergeCells(1, 1, 1, showCosts ? 5 : 3);
+  const titleCell = ws.getCell(1, 1);
+  titleCell.value = isSaved && order ? `AB-GADGETZ · ${order.id} — ${order.title} (${order.status})` : `AB-GADGETZ · REORDER PLAN (${todayStr})`;
+  titleCell.font = { bold: true, size: 13 };
+  titleCell.alignment = { horizontal: 'center' };
+
+  const headers = showCosts
+    ? ['Branch', 'Brand / Model', 'Approved Qty', 'Approved Price', 'Subtotal']
+    : ['Branch', 'Brand / Model', 'Approved Qty'];
+  const headerRow = ws.addRow(headers);
+  headerRow.eachCell((c) => {
+    c.font = { bold: true, size: 10 };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEBE2BE' } };
+    c.border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+  });
+
+  let totQty = 0;
+  let totCost = 0;
+  for (const sup of grouped) {
+    const supRow = ws.addRow([sup.supplier]);
+    ws.mergeCells(supRow.number, 1, supRow.number, showCosts ? 5 : 3);
+    supRow.getCell(1).font = { bold: true, size: 10 };
+    supRow.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F0DC' } };
+    for (const b of sup.branches) {
+      for (const r of b.rows) {
+        const q = Number(r.qty) || 0;
+        const c = Number(r.unitCost) || 0;
+        totQty += q;
+        totCost += q * c;
+        const vals = showCosts ? [b.branchName, r.displayModel, q, c, q * c] : [b.branchName, r.displayModel, q];
+        const row = ws.addRow(vals);
+        if (showCosts) {
+          row.getCell(4).numFmt = '"₱"#,##0.00';
+          row.getCell(5).numFmt = '"₱"#,##0.00';
+        }
+        row.eachCell((cell) => {
+          cell.border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+        });
+      }
+    }
+  }
+
+  const totRow = ws.addRow(showCosts ? ['TOTAL', '', totQty, '', totCost] : ['TOTAL', '', totQty]);
+  totRow.eachCell((cell) => {
+    cell.font = { bold: true, size: 10 };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEBE2BE' } };
+    cell.border = { top: { style: 'medium' }, bottom: { style: 'medium' }, left: { style: 'thin' }, right: { style: 'thin' } };
+  });
+  if (showCosts) totRow.getCell(5).numFmt = '"₱"#,##0.00';
+
+  ws.columns = showCosts
+    ? [{ width: 16 }, { width: 38 }, { width: 13 }, { width: 15 }, { width: 16 }]
+    : [{ width: 16 }, { width: 42 }, { width: 14 }];
+
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  const fileTag = isSaved && order ? order.id : `Reorder_Plan_${todayStr}`;
+  a.download = `AB_Gadgetz_${fileTag}.xlsx`;
+  a.click();
+}
+
+async function loadPlanning() {
+  try {
+    const [planning, budget, act] = await Promise.all([
+      api('/api/planning'),
+      api('/api/budget'),
+      state.planningActivity ? Promise.resolve(state.planningActivity) : api('/api/activity?start=2024-01-01&end=2099-12-31').catch(() => null),
+      loadSavedPurchaseOrders(),
+      loadAbDeliveries(),
+    ]);
+    state.planning = planning;
+    state.budget = budget;
+    if (act) state.planningActivity = act;
+  } catch {
+    await Promise.all([loadSavedPurchaseOrders(), loadAbDeliveries()]);
+  }
+  renderPlanning();
+}
+
+function getDefaultOrderFunds() {
+  const s = state.budget?.summary;
+  return {
+    metrobank: s?.metrobank ? Number(s.metrobank) : 0,
+    maribank: s?.maribank ? Number(s.maribank) : 0,
+    gcash: s?.gcash ? Number(s.gcash) : 0,
+    undeposited: [],
+    creditCards: [
+      { name: 'METROBANK CREDIT CARD', amount: 0, dueDate: '' },
+      { name: 'EASTWEST GOLD CREDIT CARD', amount: 0, dueDate: '' },
+      { name: 'EASTWEST PLATINUM CREDIT CARD', amount: 0, dueDate: '' },
+    ],
+    deductions: [
+      { label: 'Molave Franchise Share', amount: 0 },
+      { label: 'Tambulig Franchise Share', amount: 0 },
+    ],
+  };
+}
+
+function getOrderFundsState() {
+  if (state.orderFunds) return state.orderFunds;
+  try {
+    const raw = localStorage.getItem('abg_order_funds_v1');
+    if (raw) {
+      state.orderFunds = JSON.parse(raw);
+      return state.orderFunds;
+    }
+  } catch {
+    // ignore
+  }
+  state.orderFunds = getDefaultOrderFunds();
+  return state.orderFunds;
+}
+
+function saveOrderFundsState() {
+  try {
+    localStorage.setItem('abg_order_funds_v1', JSON.stringify(getOrderFundsState()));
+  } catch {
+    // ignore
+  }
+}
+
+function parseMoneyInput(val) {
+  const n = Number(String(val ?? '').replace(/,/g, '').trim());
+  return Number.isFinite(n) ? n : 0;
+}
+
+function formatMoneyInput(val) {
+  const n = parseMoneyInput(val);
+  if (!(n > 0)) return '';
+  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function computeOrderFundsTotals(f) {
+  const metrobank = Number(f.metrobank) || 0;
+  const maribank = Number(f.maribank) || 0;
+  const gcash = Number(f.gcash) || 0;
+  const undeposited = (f.undeposited || [])
+    .filter((u) => !u.deposited)
+    .reduce((s, u) => s + (Number(u.amount) || 0), 0);
+  const totalCash = metrobank + maribank + gcash + undeposited;
+  const totalCards = (f.creditCards || []).reduce((s, c) => s + (Number(c.amount) || 0), 0);
+  const totalOther = (f.deductions || []).reduce((s, d) => s + (Number(d.amount) || 0), 0);
+  const totalBills = totalCards + totalOther;
+  const netOrderBudget = totalCash - totalBills;
+  const missingDueCount = (f.creditCards || []).filter((c) => !String(c.dueDate || '').trim()).length;
+  return { totalCash, totalBills, netOrderBudget, undeposited, missingDueCount };
+}
+
+function updateOrderFundsSummaryUI(syncToInput = true) {
+  const f = getOrderFundsState();
+  const t = computeOrderFundsTotals(f);
+  const netHeader = document.getElementById('orderFundsNetHeader');
+  if (netHeader) netHeader.textContent = `Net ${fmtCurrency(t.netOrderBudget)}`;
+  const missBadge = document.getElementById('orderFundsMissingBadge');
+  if (missBadge) {
+    missBadge.classList.toggle('hidden', t.missingDueCount === 0);
+    missBadge.textContent = `${t.missingDueCount} due date missing`;
+  }
+  const sumGrid = document.getElementById('budgetSummaryGrid');
+  if (sumGrid) {
+    sumGrid.innerHTML = `
+      <div class="summary-box">
+        TOTAL CASH
+        <strong>${fmtCurrency(t.totalCash)}</strong>
+      </div>
+      <div class="summary-box">
+        TOTAL BILLS
+        <strong style="color:var(--danger);">${fmtCurrency(t.totalBills)}</strong>
+      </div>
+      <div class="summary-box" style="border-color:var(--gold);">
+        NET ORDER BUDGET
+        <strong style="color:var(--gold-bright);">${fmtCurrency(t.netOrderBudget)}</strong>
+      </div>
+    `;
+  }
+  const budgetInp = document.getElementById('restockBudgetInput');
+  if (budgetInp && syncToInput) {
+    budgetInp.value = formatMoneyInput(Math.max(0, t.netOrderBudget));
+  }
+}
+
+function renderOrderFundsPanel() {
+  const f = getOrderFundsState();
+  const mEl = document.getElementById('fundMetrobank');
+  const mbEl = document.getElementById('fundMaribank');
+  const gEl = document.getElementById('fundGcash');
+  if (mEl) mEl.value = formatMoneyInput(f.metrobank);
+  if (mbEl) mbEl.value = formatMoneyInput(f.maribank);
+  if (gEl) gEl.value = formatMoneyInput(f.gcash);
+
+  const uList = document.getElementById('undepositedSalesList');
+  if (uList) {
+    uList.innerHTML = (f.undeposited || []).length
+      ? f.undeposited
+          .map(
+            (u, idx) => `
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;background:rgba(255,255,255,0.03);padding:6px 8px;border-radius:8px;border:1px solid var(--border-soft);">
+            <select class="fund-undep-branch" data-idx="${idx}" style="width:auto;padding:5px 8px;font-size:12px;">
+              <option value="Molave" ${u.branch === 'Molave' ? 'selected' : ''}>Molave</option>
+              <option value="Tambulig" ${u.branch === 'Tambulig' ? 'selected' : ''}>Tambulig</option>
+              <option value="Bonifacio" ${u.branch === 'Bonifacio' ? 'selected' : ''}>Bonifacio</option>
+            </select>
+            <input type="date" class="fund-undep-date" data-idx="${idx}" value="${u.date || ''}" style="width:auto;padding:5px 8px;font-size:12px;" />
+            <input type="text" inputmode="decimal" class="fund-undep-amt" data-idx="${idx}" value="${formatMoneyInput(u.amount)}" placeholder="0.00" style="flex:1;min-width:100px;padding:5px 8px;font-size:12px;" />
+            <label style="display:flex;align-items:center;gap:5px;margin:0;font-size:11px;font-weight:700;cursor:pointer;">
+              <input type="checkbox" class="fund-undep-dep" data-idx="${idx}" ${u.deposited ? 'checked' : ''} style="width:15px;height:15px;margin:0;accent-color:var(--gold);" />
+              <span>DEPOSITED</span>
+            </label>
+            <button type="button" class="secondary fund-undep-del" data-idx="${idx}" style="padding:4px 8px;font-size:12px;min-height:0;">✕</button>
+          </div>`
+          )
+          .join('')
+      : '<div class="muted small">No undeposited branch sales recorded.</div>';
+
+    uList.querySelectorAll('.fund-undep-branch').forEach((el) => {
+      el.addEventListener('change', (e) => {
+        f.undeposited[Number(e.target.dataset.idx)].branch = e.target.value;
+        saveOrderFundsState();
+      });
+    });
+    uList.querySelectorAll('.fund-undep-date').forEach((el) => {
+      el.addEventListener('change', (e) => {
+        f.undeposited[Number(e.target.dataset.idx)].date = e.target.value;
+        saveOrderFundsState();
+      });
+    });
+    uList.querySelectorAll('.fund-undep-amt').forEach((el) => {
+      el.addEventListener('input', (e) => {
+        f.undeposited[Number(e.target.dataset.idx)].amount = parseMoneyInput(e.target.value);
+        saveOrderFundsState();
+        updateOrderFundsSummaryUI(true);
+      });
+      el.addEventListener('blur', (e) => {
+        e.target.value = formatMoneyInput(parseMoneyInput(e.target.value));
+      });
+    });
+    uList.querySelectorAll('.fund-undep-dep').forEach((el) => {
+      el.addEventListener('change', (e) => {
+        const idx = Number(e.target.dataset.idx);
+        const row = f.undeposited[idx];
+        const amt = Number(row.amount) || 0;
+        if (e.target.checked && !row.deposited) {
+          row.deposited = true;
+          f.metrobank = Number(((Number(f.metrobank) || 0) + amt).toFixed(2));
+        } else if (!e.target.checked && row.deposited) {
+          row.deposited = false;
+          f.metrobank = Math.max(0, Number(((Number(f.metrobank) || 0) - amt).toFixed(2)));
+        }
+        saveOrderFundsState();
+        renderOrderFundsPanel();
+      });
+    });
+    uList.querySelectorAll('.fund-undep-del').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        f.undeposited.splice(Number(e.target.dataset.idx), 1);
+        saveOrderFundsState();
+        renderOrderFundsPanel();
+      });
+    });
+  }
+
+  const ccGrid = document.getElementById('creditCardsBudgetGrid');
+  if (ccGrid) {
+    ccGrid.innerHTML = (f.creditCards || [])
+      .map(
+        (c, idx) => `
+        <div class="sub-panel" style="padding:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;margin-bottom:6px;">
+            <strong style="font-size:11px;">${c.name}</strong>
+            ${!String(c.dueDate || '').trim() ? '<span class="badge badge-danger" style="font-size:9px;">DUE DATE MISSING</span>' : ''}
+          </div>
+          <label style="font-size:10px;">BILL AMOUNT</label>
+          <input type="text" inputmode="decimal" class="fund-cc-amt" data-idx="${idx}" value="${formatMoneyInput(c.amount)}" placeholder="₱0.00" style="padding:5px 8px;font-size:12px;margin-bottom:6px;" />
+          <label style="font-size:10px;">DUE DATE</label>
+          <input type="date" class="fund-cc-due" data-idx="${idx}" value="${c.dueDate || ''}" style="padding:5px 8px;font-size:12px;" />
+        </div>`
+      )
+      .join('');
+
+    ccGrid.querySelectorAll('.fund-cc-amt').forEach((el) => {
+      el.addEventListener('input', (e) => {
+        f.creditCards[Number(e.target.dataset.idx)].amount = parseMoneyInput(e.target.value);
+        saveOrderFundsState();
+        updateOrderFundsSummaryUI(true);
+      });
+      el.addEventListener('blur', (e) => {
+        e.target.value = formatMoneyInput(parseMoneyInput(e.target.value));
+      });
+    });
+    ccGrid.querySelectorAll('.fund-cc-due').forEach((el) => {
+      el.addEventListener('change', (e) => {
+        f.creditCards[Number(e.target.dataset.idx)].dueDate = e.target.value;
+        saveOrderFundsState();
+        renderOrderFundsPanel();
+      });
+    });
+  }
+
+  const dList = document.getElementById('otherDeductionsList');
+  if (dList) {
+    dList.innerHTML = (f.deductions || [])
+      .map(
+        (d, idx) => `
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input type="text" class="fund-ded-lbl" data-idx="${idx}" value="${d.label || ''}" placeholder="Bill / Deduction name" style="flex:2;padding:5px 8px;font-size:12px;" />
+          <input type="text" inputmode="decimal" class="fund-ded-amt" data-idx="${idx}" value="${formatMoneyInput(d.amount)}" placeholder="0.00" style="flex:1;padding:5px 8px;font-size:12px;" />
+          <button type="button" class="secondary fund-ded-del" data-idx="${idx}" style="padding:4px 8px;font-size:12px;min-height:0;">✕</button>
+        </div>`
+      )
+      .join('');
+
+    dList.querySelectorAll('.fund-ded-lbl').forEach((el) => {
+      el.addEventListener('input', (e) => {
+        f.deductions[Number(e.target.dataset.idx)].label = e.target.value;
+        saveOrderFundsState();
+      });
+    });
+    dList.querySelectorAll('.fund-ded-amt').forEach((el) => {
+      el.addEventListener('input', (e) => {
+        f.deductions[Number(e.target.dataset.idx)].amount = parseMoneyInput(e.target.value);
+        saveOrderFundsState();
+        updateOrderFundsSummaryUI(true);
+      });
+      el.addEventListener('blur', (e) => {
+        e.target.value = formatMoneyInput(parseMoneyInput(e.target.value));
+      });
+    });
+    dList.querySelectorAll('.fund-ded-del').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        f.deductions.splice(Number(e.target.dataset.idx), 1);
+        saveOrderFundsState();
+        renderOrderFundsPanel();
+      });
+    });
+  }
+
+  updateOrderFundsSummaryUI(true);
+}
+
+function renderPlanning() {
+  renderOrderFundsPanel();
+  renderSavedOrdersPanel();
+  buildRestockDraftPlan();
+  renderRestockCards();
+}
+
+document.getElementById('savedOrdersToggle')?.addEventListener('click', () => {
+  const body = document.getElementById('savedOrdersBody');
+  const caret = document.getElementById('savedOrdersCaret');
+  if (!body) return;
+  const hidden = body.classList.toggle('hidden');
+  if (caret) caret.textContent = hidden ? '+' : '−';
+});
+
+document.querySelectorAll('.po-subview-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const view = btn.dataset.poview || 'orders';
+    document.querySelectorAll('.po-subview-btn').forEach((b) => {
+      const active = b === btn;
+      b.classList.toggle('active', active);
+      b.classList.toggle('secondary', !active);
+    });
+    ['orders', 'variance', 'deliveries'].forEach((v) => {
+      document.getElementById(`poView-${v}`)?.classList.toggle('hidden', v !== view);
+    });
+    const body = document.getElementById('savedOrdersBody');
+    const caret = document.getElementById('savedOrdersCaret');
+    if (body) body.classList.remove('hidden');
+    if (caret) caret.textContent = '−';
+    if (view === 'variance') renderOrderVarianceReport();
+    if (view === 'deliveries') renderAbDeliveriesView();
+  });
+});
+
+document.getElementById('logNewPendingOrderBtn')?.addEventListener('click', () => {
+  openNewPendingOrderCreator();
+});
+document.getElementById('pasteOrderBtn')?.addEventListener('click', () => {
+  const box = document.getElementById('pasteOrderBox');
+  if (!box) return;
+  const hidden = box.classList.toggle('hidden');
+  if (!hidden) document.getElementById('pasteOrderText')?.focus();
+});
+document.getElementById('closePasteOrderBtn')?.addEventListener('click', () => {
+  document.getElementById('pasteOrderBox')?.classList.add('hidden');
+});
+document.getElementById('parseAndCreateOrderBtn')?.addEventListener('click', () => {
+  parseAndCreatePastedOrder();
+});
+document.getElementById('syncAbDeliveriesBtn')?.addEventListener('click', () => {
+  matchSingleOrderWithAbWeb('ALL');
+});
+document.getElementById('varianceOrderFilter')?.addEventListener('change', renderOrderVarianceReport);
+document.getElementById('varianceTypeFilter')?.addEventListener('change', renderOrderVarianceReport);
+document.getElementById('variancePdfBtn')?.addEventListener('click', downloadVariancePdf);
+document.getElementById('varianceExcelBtn')?.addEventListener('click', downloadVarianceExcel);
+document.getElementById('abDeliveryBranchFilter')?.addEventListener('change', renderAbDeliveriesView);
+
+document.getElementById('orderFundsToggle')?.addEventListener('click', () => {
+  const body = document.getElementById('orderFundsBody');
+  const caret = document.getElementById('orderFundsCaret');
+  if (!body) return;
+  const hidden = body.classList.toggle('hidden');
+  if (caret) caret.textContent = hidden ? '+' : '−';
+});
+
+['fundMetrobank', 'fundMaribank', 'fundGcash'].forEach((id) => {
+  const el = document.getElementById(id);
+  el?.addEventListener('input', (e) => {
+    const f = getOrderFundsState();
+    const numVal = parseMoneyInput(e.target.value);
+    if (id === 'fundMetrobank') f.metrobank = numVal;
+    if (id === 'fundMaribank') f.maribank = numVal;
+    if (id === 'fundGcash') f.gcash = numVal;
+    saveOrderFundsState();
+    updateOrderFundsSummaryUI(true);
+  });
+  el?.addEventListener('blur', (e) => {
+    e.target.value = formatMoneyInput(parseMoneyInput(e.target.value));
+  });
+});
+document.getElementById('restockBudgetInput')?.addEventListener('blur', (e) => {
+  e.target.value = formatMoneyInput(parseMoneyInput(e.target.value));
+});
+
+document.getElementById('addUndepositedSaleBtn')?.addEventListener('click', () => {
+  const f = getOrderFundsState();
+  f.undeposited.push({ branch: 'Molave', date: todayStr, amount: 0, deposited: false });
+  saveOrderFundsState();
+  renderOrderFundsPanel();
+});
+
+document.getElementById('addDeductionBtn')?.addEventListener('click', () => {
+  const f = getOrderFundsState();
+  f.deductions.push({ label: '', amount: 0 });
+  saveOrderFundsState();
+  renderOrderFundsPanel();
+});
+
+document.getElementById('buildRestockPlanBtn')?.addEventListener('click', () => {
+  state.previewOrderOverride = null;
+  buildRestockDraftPlan();
+  renderRestockCards();
+  renderReorderPreviewModal();
+  document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
+});
+
+document.getElementById('previewRestockPlanBtn')?.addEventListener('click', () => {
+  state.previewOrderOverride = null;
+  if (!state.restockPlan) buildRestockDraftPlan();
+  renderReorderPreviewModal();
+  document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
+});
+
+document.getElementById('saveNewRestockOrderBtn')?.addEventListener('click', createSavedOrderFromDraft);
+
+document.getElementById('restockPriorityMode')?.addEventListener('change', () => {
+  buildRestockDraftPlan();
+  renderRestockCards();
+});
+
+document.getElementById('restockTypeFilter')?.addEventListener('change', () => {
+  buildRestockDraftPlan();
+  renderRestockCards();
+});
+
+document.querySelectorAll('input[name="restockSupplierMode"]').forEach((r) => {
+  r.addEventListener('change', () => {
+    buildRestockDraftPlan();
+    renderRestockCards();
+  });
+});
+
+document.getElementById('restockSearchInput')?.addEventListener('input', renderRestockCards);
+document.getElementById('restockBrandFilter')?.addEventListener('change', renderRestockCards);
+document.getElementById('restockShowFilter')?.addEventListener('change', renderRestockCards);
+document.getElementById('restockExcludeObsoleteChk')?.addEventListener('change', () => {
+  buildRestockDraftPlan();
+  renderRestockCards();
+});
+document.getElementById('restockDeductPendingChk')?.addEventListener('change', () => {
+  buildRestockDraftPlan();
+  renderRestockCards();
+});
+document.getElementById('markAllObsoletePhaseoutBtn')?.addEventListener('click', () => {
+  const deadIds = (state.lastObsoleteList || []).filter((x) => x.status === 'DEAD_OBSOLETE').map((x) => x.id);
+  if (!deadIds.length) return;
+  markProductsPhaseout(deadIds);
+});
+
+document.getElementById('reorderSelectAllChk')?.addEventListener('change', (e) => {
+  const checked = e.target.checked;
+  for (const r of getFilteredRestockRows()) {
+    if (state.restockPlan?.[r._idx]) state.restockPlan[r._idx].selected = checked;
+  }
+  renderRestockCards();
+});
+
+document.getElementById('reorderShowCostsChk')?.addEventListener('change', renderReorderPreviewModal);
+document.getElementById('closeReorderPreviewBtn')?.addEventListener('click', () => {
+  document.getElementById('reorderPreviewModal')?.classList.add('hidden');
+});
+document.getElementById('reorderBackToEditBtn')?.addEventListener('click', () => {
+  document.getElementById('reorderPreviewModal')?.classList.add('hidden');
+});
+document.getElementById('reorderPrintBtn')?.addEventListener('click', () => window.print());
+document.getElementById('reorderPdfBtn')?.addEventListener('click', () => downloadReorderPlanPdf(null));
+document.getElementById('reorderExcelBtn')?.addEventListener('click', () => downloadReorderPlanExcel(null));
+document.getElementById('reorderCopyBtn')?.addEventListener('click', async () => {
+  const text = buildReorderCopyText(null);
+  const stEl = document.getElementById('reorderPreviewStatus');
+  if (!text) {
+    if (stEl) {
+      stEl.style.color = '#b91c1c';
+      stEl.textContent = 'No products selected to copy.';
+    }
+    return;
+  }
+  const ok = await copyTextToClipboard(text);
+  if (stEl) {
+    stEl.style.color = ok ? '#1d6f42' : '#b91c1c';
+    stEl.textContent = ok ? 'Copied Reorder request to clipboard.' : 'Unable to copy automatically.';
+  }
+});
+
+function renderCostCompareTool() {
+  if (!state.inventory) return;
+  const search = (document.getElementById('costCompareSearch')?.value || '').trim().toLowerCase();
+  const typeFilter = document.getElementById('costCompareType')?.value || 'Cellphones';
+  const stockFilter = document.getElementById('costCompareStockFilter')?.value || 'IN_STOCK';
+  const modeFilter = document.getElementById('costCompareFilter')?.value || 'ALL';
+  const sortMode = document.getElementById('costCompareSort')?.value || 'SAVINGS_DESC';
+
+  const { branches, items } = state.inventory;
+  const rows = [];
+  let comparedCount = 0;
+  let savingsModels = 0;
+  let totalUnitSavings = 0;
+  let lowStockSavingsCount = 0;
+  const supplierWins = { 'AB Main Supplier': 0, 'A&K': 0, 'Online Purchase': 0 };
+
+  for (const item of items) {
+    if ((item.lifecycle_status || 'Active') !== 'Active') continue;
+    const pType = item.product_type || 'Cellphones';
+    if (typeFilter !== 'ALL' && pType !== typeFilter) continue;
+
+    const webCost = Number(item.cost_price) || 0;
+    const cAb = Number(item.cost_ab) || 0;
+    const cAk = Number(item.cost_ak) || 0;
+    const cOn = Number(item.cost_online) || 0;
+
+    const sups = [
+      { name: 'AB Main Supplier', val: cAb },
+      { name: 'A&K', val: cAk },
+      { name: 'Online Purchase', val: cOn },
+    ].filter((s) => s.val > 0);
+    sups.sort((a, b) => a.val - b.val);
+    const best = sups[0] || null;
+
+    if (best) {
+      comparedCount++;
+      supplierWins[best.name] = (supplierWins[best.name] || 0) + 1;
+    }
+
+    const diffVsWeb = best && webCost > 0 ? webCost - best.val : 0; // positive = supplier saves money
+    if (diffVsWeb > 0) {
+      savingsModels++;
+      totalUnitSavings += diffVsWeb;
+    }
+
+    let totalAvail = 0;
+    let needsRestock = false;
+    const price = Number(item.base_price) || 0;
+    for (const b of branches) {
+      const cell = item.byBranch[b.id];
+      const av = Number(cell?.qtyAvailable) || 0;
+      totalAvail += av;
+      const defaultRp = price < 10000 ? (b.id === 'br-molave' ? 2 : 1) : price <= 20000 ? 2 : 1;
+      const rp = Number(cell?.reorderPoint) || defaultRp;
+      if (av <= rp) needsRestock = true;
+    }
+
+    if (needsRestock && diffVsWeb > 0) lowStockSavingsCount++;
+
+    const displayModel = formatSwapModelName({ brand: item.brand || '', model: item.model || item.name });
+    if (
+      search &&
+      !displayModel.toLowerCase().includes(search) &&
+      !(item.brand || '').toLowerCase().includes(search) &&
+      !(item.website_codes || item.sku || '').toLowerCase().includes(search)
+    ) {
+      continue;
+    }
+
+    if (modeFilter === 'SAVINGS' && diffVsWeb <= 0) continue;
+    if (modeFilter === 'OVERPAY' && !(best && webCost > 0 && diffVsWeb < 0)) continue;
+    if (modeFilter === 'LOW_STOCK_SAVINGS' && !(needsRestock && diffVsWeb > 0)) continue;
+    if (modeFilter === 'MISSING' && best) continue;
+
+    if (stockFilter === 'IN_STOCK' && totalAvail <= 0) continue;
+    if (stockFilter === 'OUT_OF_STOCK' && totalAvail > 0) continue;
+
+    const highestSup = sups.length > 1 ? sups[sups.length - 1] : null;
+    const supplierSpread = best && highestSup ? highestSup.val - best.val : 0;
+    const srp = Number(item.base_price) || 0;
+    const cashPrice = Math.round(srp * 0.95);
+    const refCost = best?.val || webCost;
+    const srpMarginPct = srp > 0 && refCost > 0 ? ((srp - refCost) / srp) * 100 : null;
+    const cashMarginPct = cashPrice > 0 && refCost > 0 ? ((cashPrice - refCost) / cashPrice) * 100 : null;
+
+    rows.push({
+      id: item.id,
+      displayModel,
+      sku: item.website_codes || item.sku,
+      totalAvail,
+      needsRestock,
+      srp,
+      cashPrice,
+      srpMarginPct,
+      cashMarginPct,
+      webCost,
+      cAb,
+      cAk,
+      cOn,
+      best,
+      highestSup,
+      supplierSpread,
+      diffVsWeb,
+    });
+  }
+
+  rows.sort((a, b) => {
+    if (sortMode === 'MARGIN_DESC') {
+      return (b.srpMarginPct ?? -999) - (a.srpMarginPct ?? -999);
+    }
+    if (sortMode === 'NEED_SAVINGS') {
+      if (a.needsRestock !== b.needsRestock) return a.needsRestock ? -1 : 1;
+      if (a.diffVsWeb !== b.diffVsWeb) return b.diffVsWeb - a.diffVsWeb;
+      return a.totalAvail - b.totalAvail;
+    }
+    if (sortMode === 'MODEL_ASC') return a.displayModel.localeCompare(b.displayModel);
+    if (a.diffVsWeb !== b.diffVsWeb) return b.diffVsWeb - a.diffVsWeb;
+    return (b.best ? 1 : 0) - (a.best ? 1 : 0) || a.displayModel.localeCompare(b.displayModel);
+  });
+
+  const topSupEntry = Object.entries(supplierWins).sort((a, b) => b[1] - a[1])[0];
+  const sumGrid = document.getElementById('costCompareSummaryGrid');
+  if (sumGrid) {
+    sumGrid.innerHTML = `
+      <div class="summary-box">MODELS WITH SUPPLIER COSTS<strong>${fmtNum(comparedCount)}</strong></div>
+      <div class="summary-box">CHEAPER VIA SUPPLIER<strong style="color:var(--green);">${fmtNum(savingsModels)} (${fmtCurrency(totalUnitSavings)}/pc sum)</strong></div>
+      <div class="summary-box">PRIORITY RESTOCK + SAVINGS<strong style="color:var(--gold-bright);">${fmtNum(lowStockSavingsCount)}</strong></div>
+      <div class="summary-box">MOST COMPETITIVE SUPPLIER<strong>${topSupEntry && topSupEntry[1] > 0 ? `${topSupEntry[0]} (${topSupEntry[1]})` : '—'}</strong></div>
+    `;
+  }
+
+  const bannerEl = document.getElementById('costCompareInsightBanner');
+  if (bannerEl) {
+    bannerEl.innerHTML = comparedCount > 0
+      ? `<strong>Restock Strategy Impact:</strong> <strong>${fmtNum(lowStockSavingsCount)}</strong> low-stock model(s) can be ordered cheaper than their AB Website recorded cost. The <strong>RESTOCK</strong> plan automatically prioritizes these high-savings low-stock models first so your Net Order Budget yields higher profit margins.`
+      : `<strong>Tip:</strong> Enter supplier costs (<strong>AB ₱</strong>, <strong>A&amp;K ₱</strong>, <strong>Online ₱</strong>) in <strong>RESTOCK</strong> or by clicking any product card in <strong>INVENTORY</strong> to compare against the AB Website recorded cost.`;
+  }
+
+  const fmtCell = (val, webCost, cls, pid) => {
+    const d = val > 0 && webCost > 0 ? webCost - val : 0;
+    const diffHtml = !(val > 0 && webCost > 0)
+      ? ''
+      : d > 0
+        ? `<div class="small" style="color:var(--green);">-${fmtCurrency(d)}</div>`
+        : d < 0
+          ? `<div class="small" style="color:#f59e0b;">+${fmtCurrency(Math.abs(d))}</div>`
+          : '<div class="small muted">Same</div>';
+    return `
+      <input type="number" class="${cls}" data-pid="${pid}" value="${val > 0 ? val : ''}" min="0" step="0.01" placeholder="0" style="width:82px;padding:4px 6px;font-size:12px;" />
+      ${diffHtml}
+    `;
+  };
+
+  const tbody = document.querySelector('#costCompareTable tbody');
+  if (!tbody) return;
+  tbody.innerHTML = rows.length
+    ? rows
+        .slice(0, 150)
+        .map((r) => {
+          const bestHtml = r.best
+            ? r.diffVsWeb > 0
+              ? `<span class="badge badge-ok">${r.best.name}</span><div class="small" style="color:var(--green);margin-top:2px;">Saves ${fmtCurrency(r.diffVsWeb)}/pc vs Web</div>`
+              : r.diffVsWeb < 0
+                ? `<span class="badge badge-warn">${r.best.name}</span><div class="small" style="color:#f59e0b;margin-top:2px;">+${fmtCurrency(Math.abs(r.diffVsWeb))}/pc vs Web</div>`
+                : `<span class="badge badge-ok">${r.best.name}</span><div class="small" style="color:${r.supplierSpread > 0 ? 'var(--green)' : 'var(--muted)'};margin-top:2px;">${r.supplierSpread > 0 ? `Saves ${fmtCurrency(r.supplierSpread)} vs ${r.highestSup.name}` : 'Matches Web'}</div>`
+            : '<span class="muted small">No supplier cost</span>';
+
+          const actionHtml = !r.best
+            ? '<span class="muted small">Add supplier costs to analyze</span>'
+            : r.needsRestock && r.diffVsWeb > 0
+              ? `<strong style="color:var(--gold-bright);">Order Now (${r.best.name})</strong><div class="small muted">${r.totalAvail} avail • Best margin gain</div>`
+              : r.needsRestock
+                ? `<span style="color:var(--text);">Restock Needed (${r.totalAvail} avail)</span><div class="small muted">Use ${r.best.name}</div>`
+                : `<span class="muted small">Stock OK (${r.totalAvail} avail)</span>`;
+
+          const marginColor = r.srpMarginPct === null
+            ? 'var(--muted)'
+            : r.srpMarginPct >= 10
+              ? 'var(--green)'
+              : r.srpMarginPct >= 5
+                ? 'var(--gold-bright)'
+                : '#f87171';
+          const priceMarginHtml = r.srp > 0
+            ? `<strong>${fmtCurrency(r.srp)}</strong><div class="small" style="color:${marginColor};font-weight:700;">${r.srpMarginPct !== null ? `${r.srpMarginPct.toFixed(1)}% SRP • ${r.cashMarginPct.toFixed(1)}% Cash` : '—'}</div>`
+            : '<span class="muted">—</span>';
+
+          return `
+            <tr data-pid="${r.id}">
+              <td><strong>${r.displayModel}</strong><div class="small muted">${r.sku} • ${r.totalAvail} avail</div></td>
+              <td>${priceMarginHtml}</td>
+              <td><strong>${r.webCost > 0 ? fmtCurrency(r.webCost) : '—'}</strong></td>
+              <td>${fmtCell(r.cAb, r.webCost, 'cc-ab-inp', r.id)}</td>
+              <td>${fmtCell(r.cAk, r.webCost, 'cc-ak-inp', r.id)}</td>
+              <td>${fmtCell(r.cOn, r.webCost, 'cc-on-inp', r.id)}</td>
+              <td>${bestHtml}</td>
+              <td>
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
+                  <div>${actionHtml}</div>
+                  <button type="button" class="secondary cc-save-btn" data-pid="${r.id}" style="padding:4px 8px;font-size:11px;min-height:0;">Save</button>
+                </div>
+              </td>
+            </tr>`;
+        })
+        .join('')
+    : '<tr><td colspan="8" class="muted">No products match the current filter.</td></tr>';
+
+  tbody.querySelectorAll('.cc-save-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const tr = btn.closest('tr');
+      const pid = btn.dataset.pid;
+      const costAb = tr?.querySelector('.cc-ab-inp')?.value ?? '';
+      const costAk = tr?.querySelector('.cc-ak-inp')?.value ?? '';
+      const costOnline = tr?.querySelector('.cc-on-inp')?.value ?? '';
+      btn.textContent = '...';
+      try {
+        await saveProductSupplierCosts(pid, { costAb, costAk, costOnline });
+        renderCostCompareTool();
+        if (state.restockPlan) {
+          buildRestockDraftPlan();
+          renderRestockCards();
+        }
+      } catch (err) {
+        btn.textContent = 'Err';
+        alert(err.message);
+      }
+    });
+  });
+}
+
+document.getElementById('costCompareSearch')?.addEventListener('input', renderCostCompareTool);
+document.getElementById('costCompareType')?.addEventListener('change', renderCostCompareTool);
+document.getElementById('costCompareStockFilter')?.addEventListener('change', renderCostCompareTool);
+document.getElementById('costCompareFilter')?.addEventListener('change', renderCostCompareTool);
+document.getElementById('costCompareSort')?.addEventListener('change', renderCostCompareTool);
+document.getElementById('applyCostPriorityRestockBtn')?.addEventListener('click', () => {
+  const restockBtn = document.querySelector('.inv-tool-btn[data-tool="restock"]');
+  if (restockBtn) restockBtn.click();
+});
 
 async function loadCustomers() {
   return loadBranchCatalog();
@@ -1825,18 +6078,78 @@ async function loadSyncLogs() {
       </tr>`).join('');
 }
 
+function isFreebieMovement(m) {
+  if (!m) return false;
+  if (typeof isFreebieAccessory === 'function' && isFreebieAccessory(m)) return true;
+  if (state.inventory?.items && m.product_id) {
+    const prod = state.inventory.items.find((i) => i.id === m.product_id);
+    if (prod && typeof isFreebieAccessory === 'function' && isFreebieAccessory(prod)) return true;
+  }
+  const nm = String(m.product_name || m.name || m.model || '');
+  return /\b(freebie|freebies|eco\s*bag|gift\s*box|free\s+sim|free\s+bundle|magbadge)\b/i.test(nm);
+}
+
+let activeActivityReqSeq = 0;
+
 async function loadActivity() {
   const start = document.getElementById('actStart').value;
   const end = document.getElementById('actEnd').value;
   const globalBranch = document.getElementById('globalBranch').value;
   if (globalBranch) state.actBranchFilter = globalBranch;
-  const [activity, catalogViews] = await Promise.all([
-    api(`/api/activity?start=${start}&end=${end}`),
-    api('/api/catalog/views').catch(() => null),
-  ]);
+  const seq = ++activeActivityReqSeq;
+
+  // 1. Load and render Activity Log IMMEDIATELY without waiting on external view counters
+  const activity = await api(`/api/activity?start=${start}&end=${end}`);
+  if (seq !== activeActivityReqSeq) return;
   state.activity = activity;
-  state.catalogViews = catalogViews;
   renderActivity();
+
+  // 2. Load Catalog Views in the background with 60s per-range cache
+  if (!state.viewsCache) state.viewsCache = new Map();
+  const cacheKey = `${start}::${end}`;
+  const cached = state.viewsCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < 60000) {
+    state.catalogViews = cached.data;
+    renderActivityViewsOnly();
+    return;
+  }
+  api(`/api/catalog/views?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`)
+    .then((catalogViews) => {
+      if (catalogViews) state.viewsCache.set(cacheKey, { ts: Date.now(), data: catalogViews });
+      if (seq !== activeActivityReqSeq) return;
+      state.catalogViews = catalogViews;
+      renderActivityViewsOnly();
+    })
+    .catch(() => {});
+}
+
+function renderActivityViewsOnly() {
+  const views = state.catalogViews?.byBranch || {};
+  const vMol = views['br-molave'] || { total: 0 };
+  const vTam = views['br-tambulig'] || { total: 0 };
+  const vBon = views['br-bonifacio'] || { total: 0 };
+  const vTot = state.catalogViews || { total: 0 };
+  const viewsGrid = document.getElementById('activityViewsGrid');
+  const viewsLbl = document.getElementById('catalogViewsToggleLabel');
+  if (viewsLbl) {
+    viewsLbl.textContent = `Catalog Views (${fmtNum(vTot.total)} views${vTot.allTimeTotal ? ` • All-time: ${fmtNum(vTot.allTimeTotal)}` : ''})`;
+  }
+  if (viewsGrid) {
+    viewsGrid.innerHTML = `
+      <div class="summary-box compact-act-box">
+        Molave<strong>${fmtNum(vMol.total)} views</strong>
+      </div>
+      <div class="summary-box compact-act-box">
+        Tambulig<strong>${fmtNum(vTam.total)} views</strong>
+      </div>
+      <div class="summary-box compact-act-box">
+        Bonifacio<strong>${fmtNum(vBon.total)} views</strong>
+      </div>
+      <div class="summary-box compact-act-box">
+        ALL<strong>${fmtNum(vTot.total)} views</strong>
+      </div>
+    `;
+  }
 }
 
 function renderActivity() {
@@ -1848,9 +6161,10 @@ function renderActivity() {
   const branchFilter = state.actBranchFilter;
 
   const filterMovementType = (m) => pType === 'ALL' || (m.product_type || 'Cellphones') === pType;
-  const isCashSale = (m) => m.delta_qty < 0 && m.movement_type.includes('SALE');
+  const isCashSale = (m) => m.delta_qty < 0 && m.movement_type.includes('SALE') && !m.movement_type.includes('INSTALLMENT') && !isFreebieMovement(m);
+  const isAnySale = (m) => m.delta_qty < 0 && m.movement_type.includes('SALE') && !isFreebieMovement(m);
 
-  // Compute clickable branch sold totals (Installment mode counts installment sales; otherwise cash/all sales)
+  // Compute clickable branch sold totals (excluding freebies)
   const soldByBranch = { 'br-molave': 0, 'br-tambulig': 0, 'br-bonifacio': 0 };
   if (mode === 'INSTALLMENT') {
     if (pType !== 'Accessories') {
@@ -1859,52 +6173,28 @@ function renderActivity() {
       }
     }
   } else {
+    const matchSale = mode === 'CASH' ? isCashSale : isAnySale;
     for (const m of data.allMovements || []) {
-      if (isCashSale(m) && filterMovementType(m) && soldByBranch[m.branch_id] !== undefined) {
+      if (matchSale(m) && filterMovementType(m) && soldByBranch[m.branch_id] !== undefined) {
         soldByBranch[m.branch_id] += Math.abs(m.delta_qty);
       }
     }
   }
 
   const totalSold = Object.values(soldByBranch).reduce((a, b) => a + b, 0);
-  const views = state.catalogViews?.byBranch || {};
-  const vMol = views['br-molave'] || { total: 0, weekly: 0, monthly: 0 };
-  const vTam = views['br-tambulig'] || { total: 0, weekly: 0, monthly: 0 };
-  const vBon = views['br-bonifacio'] || { total: 0, weekly: 0, monthly: 0 };
-  const vTot = state.catalogViews || { total: 0, weekly: 0, monthly: 0 };
-  const viewsGrid = document.getElementById('activityViewsGrid');
-  if (viewsGrid) {
-    viewsGrid.innerHTML = `
-      <div class="summary-box">
-        Molave CATALOG VIEWS<strong>${fmtNum(vMol.total)} views</strong>
-        <span class="summary-note">7d: ${fmtNum(vMol.weekly)} • 30d: ${fmtNum(vMol.monthly)}</span>
-      </div>
-      <div class="summary-box">
-        Tambulig CATALOG VIEWS<strong>${fmtNum(vTam.total)} views</strong>
-        <span class="summary-note">7d: ${fmtNum(vTam.weekly)} • 30d: ${fmtNum(vTam.monthly)}</span>
-      </div>
-      <div class="summary-box">
-        Bonifacio CATALOG VIEWS<strong>${fmtNum(vBon.total)} views</strong>
-        <span class="summary-note">7d: ${fmtNum(vBon.weekly)} • 30d: ${fmtNum(vBon.monthly)}</span>
-      </div>
-      <div class="summary-box">
-        ALL CATALOG VIEWS<strong>${fmtNum(vTot.total)} views</strong>
-        <span class="summary-note">7d: ${fmtNum(vTot.weekly)} • 30d: ${fmtNum(vTot.monthly)}</span>
-      </div>
-    `;
-  }
+  renderActivityViewsOnly();
   document.getElementById('activitySalesGrid').innerHTML = `
-    <button type="button" class="summary-box act-summary-btn ${branchFilter === 'br-molave' ? 'active' : ''}" data-branch="br-molave">
-      Molave SOLD<strong>${fmtNum(soldByBranch['br-molave'] || 0)} pcs</strong>
+    <button type="button" class="summary-box compact-act-box act-summary-btn ${branchFilter === 'br-molave' ? 'active' : ''}" data-branch="br-molave">
+      Molave<strong>${fmtNum(soldByBranch['br-molave'] || 0)} pcs</strong>
     </button>
-    <button type="button" class="summary-box act-summary-btn ${branchFilter === 'br-tambulig' ? 'active' : ''}" data-branch="br-tambulig">
-      Tambulig SOLD<strong>${fmtNum(soldByBranch['br-tambulig'] || 0)} pcs</strong>
+    <button type="button" class="summary-box compact-act-box act-summary-btn ${branchFilter === 'br-tambulig' ? 'active' : ''}" data-branch="br-tambulig">
+      Tambulig<strong>${fmtNum(soldByBranch['br-tambulig'] || 0)} pcs</strong>
     </button>
-    <button type="button" class="summary-box act-summary-btn ${branchFilter === 'br-bonifacio' ? 'active' : ''}" data-branch="br-bonifacio">
-      Bonifacio SOLD<strong>${fmtNum(soldByBranch['br-bonifacio'] || 0)} pcs</strong>
+    <button type="button" class="summary-box compact-act-box act-summary-btn ${branchFilter === 'br-bonifacio' ? 'active' : ''}" data-branch="br-bonifacio">
+      Bonifacio<strong>${fmtNum(soldByBranch['br-bonifacio'] || 0)} pcs</strong>
     </button>
-    <button type="button" class="summary-box act-summary-btn ${branchFilter === '' ? 'active' : ''}" data-branch="">
-      ALL BRANCHES<strong>${fmtNum(totalSold)} pcs</strong>
+    <button type="button" class="summary-box compact-act-box act-summary-btn ${branchFilter === '' ? 'active' : ''}" data-branch="">
+      ALL<strong>${fmtNum(totalSold)} pcs</strong>
     </button>
   `;
 
@@ -1960,13 +6250,14 @@ function renderActivity() {
     const movList = (data.allMovements || []).filter((m) => {
       if (branchFilter && m.branch_id !== branchFilter) return false;
       if (!filterMovementType(m)) return false;
+      if (m.movement_type.includes('SALE') && isFreebieMovement(m)) return false;
       if (mode === 'CASH') return isCashSale(m);
       return true;
     });
 
     thead.innerHTML = `
       <tr>
-        <th>Time</th>
+        <th>Date / Time</th>
         <th>Branch</th>
         <th>Product</th>
         <th>Category</th>
@@ -1978,11 +6269,11 @@ function renderActivity() {
           .map(
             (m) => `
           <tr>
-            <td>${fmtTime(m.recorded_at)}</td>
+            <td>${String(m.movement_type || '').startsWith('STOCKCARD_') ? String(m.recorded_at || '').slice(0, 10) : fmtTime(m.recorded_at)}</td>
             <td>${m.branch_name}</td>
             <td>${m.product_name}</td>
             <td><span class="badge badge-info">${m.product_type || 'Cellphones'}</span></td>
-            <td>${m.movement_type}</td>
+            <td>${String(m.movement_type || '').replace(/^STOCKCARD_SALE_ORDER$/, 'CASH SALE (ORDER)').replace(/^STOCKCARD_SALE_INSTALLMENT$/, 'INSTALLMENT SALE').replace(/^STOCKCARD_/, '')}</td>
             <td><strong>${m.delta_qty > 0 ? '+' + m.delta_qty : m.delta_qty}</strong></td>
           </tr>`
           )
@@ -2017,9 +6308,15 @@ function updateSyncPill(s) {
   const toggleBtn = document.getElementById('toggleSyncBtn');
 
   dot.className = 'dot' + (s.paused ? ' paused' : s.lastStatus === 'ERROR' ? ' error' : '');
-  if (s.isSyncing) txt.textContent = 'Syncing portal...';
-  else if (s.paused) txt.textContent = `Paused • ${fmtTime(s.lastSyncAt)}`;
-  else txt.textContent = `${s.adapterMode} • Last: ${fmtTime(s.lastSyncAt)}`;
+  if (state.userRole !== 'ADMIN') {
+    if (s.isSyncing) txt.textContent = 'Syncing...';
+    else if (s.paused) txt.textContent = `Paused • ${fmtTime(s.lastSyncAt)}`;
+    else txt.textContent = `LIVE • ${fmtTime(s.lastSyncAt)}`;
+  } else {
+    if (s.isSyncing) txt.textContent = 'Syncing portal...';
+    else if (s.paused) txt.textContent = `Paused • ${fmtTime(s.lastSyncAt)}`;
+    else txt.textContent = `${s.adapterMode} • Last: ${fmtTime(s.lastSyncAt)}`;
+  }
   toggleBtn.textContent = s.paused ? 'Resume' : 'Pause';
 }
 
@@ -2161,32 +6458,93 @@ document.getElementById('saveCostBtn')?.addEventListener('click', async () => {
 async function loadFinance() {
   const start = document.getElementById('finStart').value;
   const end = document.getElementById('finEnd').value;
-  const branchId = document.getElementById('globalBranch').value;
-  const data = await api(`/api/finance/summary?start=${start}&end=${end}&branchId=${branchId}`);
+  const finBranchEl = document.getElementById('finBranchFilter');
+  const globalBranch = document.getElementById('globalBranch').value;
+  const branchId = finBranchEl ? finBranchEl.value : globalBranch;
+  // Fetch all branches for comparative table, plus apply branchId filter for KPIs & details
+  const [allData, scopedData] = await Promise.all([
+    api(`/api/finance/summary?start=${start}&end=${end}`),
+    branchId ? api(`/api/finance/summary?start=${start}&end=${end}&branchId=${branchId}`) : Promise.resolve(null),
+  ]);
+  const data = scopedData || allData;
 
   const t = data.totals;
   document.getElementById('financeKpiGrid').innerHTML = `
     <div class="summary-box">
-      TOTAL COLLECTIONS
-      <strong>${fmtCurrency(t.collections)}</strong>
-      <span class="summary-note">Principal: ${fmtCurrency(t.principal)}</span>
+      CASH + COLLECTIONS INFLOW
+      <strong>${fmtCurrency(t.abWebCashInflow ?? t.collections)}</strong>
+      <span class="summary-note">Cash Sales: ${fmtCurrency(t.cashNetSales || 0)} • DP: ${fmtCurrency(t.downpayments || 0)} • Coll: ${fmtCurrency(t.collections)}</span>
     </div>
     <div class="summary-box">
-      FINANCING INCOME
-      <strong style="color:var(--green);">${fmtCurrency(t.financingIncome)}</strong>
-      <span class="summary-note">Interest + Penalties − Rebates</span>
+      CASH GROSS PROFIT + FIN. INCOME
+      <strong style="color:var(--green);">${fmtCurrency((t.cashGrossProfit || 0) + t.financingIncome)}</strong>
+      <span class="summary-note">Cash GP: ${fmtCurrency(t.cashGrossProfit || 0)} • Fin. Inc: ${fmtCurrency(t.financingIncome)}</span>
     </div>
     <div class="summary-box">
-      TOTAL EXPENSES
+      TOTAL OPERATING EXPENSES
       <strong style="color:var(--danger);">${fmtCurrency(t.expenses)}</strong>
       <span class="summary-note">${data.expensesByType.length} expense categories</span>
     </div>
-    <div class="summary-box">
-      NET CASH FLOW
-      <strong style="color:${t.netCashFlow >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(t.netCashFlow)}</strong>
-      <span class="summary-note">Collections − Expenses</span>
+    <div class="summary-box" style="border-color:var(--gold);">
+      NET INCOME (CASH GP + FIN − EXP)
+      <strong style="color:${(t.properNetIncome ?? t.netCashFlow) >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(t.properNetIncome ?? t.netCashFlow)}</strong>
+      <span class="summary-note">Net Cash Flow: ${fmtCurrency(t.netCashFlow)}</span>
     </div>
   `;
+
+  // Render Comparative Income Statement
+  const stmtTbody = document.querySelector('#financeIncomeStmtTable tbody');
+  const noteEl = document.getElementById('financeAnalysisNote');
+  if (stmtTbody && allData) {
+    const byId = new Map((allData.byBranch || []).map((b) => [b.branchId, b]));
+    const bon = byId.get('br-bonifacio') || {};
+    const mol = byId.get('br-molave') || {};
+    const tam = byId.get('br-tambulig') || {};
+    const tot = allData.totals || {};
+
+    const cols = branchId
+      ? [byId.get(branchId) || tot]
+      : [bon, mol, tam, tot];
+
+    const theadRow = document.querySelector('#financeIncomeStmtTable thead tr');
+    if (theadRow) {
+      theadRow.innerHTML = branchId
+        ? `<th>Income Statement Line Item</th><th>${(byId.get(branchId)?.branchName || 'Selected Branch')}</th>`
+        : `<th>Income Statement Line Item</th><th>Bonifacio</th><th>Molave</th><th>Tambulig</th><th>Total (All Branches)</th>`;
+    }
+
+    const rowHtml = (label, getter, opts = {}) => {
+      const style = opts.bold ? 'font-weight:700;background:rgba(255,255,255,0.03);' : '';
+      const valColor = opts.color || '';
+      return `<tr style="${style}"><td>${label}</td>${cols
+        .map((c) => {
+          const v = Number(getter(c)) || 0;
+          const clr = opts.autoColor ? (v >= 0 ? 'var(--green)' : 'var(--danger)') : valColor;
+          return `<td ${clr ? `style="color:${clr};"` : ''}>${opts.bold ? `<strong>${fmtCurrency(v)}</strong>` : fmtCurrency(v)}</td>`;
+        })
+        .join('')}</tr>`;
+    };
+
+    stmtTbody.innerHTML = [
+      rowHtml('Gross Cash Sales (SRP)', (c) => c.cashGrossSrp),
+      rowHtml('Less: Cash Sales Discounts', (c) => -(c.cashDiscount || 0), { color: 'var(--muted)' }),
+      rowHtml('Net Cash Sales', (c) => c.cashNetSales, { bold: true }),
+      rowHtml('Less: Cash Cost of Goods Sold (FIFO)', (c) => -(c.cashCogs || 0), { color: 'var(--danger)' }),
+      rowHtml('Cash Sales Gross Profit', (c) => c.cashGrossProfit, { bold: true, color: 'var(--green)' }),
+      rowHtml('Add: Financing / Interest Income (Int + Pen − Rebates)', (c) => c.financingIncome, { color: 'var(--green)' }),
+      rowHtml('Total Recognized Gross Profit (Cash GP + Fin. Income)', (c) => (c.cashGrossProfit || 0) + (c.financingIncome || 0), { bold: true }),
+      rowHtml('Less: Operating Expenses', (c) => -(c.expenses || 0), { color: 'var(--danger)' }),
+      rowHtml('Net Operating Income (excl. Installment Unit Profit)', (c) => c.properNetIncome, { bold: true, autoColor: true }),
+      rowHtml('Memo: Installment Contract Sales (New Accounts)', (c) => c.installmentSales, { color: 'var(--muted)' }),
+      rowHtml('Memo: Downpayments Collected', (c) => c.downpayments, { color: 'var(--muted)' }),
+      rowHtml('Memo: Installment Payments Collected', (c) => c.collections, { color: 'var(--muted)' }),
+      rowHtml('Memo: AB Web "Gross Sales" (Total Cash Inflow = DP + Cash + Coll)', (c) => c.abWebCashInflow, { bold: true, color: 'var(--gold-bright)' }),
+    ].join('');
+
+    if (noteEl) {
+      noteEl.innerHTML = `<strong>Auditor Note on AB Web Differences:</strong> AB Web's dashboard labels <strong>Downpayments + Cash Sales + Installment Collections</strong> (${fmtCurrency(tot.abWebCashInflow)}) as <em>"GROSS SALES"</em> — that is actually <strong>Total Cash Inflow</strong>, not Revenue (it double-counts installment principal). Above is the proper Income Statement separating <strong>Cash Sales Revenue</strong>, <strong>FIFO COGS</strong>, <strong>Financing Income</strong>, and <strong>Operating Expenses</strong>.`;
+    }
+  }
 
   document.querySelector('#financeBranchTable tbody').innerHTML = data.byBranch
     .map((b) => `
@@ -2239,17 +6597,69 @@ async function loadReceivables() {
   renderReceivables();
 }
 
+function getEffectiveDaysDue(pd) {
+  let days = Number(pd?.days_due) || 0;
+  const relDate = String(pd?.release_date || '').slice(0, 10);
+  const acct = String(pd?.account_no || '').trim();
+  const unit = String(pd?.unit || '').toUpperCase();
+  const is2023 = relDate.startsWith('2023-') || /-23$/.test(acct) || unit.includes('INSTALLMENT PHONE SAMPLE');
+  if (is2023 && days < 180) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(relDate)) {
+      const ageDays = Math.max(0, Math.floor((Date.now() - new Date(`${relDate}T00:00:00Z`).getTime()) / 86400000));
+      days = Math.max(days, Math.max(365, ageDays - 30));
+    } else {
+      days = Math.max(days, 1000);
+    }
+  }
+  return days;
+}
+
+function getAgingTier(daysDue) {
+  const d = Number(daysDue) || 0;
+  if (d <= 30) return { key: '1-30', label: '1 – 30 Days Past Due', rate: 0.05, action: 'SMS / Call Reminder' };
+  if (d <= 60) return { key: '31-60', label: '31 – 60 Days Past Due', rate: 0.20, action: 'CI Field Visit & Follow-Up' };
+  if (d <= 90) return { key: '61-90', label: '61 – 90 Days Past Due', rate: 0.50, action: 'Final Demand • Stop Accruing Interest' };
+  if (d <= 180) return { key: '91-180', label: '91 – 180 Days Past Due', rate: 0.80, action: 'Priority Repo / Unit Pull-Out' };
+  return { key: '180+', label: '180+ Days Past Due', rate: 0.95, action: 'Write-Off / Legal Recovery' };
+}
+
+function computeAgingAllowance(pastDues = []) {
+  const buckets = [
+    { key: '1-30', label: '1 – 30 Days Past Due', rate: 0.05, action: 'SMS / Call Reminder', count: 0, balance: 0, allowance: 0 },
+    { key: '31-60', label: '31 – 60 Days Past Due', rate: 0.20, action: 'CI Field Visit & Follow-Up', count: 0, balance: 0, allowance: 0 },
+    { key: '61-90', label: '61 – 90 Days Past Due', rate: 0.50, action: 'Final Demand • Stop Accruing Interest', count: 0, balance: 0, allowance: 0 },
+    { key: '91-180', label: '91 – 180 Days Past Due', rate: 0.80, action: 'Priority Repo / Unit Pull-Out', count: 0, balance: 0, allowance: 0 },
+    { key: '180+', label: '180+ Days Past Due', rate: 0.95, action: 'Write-Off / Legal Recovery', count: 0, balance: 0, allowance: 0 },
+  ];
+  const byKey = new Map(buckets.map((b) => [b.key, b]));
+  let totalPastDue = 0;
+  let requiredAllowance = 0;
+  for (const pd of pastDues) {
+    const bal = Number(pd.balance) || 0;
+    const tier = getAgingTier(getEffectiveDaysDue(pd));
+    const b = byKey.get(tier.key);
+    b.count++;
+    b.balance += bal;
+    const allow = bal * b.rate;
+    b.allowance += allow;
+    totalPastDue += bal;
+    requiredAllowance += allow;
+  }
+  return { buckets, totalPastDue, requiredAllowance };
+}
+
 function renderReceivables() {
   const data = state.receivables;
   if (!data) return;
   const t = data.totals;
   const q = document.getElementById('recSearchInput').value.trim().toLowerCase();
+  const aging = computeAgingAllowance(data.pastDues || []);
 
   document.getElementById('receivablesKpiGrid').innerHTML = `
     <div class="summary-box">
       INSTALLMENT PORTFOLIO
       <strong>${fmtCurrency(t.totalPortfolio)}</strong>
-      <span class="summary-note">${fmtNum(t.installmentCount)} active contract(s)</span>
+      <span class="summary-note">Net Realizable: ${fmtCurrency(Math.max(0, t.totalPortfolio - aging.requiredAllowance))}</span>
     </div>
     <div class="summary-box">
       PRINCIPAL FINANCED
@@ -2259,14 +6669,53 @@ function renderReceivables() {
     <div class="summary-box">
       EXPECTED MONTHLY
       <strong style="color:var(--green);">${fmtCurrency(t.totalMonthlyExpected)}</strong>
-      <span class="summary-note">Combined monthly billing</span>
+      <span class="summary-note">${fmtNum(t.installmentCount)} active contract(s)</span>
     </div>
-    <div class="summary-box">
-      OVERALL PAST-DUE ACCOUNTS
-      <strong style="color:var(--gold-bright);">${fmtNum(t.dueAccountsCount)}</strong>
-      <span class="summary-note">Tracked across branches</span>
+    <div class="summary-box rec-aging-click" data-bucket="ALL" style="cursor:pointer;border-color:#f59e0b;" title="Click to view customer-by-customer allowance computation per branch">
+      OPENING ALLOWANCE (AGING) ↗
+      <strong style="color:#f59e0b;">${fmtCurrency(aging.requiredAllowance)}</strong>
+      <span class="summary-note">${fmtNum(t.dueAccountsCount)} past-due (${fmtCurrency(aging.totalPastDue)}) • Click to audit</span>
     </div>
   `;
+
+  const agingPill = document.getElementById('receivablesAgingSummaryPill');
+  if (agingPill) {
+    agingPill.textContent = `Target Opening Allowance: ${fmtCurrency(aging.requiredAllowance)} (Click any row to audit)`;
+    agingPill.style.cursor = 'pointer';
+    agingPill.onclick = () => openReceivablesAllowanceModal('ALL', document.getElementById('globalBranch')?.value || 'ALL');
+  }
+  const agingTbody = document.querySelector('#receivablesAgingTable tbody');
+  if (agingTbody) {
+    const parPct = t.totalPortfolio > 0 ? ((aging.totalPastDue / t.totalPortfolio) * 100).toFixed(1) : '0.0';
+    agingTbody.innerHTML =
+      aging.buckets
+        .map(
+          (b) => `
+        <tr class="rec-aging-click" data-bucket="${b.key}" style="cursor:pointer;" title="Click to inspect customers in ${b.label}">
+          <td><strong style="text-decoration:underline dotted;">${b.label}</strong></td>
+          <td>${Math.round(b.rate * 100)}%</td>
+          <td>${fmtNum(b.count)}</td>
+          <td>${fmtCurrency(b.balance)}</td>
+          <td style="color:#f59e0b;"><strong>${fmtCurrency(b.allowance)}</strong></td>
+          <td class="small muted">${b.action}</td>
+        </tr>`
+        )
+        .join('') +
+      `<tr class="rec-aging-click" data-bucket="ALL" style="background:rgba(255,255,255,0.04);font-weight:700;cursor:pointer;" title="Click to inspect all past-due customers by branch">
+        <td style="text-decoration:underline dotted;">TOTAL OPENING ALLOWANCE (PAR: ${parPct}%)</td>
+        <td>—</td>
+        <td>${fmtNum(aging.buckets.reduce((s, x) => s + x.count, 0))}</td>
+        <td><strong>${fmtCurrency(aging.totalPastDue)}</strong></td>
+        <td style="color:var(--gold-bright);"><strong>${fmtCurrency(aging.requiredAllowance)}</strong></td>
+        <td class="small" style="color:var(--gold-bright);">Click any row to audit customers</td>
+      </tr>`;
+
+    document.querySelectorAll('#tab-receivables .rec-aging-click').forEach((el) => {
+      el.addEventListener('click', () => {
+        openReceivablesAllowanceModal(el.dataset.bucket || 'ALL', document.getElementById('globalBranch')?.value || 'ALL');
+      });
+    });
+  }
 
   document.querySelector('#receivablesBranchTable tbody').innerHTML = data.byBranch
     .map((b) => `
@@ -2319,8 +6768,1779 @@ function renderReceivables() {
 }
 
 document.getElementById('recSearchInput').addEventListener('input', renderReceivables);
+
+function initSalesDateInputs() {
+  const monthInp = document.getElementById('salesMonthInput');
+  const startInp = document.getElementById('salesStart');
+  const endInp = document.getElementById('salesEnd');
+  const yearBtn = document.getElementById('salesYearBtn');
+  const curMonth = todayStr.slice(0, 7);
+  if (monthInp && !monthInp.value) monthInp.value = curMonth;
+  if (startInp && !startInp.value) startInp.value = `${curMonth}-01`;
+  if (endInp && !endInp.value) endInp.value = todayStr;
+  if (yearBtn && !yearBtn.dataset.year) {
+    yearBtn.dataset.year = todayStr.slice(0, 4);
+    yearBtn.textContent = todayStr.slice(0, 4);
+  }
+}
+
+function analyzePaymentRebates(payments, mode = 'DETECTED') {
+  const byEvent = new Map();
+  for (const p of payments || []) {
+    const dt = String(p.payment_date || '').slice(0, 10);
+    const key = `${p.branch_id}|${dt}|${p.account_no || p.customer_name || ''}`;
+    if (!byEvent.has(key)) byEvent.set(key, []);
+    byEvent.get(key).push(p);
+  }
+
+  const REBATE_FACTOR = 0.025 / 0.975; // Net cash = 97.5% of full amort -> Rebate (2.5% of full amort) = Net cash * (0.025 / 0.975)
+  const branchIds = ['br-molave', 'br-tambulig', 'br-bonifacio'];
+  const mkAgg = () => ({
+    eventCount: 0,
+    rowCount: 0,
+    lateCount: 0,
+    onTimeOrEarlyCount: 0,
+    detectedCount: 0,
+    rebatedCount: 0,
+    cashCollected: 0,
+    principal: 0,
+    interest: 0,
+    penalties: 0,
+    explicitRebates: 0,
+    detectedRebates: 0,
+    ceilingRebates: 0,
+    activeRebates: 0,
+    detectedPrincipalLoss: 0,
+    ceilingPrincipalLoss: 0,
+    unrecordedPrincipalLoss: 0,
+    rawFinIncome: 0,
+    trueFinIncome: 0,
+  });
+
+  const byBranch = new Map(branchIds.map((id) => [id, mkAgg()]));
+  const totals = mkAgg();
+  const events = [];
+
+  for (const list of byEvent.values()) {
+    const first = list[0];
+    const bid = first.branch_id;
+    const sumAmt = list.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    const sumPrin = list.reduce((s, r) => s + (Number(r.principal) || 0), 0);
+    const sumInt = list.reduce((s, r) => s + (Number(r.interest) || 0), 0);
+    const sumPen = list.reduce((s, r) => s + (Number(r.penalties) || 0), 0);
+    const sumExpReb = list.reduce((s, r) => s + (Number(r.rebates) || 0), 0);
+
+    // Largest row = primary amortization payment (excludes small advance carryovers like ₱3, ₱14, ₱17)
+    const mainRow = list.reduce((best, r) => ((Number(r.amount) || 0) > (Number(best.amount) || 0) ? r : best), first);
+    const mainAmt = Number(mainRow.amount) || 0;
+    const mainPrin = Number(mainRow.principal) || 0;
+    const mainPrinRatio = mainAmt > 0 ? mainPrin / mainAmt : sumAmt > 0 ? sumPrin / sumAmt : 0.67;
+    const eventPrinRatio = sumAmt > 0 ? sumPrin / sumAmt : 0.67;
+
+    const isLate = sumPen > 0;
+    let isDetected = false;
+    let detectedReb = 0;
+    let detectedPrinLoss = 0;
+    let ceilingReb = 0;
+    let ceilingPrinLoss = 0;
+
+    if (!isLate) {
+      if (sumExpReb > 0) {
+        detectedReb = sumExpReb;
+        ceilingReb = sumExpReb;
+        isDetected = true;
+      } else {
+        const isNotMod5 = mainAmt >= 200 && Math.abs(mainAmt % 5) >= 0.5;
+        const has25PairedRow = list.length >= 2 && sumAmt > 0 && Math.abs(mainAmt / sumAmt - 0.975) <= 0.005;
+        isDetected = isNotMod5 || has25PairedRow;
+        if (isDetected) {
+          detectedReb = mainAmt * REBATE_FACTOR;
+          detectedPrinLoss = detectedReb * mainPrinRatio;
+        }
+        ceilingReb = sumAmt * REBATE_FACTOR;
+        ceilingPrinLoss = ceilingReb * eventPrinRatio;
+      }
+    } else if (sumExpReb > 0) {
+      detectedReb = sumExpReb;
+      ceilingReb = sumExpReb;
+    }
+
+    let activeReb = 0;
+    let activePrinLoss = 0;
+    let activeBaseAmt = 0;
+    let isRebated = false;
+
+    if (mode === 'RECORDED') {
+      activeReb = sumExpReb;
+      activePrinLoss = 0;
+      activeBaseAmt = sumExpReb > 0 ? mainAmt : 0;
+      isRebated = sumExpReb > 0;
+    } else if (mode === 'CEILING') {
+      activeReb = ceilingReb;
+      activePrinLoss = ceilingPrinLoss;
+      activeBaseAmt = !isLate && sumAmt > 0 ? sumAmt : 0;
+      isRebated = !isLate && sumAmt > 0;
+    } else {
+      activeReb = detectedReb;
+      activePrinLoss = detectedPrinLoss;
+      activeBaseAmt = isDetected ? mainAmt : 0;
+      isRebated = isDetected;
+    }
+
+    const rawFinInc = sumInt + sumPen - sumExpReb;
+    // True Financing Income = Scheduled Full Interest + Penalties - Active Rebate
+    // Because AB Web's pro-rated sumInt already reduced Interest by ~(1 - prinRatio) * Rebate,
+    // subtracting ONLY the unrecorded Principal share (prinRatio * Rebate) yields exact FullInt + Pen - Rebate with zero double-counting.
+    const trueFinInc = rawFinInc - activePrinLoss;
+    const alreadyCutFromInt = Math.max(0, activeReb - activePrinLoss);
+    const fullAmortCleared = activeBaseAmt > 0 ? activeBaseAmt + activeReb : sumAmt;
+
+    const ev = {
+      payment_date: String(first.payment_date || '').slice(0, 10),
+      branch_id: bid,
+      branch_name: first.branch_name || '',
+      account_no: first.account_no || '',
+      customer_name: first.customer_name || '',
+      rowCount: list.length,
+      amount: sumAmt,
+      mainAmt,
+      principal: sumPrin,
+      interest: sumInt,
+      penalties: sumPen,
+      explicitRebates: sumExpReb,
+      isLate,
+      isDetected,
+      isRebated,
+      detectedRebate: detectedReb,
+      ceilingRebate: ceilingReb,
+      activeRebate: activeReb,
+      activeBaseAmt,
+      fullAmortCleared,
+      alreadyCutFromInt,
+      detectedPrincipalLoss: detectedPrinLoss,
+      ceilingPrincipalLoss: ceilingPrinLoss,
+      unrecordedPrincipalLoss: activePrinLoss,
+      rawFinInc,
+      trueFinInc,
+    };
+    events.push(ev);
+
+    const addTo = (agg) => {
+      if (!agg) return;
+      agg.eventCount++;
+      agg.rowCount += list.length;
+      if (isLate) agg.lateCount++;
+      else agg.onTimeOrEarlyCount++;
+      if (isDetected) agg.detectedCount++;
+      if (isRebated) agg.rebatedCount++;
+      agg.cashCollected += sumAmt;
+      agg.principal += sumPrin;
+      agg.interest += sumInt;
+      agg.penalties += sumPen;
+      agg.explicitRebates += sumExpReb;
+      agg.detectedRebates += detectedReb;
+      agg.ceilingRebates += ceilingReb;
+      agg.activeRebates += activeReb;
+      agg.detectedPrincipalLoss += detectedPrinLoss;
+      agg.ceilingPrincipalLoss += ceilingPrinLoss;
+      agg.unrecordedPrincipalLoss += activePrinLoss;
+      agg.rawFinIncome += rawFinInc;
+      agg.trueFinIncome += trueFinInc;
+    };
+    addTo(byBranch.get(bid));
+    addTo(totals);
+  }
+
+  return { events, byBranch, totals };
+}
+
+function buildScopedFinanceFromCache(histFin, start, end) {
+  const branches = [
+    { branchId: 'br-molave', branchName: 'Molave' },
+    { branchId: 'br-tambulig', branchName: 'Tambulig' },
+    { branchId: 'br-bonifacio', branchName: 'Bonifacio' },
+  ];
+  const recentPayments = (histFin?.recentPayments || []).filter((p) => p.payment_date >= start && p.payment_date <= end);
+  const recentExpenses = (histFin?.recentExpenses || []).filter((e) => e.expense_date >= start && e.expense_date <= end);
+  const rebAnalysis = analyzePaymentRebates(recentPayments, 'DETECTED');
+
+  const map = new Map(
+    branches.map((b) => {
+      const ra = rebAnalysis.byBranch.get(b.branchId);
+      return [
+        b.branchId,
+        {
+          ...b,
+          collections: ra?.cashCollected || 0,
+          interest: ra?.interest || 0,
+          penalties: ra?.penalties || 0,
+          explicitRebates: ra?.explicitRebates || 0,
+          detectedRebates: ra?.detectedRebates || 0,
+          ceilingRebates: ra?.ceilingRebates || 0,
+          unrecordedPrincipalLoss: ra?.unrecordedPrincipalLoss || 0,
+          rawFinancingIncome: ra?.rawFinIncome || 0,
+          financingIncome: ra?.trueFinIncome || 0,
+          expenses: 0,
+        },
+      ];
+    })
+  );
+  for (const e of recentExpenses) {
+    const b = map.get(e.branch_id);
+    if (b) b.expenses += Number(e.amount) || 0;
+  }
+  return { byBranch: Array.from(map.values()), recentPayments, recentExpenses, rebAnalysis };
+}
+
+async function loadSalesSummary(forceRefresh = false) {
+  initSalesDateInputs();
+  const start = document.getElementById('salesStart')?.value || `${todayStr.slice(0, 7)}-01`;
+  const end = document.getElementById('salesEnd')?.value || todayStr;
+  const fetchStart = '2020-01-01';
+  const fetchEnd = end > todayStr ? end : todayStr;
+
+  const cacheValid = !forceRefresh && state.salesFullCache && Date.now() - state.salesFullCache.ts < 60000;
+  if (!cacheValid) {
+    const [txRes, actRes, histFinRes, recRes] = await Promise.all([
+      api(`/api/sales/summary?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`).catch(() => ({ transactions: [] })),
+      api(`/api/activity?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`).catch(() => ({ allMovements: [] })),
+      api(`/api/finance/summary?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`).catch(() => null),
+      api('/api/receivables/summary').catch(() => null),
+    ]);
+    state.salesFullCache = {
+      ts: Date.now(),
+      transactions: txRes?.transactions || [],
+      allMovements: actRes?.allMovements || [],
+      histFinance: histFinRes,
+      receivables: recRes,
+    };
+  }
+
+  const c = state.salesFullCache;
+  state.salesData = {
+    start,
+    end,
+    transactions: c.transactions,
+    allMovements: c.allMovements,
+    finance: buildScopedFinanceFromCache(c.histFinance, start, end),
+    histFinance: c.histFinance,
+    receivables: c.receivables,
+  };
+  const liveEl = document.getElementById('salesLiveStatus');
+  if (liveEl) {
+    liveEl.textContent = `● LIVE • ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`;
+  }
+  renderSalesSummary();
+  renderSalesCashPnlTool();
+  renderSalesInstallmentAccrualTool();
+  renderSalesChartsTool();
+  renderSalesRebatesTool();
+}
+
+function getCashSaleAmount(m) {
+  const qty = Math.abs(Number(m.delta_qty) || 0);
+  if (qty <= 0) return { net: 0, gross: 0, disc: 0 };
+  let srp = Number(m.base_price) || 0;
+  if (!srp && state.inventory?.items) {
+    const prod = state.inventory.items.find((i) => i.id === m.product_id || i.sku === m.sku);
+    srp = Number(prod?.base_price) || 0;
+  }
+  const gross = Number((srp * qty).toFixed(2));
+  const discPct = (m.product_type || 'Cellphones') === 'Accessories' ? 0 : ((Number(m.cash_discount_pct) || 5) / 100);
+  const net = Number((srp * (1 - discPct) * qty).toFixed(2));
+  return { net, gross, disc: Number(Math.max(0, gross - net).toFixed(2)) };
+}
+
+function renderSalesSummary() {
+  const sd = state.salesData;
+  if (!sd) return;
+  const typeFilter = document.getElementById('salesTypeFilter')?.value || 'ALL';
+  const branchIds = ['br-molave', 'br-tambulig', 'br-bonifacio'];
+  const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
+
+  const mkCell = () => ({ u: 0, a: 0, g: 0, d: 0 });
+  const mkBranchRow = () => ({ 'br-molave': mkCell(), 'br-tambulig': mkCell(), 'br-bonifacio': mkCell() });
+
+  const todayTotals = mkBranchRow();
+  const rangeTotals = mkBranchRow();
+  const dailyMap = new Map();
+  const monthlyMap = new Map();
+
+  const useExactWebTx = typeFilter === 'ALL' && (sd.transactions || []).length > 0;
+
+  if (useExactWebTx) {
+    for (const tx of sd.transactions) {
+      const dt = String(tx.tx_date || '').slice(0, 10);
+      if (!dt || !branchIds.includes(tx.branch_id)) continue;
+      const mo = dt.slice(0, 7);
+      const bid = tx.branch_id;
+      const net = Number(tx.amount) || 0;
+      const disc = Number(tx.discount) || 0;
+      const gross = Number(tx.srp) || net + disc;
+
+      if (dt === todayStr) {
+        todayTotals[bid].u += 1;
+        todayTotals[bid].a += net;
+        todayTotals[bid].g += gross;
+        todayTotals[bid].d += disc;
+      }
+      if (dt >= sd.start && dt <= sd.end) {
+        rangeTotals[bid].u += 1;
+        rangeTotals[bid].a += net;
+        rangeTotals[bid].g += gross;
+        rangeTotals[bid].d += disc;
+        if (!dailyMap.has(dt)) dailyMap.set(dt, mkBranchRow());
+        dailyMap.get(dt)[bid].u += 1;
+        dailyMap.get(dt)[bid].a += net;
+        dailyMap.get(dt)[bid].g += gross;
+        dailyMap.get(dt)[bid].d += disc;
+      }
+      if (!monthlyMap.has(mo)) monthlyMap.set(mo, mkBranchRow());
+      monthlyMap.get(mo)[bid].u += 1;
+      monthlyMap.get(mo)[bid].a += net;
+      monthlyMap.get(mo)[bid].g += gross;
+      monthlyMap.get(mo)[bid].d += disc;
+    }
+  } else {
+    const cashMoves = (sd.allMovements || []).filter((m) => {
+      if (!(Number(m.delta_qty) < 0)) return false;
+      const mt = String(m.movement_type || '').toUpperCase();
+      if (!mt.includes('SALE') || mt.includes('INSTALLMENT')) return false;
+      if (typeFilter !== 'ALL' && (m.product_type || 'Cellphones') !== typeFilter) return false;
+      return branchIds.includes(m.branch_id);
+    });
+
+    for (const m of cashMoves) {
+      const dt = String(m.recorded_at || '').slice(0, 10);
+      if (!dt) continue;
+      const mo = dt.slice(0, 7);
+      const qty = Math.abs(Number(m.delta_qty) || 0);
+      const { net, gross, disc } = getCashSaleAmount(m);
+      const bid = m.branch_id;
+
+      if (dt === todayStr) {
+        todayTotals[bid].u += qty;
+        todayTotals[bid].a += net;
+        todayTotals[bid].g += gross;
+        todayTotals[bid].d += disc;
+      }
+      if (dt >= sd.start && dt <= sd.end) {
+        rangeTotals[bid].u += qty;
+        rangeTotals[bid].a += net;
+        rangeTotals[bid].g += gross;
+        rangeTotals[bid].d += disc;
+        if (!dailyMap.has(dt)) dailyMap.set(dt, mkBranchRow());
+        dailyMap.get(dt)[bid].u += qty;
+        dailyMap.get(dt)[bid].a += net;
+        dailyMap.get(dt)[bid].g += gross;
+        dailyMap.get(dt)[bid].d += disc;
+      }
+      if (!monthlyMap.has(mo)) monthlyMap.set(mo, mkBranchRow());
+      monthlyMap.get(mo)[bid].u += qty;
+      monthlyMap.get(mo)[bid].a += net;
+      monthlyMap.get(mo)[bid].g += gross;
+      monthlyMap.get(mo)[bid].d += disc;
+    }
+  }
+
+  const sumAll = (obj) =>
+    branchIds.reduce(
+      (acc, b) => ({ u: acc.u + obj[b].u, a: acc.a + obj[b].a, g: acc.g + obj[b].g, d: acc.d + obj[b].d }),
+      { u: 0, a: 0, g: 0, d: 0 }
+    );
+  const todayAll = sumAll(todayTotals);
+  const rangeAll = sumAll(rangeTotals);
+  const unitLabel = useExactWebTx ? 'tx' : 'units';
+
+  const kpiGrid = document.getElementById('salesKpiGrid');
+  if (kpiGrid) {
+    kpiGrid.innerHTML = `
+      <div class="summary-box" style="border-color:var(--gold);">
+        TODAY'S NET SALES (${todayStr})
+        <strong style="color:var(--gold-bright);">${fmtCurrency(todayAll.a)}</strong>
+        <span class="summary-note">Gross: ${fmtCurrency(todayAll.g)} • ${fmtNum(todayAll.u)} ${unitLabel}</span>
+      </div>
+      <div class="summary-box">
+        RANGE NET SALES (${sd.start} → ${sd.end})
+        <strong style="color:var(--green);">${fmtCurrency(rangeAll.a)}</strong>
+        <span class="summary-note">Gross: ${fmtCurrency(rangeAll.g)} • Disc: ${fmtCurrency(rangeAll.d)} • ${fmtNum(rangeAll.u)} ${unitLabel}</span>
+      </div>
+      ${branchIds
+        .map(
+          (b) => `
+        <div class="summary-box">
+          ${branchNames[b].toUpperCase()} (RANGE)
+          <strong>${fmtCurrency(rangeTotals[b].a)}</strong>
+          <span class="summary-note">Gross: ${fmtCurrency(rangeTotals[b].g)} • ${fmtNum(rangeTotals[b].u)} ${unitLabel}</span>
+        </div>`
+        )
+        .join('')}
+    `;
+  }
+
+  const fmtCell = (cell) =>
+    cell.u > 0
+      ? `<strong>${fmtCurrency(cell.a)}</strong><div class="small muted">Gross: ${fmtCurrency(cell.g)} • ${fmtNum(cell.u)} ${unitLabel}</div>`
+      : '<span class="muted">—</span>';
+
+  const dailyRows = [...dailyMap.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  const dailyTbody = document.querySelector('#salesDailyTable tbody');
+  if (dailyTbody) {
+    dailyTbody.innerHTML = dailyRows.length
+      ? dailyRows
+          .map(([dt, row]) => {
+            const tot = sumAll(row);
+            return `
+            <tr>
+              <td><strong>${dt}</strong></td>
+              <td>${fmtCell(row['br-molave'])}</td>
+              <td>${fmtCell(row['br-tambulig'])}</td>
+              <td>${fmtCell(row['br-bonifacio'])}</td>
+              <td><strong style="color:var(--gold-bright);">${fmtCurrency(tot.a)}</strong><div class="small muted">Gross: ${fmtCurrency(tot.g)} • ${fmtNum(tot.u)} ${unitLabel}</div></td>
+            </tr>`;
+          })
+          .join('')
+      : '<tr><td colspan="5" class="muted">No cash sales recorded in this date range.</td></tr>';
+  }
+
+  const monthlyRows = [...monthlyMap.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  const monthlyTbody = document.querySelector('#salesMonthlyTable tbody');
+  if (monthlyTbody) {
+    monthlyTbody.innerHTML = monthlyRows.length
+      ? monthlyRows
+          .map(([mo, row]) => {
+            const tot = sumAll(row);
+            return `
+            <tr>
+              <td><strong>${mo}</strong></td>
+              <td>${fmtCell(row['br-molave'])}</td>
+              <td>${fmtCell(row['br-tambulig'])}</td>
+              <td>${fmtCell(row['br-bonifacio'])}</td>
+              <td><strong style="color:var(--green);">${fmtCurrency(tot.a)}</strong><div class="small muted">Gross: ${fmtCurrency(tot.g)} • ${fmtNum(tot.u)} ${unitLabel}</div></td>
+            </tr>`;
+          })
+          .join('')
+      : '<tr><td colspan="5" class="muted">No monthly cash sales recorded yet.</td></tr>';
+  }
+}
+
+function renderSalesCashPnlTool() {
+  const sd = state.salesData;
+  const tbody = document.querySelector('#salesCashPnlTable tbody');
+  const banner = document.getElementById('cashPnlAuditBanner');
+  if (!sd || !tbody) return;
+
+  const branchIds = ['br-bonifacio', 'br-molave', 'br-tambulig'];
+  const finByBranch = new Map((sd.finance?.byBranch || []).map((b) => [b.branchId, b]));
+  const stats = {};
+  for (const bid of branchIds) {
+    stats[bid] = {
+      gross: 0,
+      disc: 0,
+      net: 0,
+      cogs: 0,
+      gp: 0,
+      expenses: Number(finByBranch.get(bid)?.expenses) || 0,
+      netIncome: 0,
+    };
+  }
+
+  for (const tx of sd.transactions || []) {
+    const dt = String(tx.tx_date || '').slice(0, 10);
+    if (dt < sd.start || dt > sd.end || !stats[tx.branch_id]) continue;
+    const net = Number(tx.amount) || 0;
+    const disc = Number(tx.discount) || 0;
+    const gross = Number(tx.srp) || net + disc;
+    const cogs = Number(tx.unit_cost) || 0;
+    const s = stats[tx.branch_id];
+    s.gross += gross;
+    s.disc += disc;
+    s.net += net;
+    s.cogs += cogs;
+    s.gp += cogs > 0 ? net - cogs : 0;
+  }
+
+  const tot = { gross: 0, disc: 0, net: 0, cogs: 0, gp: 0, expenses: 0, netIncome: 0 };
+  for (const bid of branchIds) {
+    const s = stats[bid];
+    s.netIncome = s.gp - s.expenses;
+    tot.gross += s.gross;
+    tot.disc += s.disc;
+    tot.net += s.net;
+    tot.cogs += s.cogs;
+    tot.gp += s.gp;
+    tot.expenses += s.expenses;
+    tot.netIncome += s.netIncome;
+  }
+
+  const colBranches = ['br-bonifacio', 'br-molave', 'br-tambulig', 'ALL'];
+  const cols = [stats['br-bonifacio'], stats['br-molave'], stats['br-tambulig'], tot];
+  const row = (label, fn, opts = {}) => {
+    const bg = opts.bold ? 'background:rgba(255,255,255,0.03);font-weight:700;' : '';
+    const drill = opts.drill || 'cash';
+    return `<tr style="${bg}"><td>${label}</td>${cols
+      .map((c, idx) => {
+        const val = fn(c);
+        const bid = colBranches[idx];
+        const dAttrs = `class="sales-drill-cell" data-drill-kind="${drill}" data-drill-branch="${bid}" data-drill-label="${label.replace(/"/g, '&quot;')}" title="Click to inspect actual computation" style="cursor:pointer;text-decoration:underline dotted;`;
+        if (opts.pct) return `<td ${dAttrs}color:${val >= 10 ? 'var(--green)' : val >= 5 ? 'var(--gold-bright)' : 'var(--danger)'};"><strong>${val.toFixed(2)}%</strong></td>`;
+        const clr = opts.auto ? (val >= 0 ? 'var(--green)' : 'var(--danger)') : opts.color || '';
+        return `<td ${dAttrs}${clr ? `color:${clr};` : ''}">${opts.bold ? `<strong>${fmtCurrency(val)}</strong>` : fmtCurrency(val)}</td>`;
+      })
+      .join('')}</tr>`;
+  };
+
+  tbody.innerHTML = [
+    row('Gross Cash Sales (SRP)', (c) => c.gross),
+    row('Less: Cash Sales Discounts', (c) => -c.disc, { color: 'var(--muted)' }),
+    row('= Net Cash Sales (Amount Collected)', (c) => c.net, { bold: true }),
+    row('Less: Cost of Goods Sold (FIFO Unit Cost)', (c) => -c.cogs, { color: 'var(--danger)' }),
+    row('= True Cash Sales Gross Profit (Net − COGS)', (c) => c.gp, { bold: true, color: 'var(--green)' }),
+    row('True Cash Gross Margin %', (c) => (c.net > 0 ? (c.gp / c.net) * 100 : 0), { pct: true }),
+    row('Memo: AB Web Buggy Sales Income (Double-Subtracted Discount)', (c) => c.gp - c.disc, { color: 'var(--muted)' }),
+  ].join('');
+
+  state.salesCashStats = { stats, tot };
+
+  if (banner) {
+    banner.innerHTML = `<strong>Cash Segment Only (${sd.start} → ${sd.end}):</strong> True Cash Sales Gross Profit is <strong>${fmtCurrency(tot.gp)}</strong> (<strong>${tot.net > 0 ? ((tot.gp / tot.net) * 100).toFixed(2) : '0.00'}%</strong> margin). Shared branch operating expenses are deducted once in <strong>CONSOLIDATED P&amp;L</strong> to avoid double deduction. AB Web understated Cash Profit by <strong>${fmtCurrency(tot.disc)}</strong>.`;
+  }
+}
+
+function estimateProductCostByName(unitName) {
+  if (!unitName || !state.inventory?.items) return 0;
+  const norm = (s) =>
+    String(s || '')
+      .toLowerCase()
+      .replace(/\bplus\b/g, '+')
+      .replace(/\bgalaxy\b/g, '')
+      .replace(/gb\b/g, '')
+      .replace(/\b4g\b/g, '')
+      .replace(/[^a-z0-9+]/g, '');
+  const target = norm(unitName);
+  if (!target) return 0;
+  for (const p of state.inventory.items) {
+    const k1 = norm((p.brand || '') + ' ' + (p.model || p.name));
+    const k2 = norm(p.model || p.name);
+    if (k1 === target || k2 === target || (k1.length > 6 && (target.includes(k1) || k1.includes(target))) || (k2.length > 6 && (target.includes(k2) || k2.includes(target)))) {
+      const sups = [Number(p.cost_ab) || 0, Number(p.cost_ak) || 0, Number(p.cost_online) || 0].filter((v) => v > 0);
+      if (sups.length) return Math.min(...sups);
+      if (Number(p.cost_price) > 0) return Number(p.cost_price);
+    }
+  }
+  return 0;
+}
+
+function renderSalesInstallmentAccrualTool() {
+  const sd = state.salesData;
+  const tbody = document.querySelector('#salesInstallmentAccrualTable tbody');
+  const guide = document.getElementById('installmentAccrualGuide');
+  if (!sd || !tbody) return;
+
+  const badDebtPct = Math.max(0, Math.min(30, Number(document.getElementById('accrualBadDebtPct')?.value) || 3)) / 100;
+  const branchIds = ['br-bonifacio', 'br-molave', 'br-tambulig'];
+  const finByBranch = new Map((sd.finance?.byBranch || []).map((b) => [b.branchId, b]));
+  const allInst = sd.receivables?.installments || [];
+  const allPastDues = sd.receivables?.pastDues || [];
+
+  // Period length in months (for pro-rating monthly accrued interest)
+  const d1 = new Date(`${sd.start}T00:00:00Z`);
+  const d2 = new Date(`${sd.end}T00:00:00Z`);
+  const periodDays = Math.max(1, Math.round((d2 - d1) / 86400000) + 1);
+  const periodMonths = Math.max(0.1, periodDays / 30);
+
+  const stats = {};
+  for (const bid of branchIds) {
+    const branchPds = allPastDues.filter((pd) => pd.branch_id === bid);
+    const ag = computeAgingAllowance(branchPds);
+    const finRec = finByBranch.get(bid);
+    stats[bid] = {
+      newCount: 0,
+      newPrincipal: 0,
+      contractSales: 0,
+      estCogs: 0,
+      merchGp: 0,
+      accruedInterest: 0,
+      penalties: Number(finRec?.penalties) || 0,
+      detectedRebates: Number(finRec?.detectedRebates) || 0,
+      unrecordedPrincipalLoss: Number(finRec?.unrecordedPrincipalLoss) || 0,
+      pastDueBalance: ag.totalPastDue,
+      openingAllowance: ag.requiredAllowance,
+      badDebtProvision: 0,
+      expenses: Number(finRec?.expenses) || 0,
+      accrualNetIncome: 0,
+      abWebCashInterest: Number(finRec?.financingIncome) || 0,
+    };
+  }
+
+  for (const inst of allInst) {
+    const bid = inst.branch_id;
+    if (!stats[bid]) continue;
+    const s = stats[bid];
+    const saleDate = String(inst.sale_date || '').slice(0, 10);
+    const term = Math.max(1, Number(inst.term) || 6);
+    const monthly = Number(inst.monthly) || 0;
+    const principal = Number(inst.principal_amount) || 0;
+    const deposit = Number(inst.deposit) || 0;
+    const cashEquivSrp = deposit + principal > 0 ? deposit + principal : Number(inst.amount) || 0;
+
+    // 1. Merchandising Revenue & Gross Profit recognized at Point of Sale (in selected range)
+    if (saleDate >= sd.start && saleDate <= sd.end) {
+      s.newCount++;
+      s.newPrincipal += principal;
+      s.contractSales += cashEquivSrp;
+      const matchedCost = estimateProductCostByName(inst.unit);
+      const unitCogs = matchedCost > 0 ? matchedCost : cashEquivSrp * 0.85;
+      s.estCogs += unitCogs;
+      s.merchGp += Math.max(0, cashEquivSrp - unitCogs);
+    }
+
+    // 2. Accrual Financing Interest earned during the selected period on active contracts
+    if (saleDate <= sd.end) {
+      const startObj = new Date(`${saleDate}T00:00:00Z`);
+      const monthsElapsed = (d2 - startObj) / (86400000 * 30);
+      if (monthsElapsed >= 0 && monthsElapsed <= term + 0.5) {
+        const totalFinanceCharge = Math.max(0, monthly * term - principal);
+        const monthlyEarnedInt = totalFinanceCharge / term;
+        s.accruedInterest += monthlyEarnedInt * Math.min(periodMonths, 1);
+      }
+    }
+  }
+
+  const tot = {
+    newCount: 0, newPrincipal: 0, contractSales: 0, estCogs: 0, merchGp: 0, accruedInterest: 0,
+    penalties: 0, detectedRebates: 0, unrecordedPrincipalLoss: 0,
+    pastDueBalance: 0, openingAllowance: 0, badDebtProvision: 0, expenses: 0, accrualNetIncome: 0, abWebCashInterest: 0,
+  };
+  for (const bid of branchIds) {
+    const s = stats[bid];
+    // Prospective Monthly Bad Debt Expense = % of New Installment Principal
+    s.badDebtProvision = s.newPrincipal * badDebtPct;
+    s.accrualNetIncome = s.merchGp + s.accruedInterest + s.penalties - s.detectedRebates - s.badDebtProvision - s.expenses;
+    for (const k of Object.keys(tot)) tot[k] += s[k];
+  }
+
+  const colBranches = ['br-bonifacio', 'br-molave', 'br-tambulig', 'ALL'];
+  const cols = [stats['br-bonifacio'], stats['br-molave'], stats['br-tambulig'], tot];
+  const row = (label, fn, opts = {}) => {
+    const bg = opts.bold ? 'background:rgba(255,255,255,0.03);font-weight:700;' : '';
+    const drill = opts.drill || 'installment';
+    return `<tr style="${bg}"><td>${label}</td>${cols
+      .map((c, idx) => {
+        const val = fn(c);
+        const bid = colBranches[idx];
+        const clr = opts.auto ? (val >= 0 ? 'var(--green)' : 'var(--danger)') : opts.color || '';
+        const dAttrs = `class="sales-drill-cell" data-drill-kind="${drill}" data-drill-branch="${bid}" data-drill-label="${label.replace(/"/g, '&quot;')}" title="Click to inspect actual computation" style="cursor:pointer;text-decoration:underline dotted;${clr ? `color:${clr};` : ''}"`;
+        return `<td ${dAttrs}>${opts.bold ? `<strong>${fmtCurrency(val)}</strong>` : fmtCurrency(val)}</td>`;
+      })
+      .join('')}</tr>`;
+  };
+
+  tbody.innerHTML = [
+    row('Installment Sales Revenue (Cash-Equiv SRP at Release)', (c) => c.contractSales, { drill: 'installment' }),
+    row('Less: Est. Unit Cost of Goods Sold (COGS)', (c) => -c.estCogs, { color: 'var(--danger)', drill: 'installment' }),
+    row('= Installment Merchandising Gross Profit (Earned at Release)', (c) => c.merchGp, { bold: true, color: 'var(--green)', drill: 'installment' }),
+    row('Add: Accrued Interest Income (Earned Over Term, Accrual Basis)', (c) => c.accruedInterest, { color: 'var(--green)', drill: 'accrued_interest' }),
+    row('Add: Late Payment Penalties Collected', (c) => c.penalties, { color: 'var(--green)', drill: 'penalties' }),
+    row('Less: Early-Payment Rebates (2.5% Auto-Deducted Detection)', (c) => -c.detectedRebates, { color: '#f59e0b', drill: 'rebates_detected' }),
+    row('= Total Accrual Installment Gross Income', (c) => c.merchGp + c.accruedInterest + c.penalties - c.detectedRebates, { bold: true, drill: 'installment' }),
+    row(`Less: Prospective Monthly Bad Debt Expense (${(badDebtPct * 100).toFixed(1)}% of New Principal)`, (c) => -c.badDebtProvision, { color: '#f59e0b', drill: 'installment' }),
+    row('= Net Installment & Financing Contribution (Before Shared OpEx)', (c) => c.merchGp + c.accruedInterest + c.penalties - c.detectedRebates - c.badDebtProvision, { bold: true, auto: true, drill: 'installment' }),
+    row('Memo: One-Time Opening Allowance (Aging-Based on Past-Due Accounts — Synced w/ Receivables)', (c) => c.openingAllowance, { color: '#f59e0b', drill: 'opening_allowance' }),
+    row('Compare: Cash-Basis Financing Income (Int + Pen − Hidden Rebate Prin. Adj)', (c) => c.abWebCashInterest, { color: 'var(--muted)', drill: 'cash_interest' }),
+    row('Accrual vs Cash-Basis Financing Variance', (c) => (c.accruedInterest + c.penalties - c.detectedRebates) - c.abWebCashInterest, { color: 'var(--gold-bright)', drill: 'accrued_interest' }),
+  ].join('');
+
+  state.salesInstStats = { stats, tot, badDebtPct };
+  renderSalesConsolidatedTool();
+
+  if (guide) {
+    guide.innerHTML = `
+      <strong style="color:var(--gold-bright);">How to Properly Compute Installment Net Income Under the Accrual Method (PFRS 15 / Accounting Standards):</strong>
+      <ol style="margin:6px 0 0 18px;padding:0;">
+        <li><strong>Separate Merchandising Revenue from Financing Revenue:</strong> At the moment a phone is released on installment, recognize <em>only</em> the <strong>Cash-Equivalent SRP (Deposit + Principal)</strong> as Sales Revenue and match it immediately against the phone's <strong>FIFO Cost (COGS)</strong> to get <em>Installment Merchandising Gross Profit</em>. Do <strong>not</strong> count downpayments or monthly principal collections as revenue again.</li>
+        <li><strong>Accrue Interest Income Monthly as Earned &amp; Adjust for Penalties/Rebates:</strong> Record the total finance charge <code>(Monthly × Term) − Principal</code> as <em>Unearned Interest Income</em> at release, then recognize gross interest monthly, adding <strong>Late Payment Penalties</strong> and deducting <strong>2.5% Early-Payment Rebates</strong> (auto-deducted by AB Web before cash posting).</li>
+        <li><strong>Match with a Bad Debt Provision (Allowance for Doubtful Accounts):</strong> Because accrual accounting records revenue and interest before cash arrives, deduct a monthly bad-debt allowance (e.g. <strong>3% of New Principal</strong>, adjustable above) so Net Income isn't overstated by uncollectible accounts.</li>
+        <li><strong>Deduct Operating Expenses Incurred:</strong> Deduct salaries, rent, utilities, and franchise shares incurred during the period (whether paid in cash or still payable).</li>
+      </ol>
+    `;
+  }
+}
+
+function renderSalesConsolidatedTool() {
+  const sd = state.salesData;
+  const cashData = state.salesCashStats;
+  const instData = state.salesInstStats;
+  const tbody = document.querySelector('#salesConsolidatedTable tbody');
+  const banner = document.getElementById('consolidatedPnlBanner');
+  if (!sd || !cashData || !instData || !tbody) return;
+
+  const branchIds = ['br-bonifacio', 'br-molave', 'br-tambulig'];
+  const finByBranch = new Map((sd.finance?.byBranch || []).map((b) => [b.branchId, b]));
+
+  const buildCol = (c, i, exp) => {
+    const instContrib = i.merchGp + i.accruedInterest + (i.penalties || 0) - (i.detectedRebates || 0) - i.badDebtProvision;
+    const totalGrossContrib = c.gp + instContrib;
+    const realAccrualNet = totalGrossContrib - exp;
+    const cashBasisTotalGross = c.gp + i.merchGp + i.abWebCashInterest;
+    const realCashInterestNet = cashBasisTotalGross - exp;
+    return {
+      cashGross: c.gross,
+      cashDisc: c.disc,
+      cashNet: c.net,
+      cashCogs: c.cogs,
+      cashGp: c.gp,
+      instRev: i.contractSales,
+      instCogs: i.estCogs,
+      instGp: i.merchGp,
+      accruedInt: i.accruedInterest,
+      penalties: i.penalties || 0,
+      detectedRebates: i.detectedRebates || 0,
+      unrecordedPrincipalLoss: i.unrecordedPrincipalLoss || 0,
+      badDebt: i.badDebtProvision,
+      openingAllowance: i.openingAllowance || 0,
+      instContrib,
+      totalGrossContrib,
+      expenses: exp,
+      realAccrualNet,
+      abWebCashInt: i.abWebCashInterest,
+      realCashInterestNet,
+    };
+  };
+
+  const cols = branchIds.map((bid) =>
+    buildCol(cashData.stats[bid], instData.stats[bid], Number(finByBranch.get(bid)?.expenses) || 0)
+  );
+  const totExp = cols.reduce((s, x) => s + x.expenses, 0);
+  cols.push(buildCol(cashData.tot, instData.tot, totExp));
+
+  const colBranches = ['br-bonifacio', 'br-molave', 'br-tambulig', 'ALL'];
+  const row = (label, fn, opts = {}) => {
+    const bg = opts.bold ? 'background:rgba(255,255,255,0.04);font-weight:700;' : '';
+    const drill = opts.drill || 'cash';
+    return `<tr style="${bg}"><td>${label}</td>${cols
+      .map((col, idx) => {
+        const v = fn(col);
+        const bid = colBranches[idx];
+        const clr = opts.auto ? (v >= 0 ? 'var(--green)' : 'var(--danger)') : opts.color || '';
+        const dAttrs = `class="sales-drill-cell" data-drill-kind="${drill}" data-drill-branch="${bid}" data-drill-label="${label.replace(/"/g, '&quot;')}" title="Click to inspect actual computation" style="cursor:pointer;text-decoration:underline dotted;${clr ? `color:${clr};` : ''}"`;
+        return `<td ${dAttrs}>${opts.bold ? `<strong>${fmtCurrency(v)}</strong>` : fmtCurrency(v)}</td>`;
+      })
+      .join('')}</tr>`;
+  };
+
+  tbody.innerHTML = [
+    row('A. Gross Cash Sales (SRP)', (c) => c.cashGross, { drill: 'cash' }),
+    row('   Less: Cash Sales Discounts', (c) => -c.cashDisc, { color: 'var(--muted)', drill: 'cash' }),
+    row('   = Net Cash Sales', (c) => c.cashNet, { bold: true, drill: 'cash' }),
+    row('   Less: Cash Cost of Goods Sold (FIFO)', (c) => -c.cashCogs, { color: 'var(--danger)', drill: 'cash' }),
+    row('   = True Cash Sales Gross Profit', (c) => c.cashGp, { bold: true, color: 'var(--green)', drill: 'cash' }),
+    row('B. Installment Sales Revenue (Cash-Equiv SRP)', (c) => c.instRev, { drill: 'installment' }),
+    row('   Less: Est. Installment Unit COGS', (c) => -c.instCogs, { color: 'var(--danger)', drill: 'installment' }),
+    row('   = Installment Merchandising Gross Profit', (c) => c.instGp, { color: 'var(--green)', drill: 'installment' }),
+    row('   Add: Accrued Interest Income (Monthly Earned, Gross)', (c) => c.accruedInt, { color: 'var(--green)', drill: 'accrued_interest' }),
+    row('   Add: Late Payment Penalties Collected', (c) => c.penalties, { color: 'var(--green)', drill: 'penalties' }),
+    row('   Less: Early-Payment Rebates (2.5% Auto-Deducted Detection)', (c) => -c.detectedRebates, { color: '#f59e0b', drill: 'rebates_detected' }),
+    row(`   Less: Prospective Monthly Bad Debt (${((instData.badDebtPct || 0.03) * 100).toFixed(1)}% of New Principal)`, (c) => -c.badDebt, { color: '#f59e0b', drill: 'installment' }),
+    row('   = Net Installment & Financing Contribution', (c) => c.instContrib, { bold: true, color: 'var(--green)', drill: 'installment' }),
+    row('C. Total Consolidated Gross Contribution (A + B)', (c) => c.totalGrossContrib, { bold: true, drill: 'cash' }),
+    row('D. Less: Shared Branch Operating Expenses (Deducted ONCE)', (c) => -c.expenses, { color: 'var(--danger)', drill: 'expenses' }),
+    row('E. REAL CONSOLIDATED NET INCOME (Accrual Method)', (c) => c.realAccrualNet, { bold: true, auto: true, drill: 'expenses' }),
+    row('Memo: One-Time Opening Allowance (Aging-Based — Synced w/ Receivables Tab)', (c) => c.openingAllowance, { color: '#f59e0b', drill: 'opening_allowance' }),
+    row('Memo: Hidden Rebate Profit Overstatement in AB Web (~67% Principal Share)', (c) => -c.unrecordedPrincipalLoss, { color: '#f59e0b', drill: 'rebates_detected' }),
+    row('Reference: Consolidated Net Income (Cash-Collected Int., Adj. for Penalties & 2.5% Rebates)', (c) => c.realCashInterestNet, { bold: true, color: 'var(--gold-bright)', drill: 'cash_interest' }),
+  ].join('');
+
+  const totCol = cols[cols.length - 1];
+  if (banner) {
+    banner.innerHTML = `<strong>Consolidated Branch P&amp;L (${sd.start} → ${sd.end}):</strong> Combines Cash GP (<strong>${fmtCurrency(totCol.cashGp)}</strong>) + Installment &amp; Financing Contribution (<strong>${fmtCurrency(totCol.instContrib)}</strong>, incl. <strong style="color:var(--green);">+${fmtCurrency(totCol.penalties)}</strong> penalties &amp; <strong style="color:#f59e0b;">−${fmtCurrency(totCol.detectedRebates)}</strong> detected 2.5% rebates), less Shared OpEx (<strong>${fmtCurrency(totCol.expenses)}</strong>) <strong>once</strong> → Real Accrual Net Income: <strong style="color:${totCol.realAccrualNet >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(totCol.realAccrualNet)}</strong> (Cash-Collected basis: <strong style="color:var(--gold-bright);">${fmtCurrency(totCol.realCashInterestNet)}</strong> after <strong>−${fmtCurrency(totCol.unrecordedPrincipalLoss)}</strong> hidden Principal rebate adj.).`;
+  }
+  renderHistoricalRestatedNetIncome();
+}
+
+function renderHistoricalRestatedNetIncome() {
+  const sd = state.salesData;
+  const tbody = document.querySelector('#salesHistoricalRestatedTable tbody');
+  if (!sd || !tbody) return;
+
+  const groupMode = document.getElementById('restatedGroupMode')?.value || 'MONTHLY';
+  const branchFilter = document.getElementById('restatedBranchFilter')?.value || 'ALL';
+  const spreadMode = document.getElementById('restatedSpreadMode')?.value || 'VINTAGE';
+  const matchBranch = (bid) => branchFilter === 'ALL' || bid === branchFilter;
+
+  const periodHdr = document.getElementById('restatedPeriodHeader');
+  if (periodHdr) periodHdr.textContent = groupMode === 'ANNUAL' ? 'Year' : 'Month';
+
+  // Collect ALL historical months endlessly across transactions, installments, expenses, and past dues
+  const monthSet = new Set([todayStr.slice(0, 7)]);
+  const addMo = (dStr) => {
+    const mo = String(dStr || '').slice(0, 7);
+    if (/^\d{4}-\d{2}$/.test(mo)) monthSet.add(mo);
+  };
+  for (const tx of sd.transactions || []) if (matchBranch(tx.branch_id)) addMo(tx.tx_date);
+  for (const inst of sd.receivables?.installments || []) if (matchBranch(inst.branch_id)) addMo(inst.sale_date);
+  const allExps = sd.histFinance?.recentExpenses || sd.finance?.recentExpenses || [];
+  for (const e of allExps) if (matchBranch(e.branch_id)) addMo(e.expense_date);
+  const pds = (sd.receivables?.pastDues || []).filter((pd) => matchBranch(pd.branch_id));
+  for (const pd of pds) addMo(pd.release_date);
+
+  const months = [...monthSet].sort((a, b) => b.localeCompare(a));
+  const mkRow = (period) => ({ period, cashGp: 0, instIncome: 0, expenses: 0, spreadBadDebt: 0 });
+  const rowMap = new Map(months.map((m) => [m, mkRow(m)]));
+
+  // 1. Cash Sales Gross Profit per month
+  for (const tx of sd.transactions || []) {
+    if (!matchBranch(tx.branch_id)) continue;
+    const mo = String(tx.tx_date || '').slice(0, 7);
+    const r = rowMap.get(mo);
+    if (!r) continue;
+    const net = Number(tx.amount) || 0;
+    const cost = Number(tx.unit_cost) || 0;
+    if (cost > 0) r.cashGp += net - cost;
+  }
+
+  // 2. Installment Merchandising GP + Monthly Accrued Interest per month
+  for (const inst of sd.receivables?.installments || []) {
+    if (!matchBranch(inst.branch_id)) continue;
+    const saleDate = String(inst.sale_date || '').slice(0, 10);
+    const saleMo = saleDate.slice(0, 7);
+    const term = Math.max(1, Number(inst.term) || 6);
+    const monthly = Number(inst.monthly) || 0;
+    const principal = Number(inst.principal_amount) || 0;
+    const deposit = Number(inst.deposit) || 0;
+    const srp = deposit + principal > 0 ? deposit + principal : Number(inst.amount) || 0;
+
+    if (rowMap.has(saleMo)) {
+      const matched = estimateProductCostByName(inst.unit);
+      const cost = matched > 0 ? matched : srp * 0.85;
+      rowMap.get(saleMo).instIncome += Math.max(0, srp - cost);
+    }
+
+    const totalFc = Math.max(0, monthly * term - principal);
+    const moInt = totalFc / term;
+    const startObj = new Date(`${saleDate}T00:00:00Z`);
+    for (const mo of months) {
+      const [y, m] = mo.split('-').map(Number);
+      const moEnd = new Date(Date.UTC(y, m, 0));
+      const elapsed = (moEnd - startObj) / (86400000 * 30);
+      if (elapsed >= 0 && elapsed <= term + 0.5) {
+        rowMap.get(mo).instIncome += moInt;
+      }
+    }
+  }
+
+  // 2b. Add Net Penalties − Detected 2.5% Early-Payment Rebates per payment month
+  const allPays = (sd.histFinance?.recentPayments || sd.finance?.recentPayments || []).filter((p) => matchBranch(p.branch_id));
+  for (const ev of analyzePaymentRebates(allPays, 'DETECTED').events) {
+    const mo = String(ev.payment_date || '').slice(0, 7);
+    if (rowMap.has(mo)) rowMap.get(mo).instIncome += ev.penalties - ev.activeRebate;
+  }
+
+  // 3. Operating Expenses per month
+  for (const e of allExps) {
+    if (!matchBranch(e.branch_id)) continue;
+    const mo = String(e.expense_date || '').slice(0, 7);
+    if (rowMap.has(mo)) rowMap.get(mo).expenses += Number(e.amount) || 0;
+  }
+
+  // 4. Spread One-Time Opening Allowance across all historical months
+  if (spreadMode === 'EVEN') {
+    const totalAllow = computeAgingAllowance(pds).requiredAllowance;
+    const perMo = months.length ? totalAllow / months.length : 0;
+    for (const mo of months) rowMap.get(mo).spreadBadDebt += perMo;
+  } else {
+    for (const pd of pds) {
+      const allow = (Number(pd.balance) || 0) * getAgingTier(getEffectiveDaysDue(pd)).rate;
+      const relMo = String(pd.release_date || '').slice(0, 7);
+      if (rowMap.has(relMo)) rowMap.get(relMo).spreadBadDebt += allow;
+    }
+  }
+
+  let displayRows = months.map((m) => rowMap.get(m));
+
+  // Annual roll-up by YYYY if Annual view is selected
+  if (groupMode === 'ANNUAL') {
+    const yearMap = new Map();
+    for (const r of displayRows) {
+      const yr = r.period.slice(0, 4);
+      if (!yearMap.has(yr)) yearMap.set(yr, mkRow(yr));
+      const yRow = yearMap.get(yr);
+      yRow.cashGp += r.cashGp;
+      yRow.instIncome += r.instIncome;
+      yRow.expenses += r.expenses;
+      yRow.spreadBadDebt += r.spreadBadDebt;
+    }
+    displayRows = [...yearMap.values()].sort((a, b) => b.period.localeCompare(a.period));
+  }
+
+  let tCash = 0, tInst = 0, tExp = 0, tUnadj = 0, tBd = 0, tCorr = 0;
+  tbody.innerHTML =
+    displayRows
+      .map((r) => {
+        const unadj = r.cashGp + r.instIncome - r.expenses;
+        const corr = unadj - r.spreadBadDebt;
+        tCash += r.cashGp; tInst += r.instIncome; tExp += r.expenses;
+        tUnadj += unadj; tBd += r.spreadBadDebt; tCorr += corr;
+        return `
+          <tr>
+            <td><strong>${r.period}</strong></td>
+            <td>${fmtCurrency(r.cashGp)}</td>
+            <td>${fmtCurrency(r.instIncome)}</td>
+            <td style="color:var(--danger);">${fmtCurrency(-r.expenses)}</td>
+            <td><strong>${fmtCurrency(unadj)}</strong></td>
+            <td style="color:#f59e0b;"><strong>${fmtCurrency(-r.spreadBadDebt)}</strong></td>
+            <td style="color:${corr >= 0 ? 'var(--green)' : 'var(--danger)'};"><strong>${fmtCurrency(corr)}</strong></td>
+          </tr>`;
+      })
+      .join('') +
+    `<tr style="background:rgba(255,255,255,0.05);font-weight:700;">
+      <td>ALL-TIME TOTAL RESTATED</td>
+      <td>${fmtCurrency(tCash)}</td>
+      <td>${fmtCurrency(tInst)}</td>
+      <td style="color:var(--danger);">${fmtCurrency(-tExp)}</td>
+      <td>${fmtCurrency(tUnadj)}</td>
+      <td style="color:#f59e0b;">${fmtCurrency(-tBd)}</td>
+      <td style="color:${tCorr >= 0 ? 'var(--green)' : 'var(--danger)'};"><strong>${fmtCurrency(tCorr)}</strong></td>
+    </tr>`;
+}
+
+document.getElementById('restatedGroupMode')?.addEventListener('change', renderHistoricalRestatedNetIncome);
+document.getElementById('restatedBranchFilter')?.addEventListener('change', renderHistoricalRestatedNetIncome);
+document.getElementById('restatedSpreadMode')?.addEventListener('change', renderHistoricalRestatedNetIncome);
+
+function renderSalesChartsTool() {
+  const sd = state.salesData;
+  const container = document.getElementById('salesChartContainer');
+  const legendEl = document.getElementById('salesChartLegend');
+  if (!sd || !container) return;
+
+  const periodMode = document.getElementById('salesChartPeriod')?.value || 'MONTHLY';
+  const metric = document.getElementById('salesChartMetric')?.value || 'NET_CASH';
+  const branchMode = document.getElementById('salesChartBranch')?.value || 'GROUPED';
+
+  const branches = [
+    { id: 'br-molave', name: 'Molave', color: '#77e82a' },
+    { id: 'br-tambulig', name: 'Tambulig', color: '#3b82f6' },
+    { id: 'br-bonifacio', name: 'Bonifacio', color: '#f59e0b' },
+  ];
+
+  // Collect periods (YYYY-MM or YYYY) across all history
+  const keyOf = (dStr) => {
+    const s = String(dStr || '');
+    return periodMode === 'YEARLY' ? s.slice(0, 4) : s.slice(0, 7);
+  };
+  const validKey = (k) => (periodMode === 'YEARLY' ? /^\d{4}$/.test(k) : /^\d{4}-\d{2}$/.test(k));
+
+  const dataMap = new Map();
+  const ensure = (k) => {
+    if (!dataMap.has(k)) {
+      dataMap.set(k, {
+        'br-molave': { net: 0, gross: 0, gp: 0, exp: 0, inst: 0 },
+        'br-tambulig': { net: 0, gross: 0, gp: 0, exp: 0, inst: 0 },
+        'br-bonifacio': { net: 0, gross: 0, gp: 0, exp: 0, inst: 0 },
+      });
+    }
+    return dataMap.get(k);
+  };
+
+  for (const tx of sd.transactions || []) {
+    const k = keyOf(tx.tx_date);
+    if (!validKey(k) || !['br-molave', 'br-tambulig', 'br-bonifacio'].includes(tx.branch_id)) continue;
+    const cell = ensure(k)[tx.branch_id];
+    const net = Number(tx.amount) || 0;
+    const disc = Number(tx.discount) || 0;
+    const gross = Number(tx.srp) || net + disc;
+    const cost = Number(tx.unit_cost) || 0;
+    cell.net += net;
+    cell.gross += gross;
+    if (cost > 0) cell.gp += net - cost;
+  }
+
+  if (metric === 'CONSOLIDATED_NET') {
+    for (const e of sd.histFinance?.recentExpenses || []) {
+      const k = keyOf(e.expense_date);
+      if (!validKey(k) || !['br-molave', 'br-tambulig', 'br-bonifacio'].includes(e.branch_id)) continue;
+      ensure(k)[e.branch_id].exp += Number(e.amount) || 0;
+    }
+    const chartReb = analyzePaymentRebates(sd.histFinance?.recentPayments || [], 'DETECTED');
+    for (const ev of chartReb.events) {
+      const k = keyOf(ev.payment_date);
+      if (!validKey(k) || !['br-molave', 'br-tambulig', 'br-bonifacio'].includes(ev.branch_id)) continue;
+      ensure(k)[ev.branch_id].inst += ev.trueFinInc;
+    }
+    for (const inst of sd.receivables?.installments || []) {
+      const k = keyOf(inst.sale_date);
+      if (!validKey(k) || !['br-molave', 'br-tambulig', 'br-bonifacio'].includes(inst.branch_id)) continue;
+      const dp = Number(inst.deposit) || 0;
+      const prin = Number(inst.principal_amount) || 0;
+      const srp = dp + prin > 0 ? dp + prin : Number(inst.amount) || 0;
+      const matched = estimateProductCostByName(inst.unit);
+      const cost = matched > 0 ? matched : srp * 0.85;
+      ensure(k)[inst.branch_id].inst += Math.max(0, srp - cost);
+    }
+  }
+
+  let periods = [...dataMap.keys()].sort((a, b) => a.localeCompare(b));
+  if (periodMode === 'MONTHLY' && periods.length > 12) periods = periods.slice(-12);
+
+  if (!periods.length) {
+    container.innerHTML = '<div class="muted small" style="padding:16px 0;">No sales data available to chart yet.</div>';
+    return;
+  }
+
+  const getMetricVal = (cell) => {
+    if (metric === 'GROSS_CASH') return cell.gross;
+    if (metric === 'CASH_GP') return cell.gp;
+    if (metric === 'CONSOLIDATED_NET') return cell.gp + cell.inst - cell.exp;
+    return cell.net;
+  };
+
+  const series =
+    branchMode === 'GROUPED'
+      ? branches
+      : branchMode === 'TOTAL'
+        ? [{ id: 'TOTAL', name: 'All Branches Total', color: '#e7c55f' }]
+        : branches.filter((b) => b.id === branchMode);
+
+  if (legendEl) {
+    legendEl.innerHTML = series
+      .map(
+        (s) =>
+          `<span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:12px;height:12px;border-radius:3px;background:${s.color};display:inline-block;"></span><strong>${s.name}</strong></span>`
+      )
+      .join('');
+  }
+
+  const values = [];
+  for (const p of periods) {
+    const row = dataMap.get(p);
+    for (const s of series) {
+      const v =
+        s.id === 'TOTAL'
+          ? getMetricVal(row['br-molave']) + getMetricVal(row['br-tambulig']) + getMetricVal(row['br-bonifacio'])
+          : getMetricVal(row[s.id]);
+      values.push(v);
+    }
+  }
+  const maxVal = Math.max(1, ...values.map((v) => Math.max(0, v)));
+  const fmtShort = (v) => (Math.abs(v) >= 1000000 ? `₱${(v / 1000000).toFixed(2)}M` : Math.abs(v) >= 1000 ? `₱${(v / 1000).toFixed(1)}k` : `₱${Math.round(v)}`);
+
+  const groupW = series.length === 1 ? 74 : 108;
+  const barW = series.length === 1 ? 40 : 24;
+  const barGap = 5;
+  const chartH = 220;
+  const topPad = 28;
+  const bottomPad = 34;
+  const leftPad = 14;
+  const svgW = Math.max(520, leftPad * 2 + periods.length * groupW);
+  const svgH = topPad + chartH + bottomPad;
+
+  const gridLines = [0, 0.25, 0.5, 0.75, 1]
+    .map((f) => {
+      const y = topPad + chartH * (1 - f);
+      return `<line x1="0" y1="${y}" x2="${svgW}" y2="${y}" stroke="rgba(255,255,255,0.08)" stroke-width="1" />`;
+    })
+    .join('');
+
+  const barsSvg = periods
+    .map((p, pIdx) => {
+      const row = dataMap.get(p);
+      const gx = leftPad + pIdx * groupW;
+      const totalBarsW = series.length * barW + (series.length - 1) * barGap;
+      const startX = gx + (groupW - totalBarsW) / 2;
+
+      const bars = series
+        .map((s, sIdx) => {
+          const v =
+            s.id === 'TOTAL'
+              ? getMetricVal(row['br-molave']) + getMetricVal(row['br-tambulig']) + getMetricVal(row['br-bonifacio'])
+              : getMetricVal(row[s.id]);
+          const clamped = Math.max(0, v);
+          const h = Math.max(clamped > 0 ? 3 : 0, (clamped / maxVal) * chartH);
+          const x = startX + sIdx * (barW + barGap);
+          const y = topPad + chartH - h;
+          const color = v < 0 ? '#ef4444' : s.color;
+          return `
+            <rect x="${x}" y="${y}" width="${barW}" height="${h}" rx="4" fill="${color}" opacity="0.92">
+              <title>${p} • ${s.name}: ${fmtCurrency(v)}</title>
+            </rect>
+            ${v !== 0 ? `<text x="${x + barW / 2}" y="${Math.max(12, y - 5)}" fill="#e5e7eb" font-size="9.5" text-anchor="middle">${fmtShort(v)}</text>` : ''}
+          `;
+        })
+        .join('');
+
+      return `
+        ${bars}
+        <text x="${gx + groupW / 2}" y="${topPad + chartH + 20}" fill="#cbd5e1" font-size="11" font-weight="700" text-anchor="middle">${p}</text>
+      `;
+    })
+    .join('');
+
+  container.innerHTML = `<svg width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}" style="display:block;max-width:none;">${gridLines}${barsSvg}</svg>`;
+
+  // Auto-generated plain-English Chart Analysis right below the graph
+  const analysisBox = document.getElementById('salesChartAnalysisBox');
+  if (analysisBox) {
+    const metricLabels = {
+      NET_CASH: 'Net Cash Sales',
+      GROSS_CASH: 'Gross Cash Sales (SRP)',
+      CASH_GP: 'True Cash Sales Profit',
+      CONSOLIDATED_NET: 'Consolidated Net Income',
+    };
+    const mLabel = metricLabels[metric] || 'Sales';
+    const periodTotals = periods.map((p) => {
+      const row = dataMap.get(p);
+      let tot = 0;
+      const byBr = {};
+      for (const s of series) {
+        const v =
+          s.id === 'TOTAL'
+            ? getMetricVal(row['br-molave']) + getMetricVal(row['br-tambulig']) + getMetricVal(row['br-bonifacio'])
+            : getMetricVal(row[s.id]);
+        byBr[s.name] = v;
+        tot += v;
+      }
+      return { period: p, tot, byBr };
+    });
+
+    const grandTotal = periodTotals.reduce((a, b) => a + b.tot, 0);
+    const avgPerPeriod = grandTotal / Math.max(1, periodTotals.length);
+    const bestPeriod = [...periodTotals].sort((a, b) => b.tot - a.tot)[0];
+    const latest = periodTotals[periodTotals.length - 1];
+    const prev = periodTotals.length >= 2 ? periodTotals[periodTotals.length - 2] : null;
+    const isCurrentMonthInProgress = periodMode === 'MONTHLY' && latest?.period === todayStr.slice(0, 7);
+
+    // Branch totals ranking
+    const seriesTotals = series
+      .map((s) => {
+        const sum = periodTotals.reduce((acc, pt) => acc + (pt.byBr[s.name] || 0), 0);
+        return { name: s.name, color: s.color, sum, avg: sum / Math.max(1, periodTotals.length) };
+      })
+      .sort((a, b) => b.sum - a.sum);
+
+    // Negative / dip alerts
+    const dips = [];
+    for (const pt of periodTotals) {
+      for (const [bName, val] of Object.entries(pt.byBr)) {
+        if (val < 0) dips.push(`${bName} (${pt.period}: ${fmtCurrency(val)})`);
+      }
+    }
+
+    let trendHtml = '';
+    if (prev && latest) {
+      const diff = latest.tot - prev.tot;
+      const pct = Math.abs(prev.tot) > 0 ? ((diff / Math.abs(prev.tot)) * 100).toFixed(1) : '0.0';
+      const up = diff >= 0;
+      trendHtml = `<li><strong>Latest Trend (${latest.period} vs ${prev.period}):</strong> <strong style="color:${up ? 'var(--green)' : '#f59e0b'};">${up ? '▲' : '▼'} ${up ? '+' : ''}${fmtCurrency(diff)} (${up ? '+' : ''}${pct}%)</strong> — ${latest.period} is at <strong>${fmtCurrency(latest.tot)}</strong>${isCurrentMonthInProgress ? ' <span class="muted">(month still in progress)</span>' : ''}.</li>`;
+    }
+
+    const rankingHtml = seriesTotals
+      .map((s) => {
+        const share = grandTotal > 0 ? ` (${((s.sum / grandTotal) * 100).toFixed(1)}% share)` : '';
+        return `<strong style="color:${s.color};">${s.name}</strong>: ${fmtCurrency(s.sum)}${share} <span class="muted">[avg ${fmtCurrency(s.avg)}/${periodMode === 'YEARLY' ? 'yr' : 'mo'}]</span>`;
+      })
+      .join(' &nbsp;•&nbsp; ');
+
+    const dipHtml = dips.length
+      ? `<li><strong style="color:#f59e0b;">Watchlist (${dips.length} negative ${periodMode === 'YEARLY' ? 'year' : 'month'}s):</strong> ${dips.slice(-4).join(', ')}${dips.length > 4 ? ` (+${dips.length - 4} more)` : ''} — review operating expenses or low-margin sales in those periods.</li>`
+      : `<li><strong style="color:var(--green);">Healthy Consistency:</strong> No negative ${periodMode === 'YEARLY' ? 'years' : 'months'} detected across the shown ${mLabel.toLowerCase()} periods.</li>`;
+
+    analysisBox.innerHTML = `
+      <div style="font-weight:800;color:var(--gold-bright);margin-bottom:6px;letter-spacing:0.4px;">QUICK GRAPH ANALYSIS — ${mLabel.toUpperCase()} (${periodMode})</div>
+      <ul style="margin:0 0 0 18px;padding:0;display:flex;flex-direction:column;gap:4px;">
+        <li><strong>Peak Performance:</strong> <strong>${bestPeriod.period}</strong> was the strongest ${periodMode === 'YEARLY' ? 'year' : 'month'} at <strong style="color:var(--green);">${fmtCurrency(bestPeriod.tot)}</strong> (overall average: <strong>${fmtCurrency(avgPerPeriod)}</strong> per ${periodMode === 'YEARLY' ? 'year' : 'month'}).</li>
+        ${trendHtml}
+        <li><strong>Branch Ranking (${periods.length} ${periodMode === 'YEARLY' ? 'year' : 'month'}s):</strong> ${rankingHtml}</li>
+        ${dipHtml}
+      </ul>
+    `;
+  }
+}
+
+document.getElementById('salesChartPeriod')?.addEventListener('change', renderSalesChartsTool);
+document.getElementById('salesChartMetric')?.addEventListener('change', renderSalesChartsTool);
+document.getElementById('salesChartBranch')?.addEventListener('change', renderSalesChartsTool);
+
+function setSalesMonthRange(ym) {
+  if (!/^\d{4}-\d{2}$/.test(ym)) return;
+  const [y, m] = ym.split('-').map(Number);
+  const lastDay = new Date(y, m, 0).getDate();
+  const s = `${ym}-01`;
+  const eDate = `${ym}-${String(lastDay).padStart(2, '0')}`;
+  const mEl = document.getElementById('salesMonthInput');
+  const startEl = document.getElementById('salesStart');
+  const endEl = document.getElementById('salesEnd');
+  const yrBtn = document.getElementById('salesYearBtn');
+  if (mEl) mEl.value = ym;
+  if (startEl) startEl.value = s;
+  if (endEl) endEl.value = eDate;
+  if (yrBtn) {
+    yrBtn.dataset.year = String(y);
+    yrBtn.textContent = String(y);
+  }
+  loadSalesSummary(false);
+}
+
+function setSalesYearRange(yearNum) {
+  const y = Math.max(2020, Math.min(2099, Number(yearNum) || Number(todayStr.slice(0, 4))));
+  const startEl = document.getElementById('salesStart');
+  const endEl = document.getElementById('salesEnd');
+  const yrBtn = document.getElementById('salesYearBtn');
+  if (startEl) startEl.value = `${y}-01-01`;
+  if (endEl) endEl.value = String(y) === todayStr.slice(0, 4) ? todayStr : `${y}-12-31`;
+  if (yrBtn) {
+    yrBtn.dataset.year = String(y);
+    yrBtn.textContent = String(y);
+  }
+  loadSalesSummary(false);
+}
+
+document.getElementById('salesPrevMonthBtn')?.addEventListener('click', () => {
+  const cur = document.getElementById('salesMonthInput')?.value || todayStr.slice(0, 7);
+  const [y, m] = cur.split('-').map(Number);
+  const d = new Date(y, m - 2, 1);
+  setSalesMonthRange(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+});
+document.getElementById('salesNextMonthBtn')?.addEventListener('click', () => {
+  const cur = document.getElementById('salesMonthInput')?.value || todayStr.slice(0, 7);
+  const [y, m] = cur.split('-').map(Number);
+  const d = new Date(y, m, 1);
+  setSalesMonthRange(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+});
+document.getElementById('salesPrevYearBtn')?.addEventListener('click', () => {
+  const y = Number(document.getElementById('salesYearBtn')?.dataset.year || todayStr.slice(0, 4));
+  setSalesYearRange(y - 1);
+});
+document.getElementById('salesNextYearBtn')?.addEventListener('click', () => {
+  const y = Number(document.getElementById('salesYearBtn')?.dataset.year || todayStr.slice(0, 4));
+  setSalesYearRange(y + 1);
+});
+document.getElementById('salesYearBtn')?.addEventListener('click', () => {
+  const y = Number(document.getElementById('salesYearBtn')?.dataset.year || todayStr.slice(0, 4));
+  setSalesYearRange(y);
+});
+
+function renderSalesRebatesTool() {
+  const sd = state.salesData;
+  const tbody = document.querySelector('#salesRebatesTable tbody');
+  const kpiGrid = document.getElementById('rebatesKpiGrid');
+  const banner = document.getElementById('rebatesInsightBanner');
+  if (!sd || !tbody) return;
+
+  const detectMode = document.getElementById('rebatesDetectionMode')?.value || 'DETECTED';
+  const groupMode = document.getElementById('rebatesGroupMode')?.value || 'MONTHLY';
+  const branchFilter = document.getElementById('rebatesBranchFilter')?.value || 'ALL';
+  const periodHdr = document.getElementById('rebatesPeriodHdr');
+  if (periodHdr) periodHdr.textContent = groupMode === 'ANNUAL' ? 'Year' : 'Month';
+
+  const bNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
+  const branchIds = branchFilter === 'ALL' ? ['br-bonifacio', 'br-molave', 'br-tambulig'] : [branchFilter];
+
+  const keyOf = (dStr) => {
+    const s = String(dStr || '');
+    return groupMode === 'ANNUAL' ? s.slice(0, 4) : s.slice(0, 7);
+  };
+  const validKey = (k) => (groupMode === 'ANNUAL' ? /^\d{4}$/.test(k) : /^\d{4}-\d{2}$/.test(k));
+
+  const scopedPayments = (sd.histFinance?.recentPayments || []).filter((p) => branchIds.includes(p.branch_id));
+  const rebAnalysis = analyzePaymentRebates(scopedPayments, detectMode);
+
+  const map = new Map();
+  const ensure = (period, bid) => {
+    const k = `${period}::${bid}`;
+    if (!map.has(k)) {
+      map.set(k, {
+        period,
+        branchId: bid,
+        branchName: bNames[bid] || bid,
+        eventCount: 0,
+        lateCount: 0,
+        rebatedCount: 0,
+        interest: 0,
+        penalties: 0,
+        explicitRebates: 0,
+        rebates: 0,
+        ceilingRebates: 0,
+        unrecordedPrincipalLoss: 0,
+        trueFinIncome: 0,
+        expenses: 0,
+      });
+    }
+    return map.get(k);
+  };
+
+  for (const ev of rebAnalysis.events) {
+    const per = keyOf(ev.payment_date);
+    if (!validKey(per)) continue;
+    const r = ensure(per, ev.branch_id);
+    r.eventCount++;
+    if (ev.isLate) r.lateCount++;
+    if (ev.isRebated) r.rebatedCount++;
+    r.interest += ev.interest;
+    r.penalties += ev.penalties;
+    r.explicitRebates += ev.explicitRebates;
+    r.rebates += ev.activeRebate;
+    r.ceilingRebates += ev.ceilingRebate;
+    r.unrecordedPrincipalLoss += ev.unrecordedPrincipalLoss;
+    r.trueFinIncome += ev.trueFinInc;
+  }
+
+  for (const e of sd.histFinance?.recentExpenses || []) {
+    if (!branchIds.includes(e.branch_id)) continue;
+    const per = keyOf(e.expense_date);
+    if (!validKey(per)) continue;
+    const k = `${per}::${e.branch_id}`;
+    if (map.has(k)) map.get(k).expenses += Number(e.amount) || 0;
+  }
+
+  const rows = [...map.values()].sort((a, b) => b.period.localeCompare(a.period) || a.branchName.localeCompare(b.branchName));
+
+  let tEvents = 0, tLate = 0, tRebCnt = 0, tPen = 0, tReb = 0, tCeilReb = 0, tExpReb = 0, tPrinLoss = 0, tTrueFin = 0, tExp = 0;
+  for (const r of rows) {
+    tEvents += r.eventCount;
+    tLate += r.lateCount;
+    tRebCnt += r.rebatedCount;
+    tPen += r.penalties;
+    tReb += r.rebates;
+    tCeilReb += r.ceilingRebates;
+    tExpReb += r.explicitRebates;
+    tPrinLoss += r.unrecordedPrincipalLoss;
+    tTrueFin += r.trueFinIncome;
+    tExp += r.expenses;
+  }
+  const tNet = tPen - tReb;
+  const tOffsetPct = tExp > 0 ? (tNet / tExp) * 100 : 0;
+  const tLatePct = tEvents > 0 ? (tLate / tEvents) * 100 : 0;
+  const tRebPct = tEvents > 0 ? (tRebCnt / tEvents) * 100 : 0;
+  const modeLabel = detectMode === 'CEILING' ? 'Ceiling 2.5%' : detectMode === 'RECORDED' ? 'AB Web Raw' : 'Detected 2.5%';
+
+  if (kpiGrid) {
+    kpiGrid.innerHTML = `
+      <div class="summary-box">
+        PENALTIES COLLECTED (+INCOME)
+        <strong style="color:var(--green);">${fmtCurrency(tPen)}</strong>
+        <span class="summary-note">${fmtNum(tLate)} late events (${tLatePct.toFixed(1)}% of ${fmtNum(tEvents)})</span>
+      </div>
+      <div class="summary-box">
+        EARLY-PAY REBATES (${modeLabel.toUpperCase()})
+        <strong style="color:#f59e0b;">${fmtCurrency(-tReb)}</strong>
+        <span class="summary-note">${fmtNum(tRebCnt)} rebated (${tRebPct.toFixed(1)}%) • Ceiling: ${fmtCurrency(tCeilReb)} • AB Web logged: ${fmtCurrency(tExpReb)}</span>
+      </div>
+      <div class="summary-box" style="border-color:#f59e0b;">
+        HIDDEN PROFIT OVERSTATEMENT (~67% PRIN.)
+        <strong style="color:${tPrinLoss > 0 ? '#f59e0b' : 'var(--muted)'};">${fmtCurrency(-tPrinLoss)}</strong>
+        <span class="summary-note">Principal share of 2.5% rebates never deducted in AB Web</span>
+      </div>
+      <div class="summary-box" style="border-color:var(--gold);">
+        TRUE NET IMPACT (PENALTIES − REBATES)
+        <strong style="color:${tNet >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(tNet)}</strong>
+        <span class="summary-note">Offsets ${tOffsetPct.toFixed(1)}% of ${fmtCurrency(tExp)} OpEx • True Fin: ${fmtCurrency(tTrueFin)}</span>
+      </div>
+    `;
+  }
+
+  if (banner) {
+    banner.innerHTML = `
+      <strong>2.5% Auto-Deducted Rebate Audit (${modeLabel}):</strong>
+      AB Web logged <strong>${fmtCurrency(tExpReb)}</strong> in its Rebates column because it auto-deducts 2.5% from the customer's schedule before posting net cash received (<code>97.5%</code> of full monthly amortization).
+      Since AB Web pro-rates that lower net cash into Principal (~67%) and Interest (~33%), only ~33% of each rebate reduces AB Web Interest while the remaining <strong>${fmtCurrency(tPrinLoss)}</strong> Principal share is <strong>unrecorded profit overstatement</strong>.
+      Overall, late penalties (<strong>+${fmtCurrency(tPen)}</strong>) vs. early-payment rebates (<strong>−${fmtCurrency(tReb)}</strong>) yield a net financing impact of <strong style="color:${tNet >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(tNet)}</strong> (offsetting <strong>${tOffsetPct.toFixed(1)}%</strong> of branch operating expenses).
+      <span class="muted">Click any Penalty, Rebate, or Hidden Profit Adj. figure below to inspect every customer payment.</span>
+    `;
+  }
+
+  const drillCell = (kind, bid, period, label, val, color, bold = false) => {
+    const attrs = `class="sales-drill-cell" data-drill-kind="${kind}" data-drill-branch="${bid}" data-drill-period="${period}" data-drill-mode="${detectMode}" data-drill-label="${label.replace(/"/g, '&quot;')}" title="Click to audit customer payments" style="cursor:pointer;text-decoration:underline dotted;${color ? `color:${color};` : ''}"`;
+    return `<td ${attrs}>${bold ? `<strong>${fmtCurrency(val)}</strong>` : fmtCurrency(val)}</td>`;
+  };
+
+  tbody.innerHTML = rows.length
+    ? rows
+        .map((r) => {
+          const net = r.penalties - r.rebates;
+          const latePct = r.eventCount > 0 ? ((r.lateCount / r.eventCount) * 100).toFixed(1) : '0.0';
+          const offPct = r.expenses > 0 ? ((net / r.expenses) * 100).toFixed(1) : '0.0';
+          return `
+            <tr>
+              <td><strong>${r.period}</strong></td>
+              <td><strong>${r.branchName}</strong></td>
+              <td>${fmtNum(r.eventCount)} <span class="small muted">(${r.lateCount} late ${latePct}% • ${r.rebatedCount} rebated)</span></td>
+              ${drillCell('penalties', r.branchId, r.period, `Late Payment Penalties (${r.period})`, r.penalties, 'var(--green)', true)}
+              ${drillCell('rebates_detected', r.branchId, r.period, `2.5% Early-Payment Rebates (${r.period} • ${modeLabel})`, -r.rebates, '#f59e0b', true)}
+              ${drillCell('rebates_detected', r.branchId, r.period, `Hidden Principal Profit Overstatement (${r.period} • ${modeLabel})`, -r.unrecordedPrincipalLoss, '#f59e0b', false)}
+              <td style="color:${net >= 0 ? 'var(--green)' : 'var(--danger)'};"><strong>${fmtCurrency(net)}</strong></td>
+              <td style="color:var(--danger);">${fmtCurrency(r.expenses)}</td>
+              <td><strong>${offPct}%</strong></td>
+              <td style="color:var(--gold-bright);"><strong>${fmtCurrency(r.trueFinIncome)}</strong></td>
+            </tr>`;
+        })
+        .join('') +
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;">
+        <td colspan="2">TOTAL</td>
+        <td>${fmtNum(tEvents)} (${tLate} late ${tLatePct.toFixed(1)}% • ${tRebCnt} rebated)</td>
+        ${drillCell('penalties', branchFilter, 'ALL', `All Late Payment Penalties`, tPen, 'var(--green)', true)}
+        ${drillCell('rebates_detected', branchFilter, 'ALL', `All 2.5% Early-Payment Rebates (${modeLabel})`, -tReb, '#f59e0b', true)}
+        ${drillCell('rebates_detected', branchFilter, 'ALL', `Total Hidden Profit Overstatement (${modeLabel})`, -tPrinLoss, '#f59e0b', true)}
+        <td style="color:${tNet >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(tNet)}</td>
+        <td style="color:var(--danger);">${fmtCurrency(tExp)}</td>
+        <td>${tOffsetPct.toFixed(1)}%</td>
+        <td style="color:var(--gold-bright);">${fmtCurrency(tTrueFin)}</td>
+      </tr>`
+    : '<tr><td colspan="10" class="muted">No synced payment records found for this filter.</td></tr>';
+}
+
+document.getElementById('rebatesDetectionMode')?.addEventListener('change', renderSalesRebatesTool);
+document.getElementById('rebatesGroupMode')?.addEventListener('change', renderSalesRebatesTool);
+document.getElementById('rebatesBranchFilter')?.addEventListener('change', renderSalesRebatesTool);
+
+document.querySelectorAll('.sales-tool-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const target = btn.dataset.salestool;
+    document.querySelectorAll('.sales-tool-btn').forEach((b) => {
+      const isAct = b.dataset.salestool === target;
+      b.classList.toggle('active', isAct);
+      b.classList.toggle('secondary', !isAct);
+    });
+    ['summary', 'cashpnl', 'installment', 'consolidated', 'rebates', 'charts'].forEach((t) => {
+      document.getElementById(`salesTool-${t}`)?.classList.toggle('hidden', t !== target);
+    });
+    if (target === 'charts') renderSalesChartsTool();
+    if (target === 'rebates') renderSalesRebatesTool();
+  });
+});
+document.getElementById('accrualBadDebtPct')?.addEventListener('input', renderSalesInstallmentAccrualTool);
+
+function openSalesDrilldown(kind, branchId, label, periodFilter = '', modeOverride = '') {
+  const sd = state.salesData;
+  const modal = document.getElementById('salesDrilldownModal');
+  if (!sd || !modal) return;
+  const bNames = { 'br-bonifacio': 'Bonifacio', 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', ALL: 'All Branches' };
+  const branchLabel = bNames[branchId] || branchId;
+  const matchBranch = (bid) => branchId === 'ALL' || bid === branchId;
+
+  document.getElementById('salesDrilldownTitle').textContent = `${label} — ${branchLabel}`;
+  document.getElementById('salesDrilldownSub').textContent = periodFilter && periodFilter !== 'ALL' ? `Period: ${periodFilter}` : `Period: ${sd.start} → ${sd.end}`;
+  const formulaEl = document.getElementById('salesDrilldownFormula');
+  const thead = document.querySelector('#salesDrilldownTable thead');
+  const tbody = document.querySelector('#salesDrilldownTable tbody');
+
+  if (kind === 'cash') {
+    const txs = (sd.transactions || []).filter((t) => {
+      const dt = String(t.tx_date || '').slice(0, 10);
+      return dt >= sd.start && dt <= sd.end && matchBranch(t.branch_id);
+    });
+    let sSrp = 0, sDisc = 0, sNet = 0, sCost = 0, sProf = 0;
+    thead.innerHTML = '<tr><th>Date</th><th>Order #</th><th>Branch</th><th>Gross SRP</th><th>Discount</th><th>Net Amount</th><th>FIFO Cost</th><th>Profit</th></tr>';
+    tbody.innerHTML =
+      (txs.length
+        ? txs
+            .map((t) => {
+              const net = Number(t.amount) || 0;
+              const disc = Number(t.discount) || 0;
+              const srp = Number(t.srp) || net + disc;
+              const cost = Number(t.unit_cost) || 0;
+              const prof = cost > 0 ? net - cost : 0;
+              sSrp += srp; sDisc += disc; sNet += net; sCost += cost; sProf += prof;
+              return `<tr><td>${t.tx_date}</td><td><strong>${t.order_no}</strong></td><td>${bNames[t.branch_id] || t.branch_id}</td><td>${fmtCurrency(srp)}</td><td>${fmtCurrency(disc)}</td><td><strong>${fmtCurrency(net)}</strong></td><td>${fmtCurrency(cost)}</td><td style="color:${prof >= 0 ? 'var(--green)' : 'var(--danger)'};"><strong>${fmtCurrency(prof)}</strong></td></tr>`;
+            })
+            .join('')
+        : '<tr><td colspan="8" class="muted">No cash sales transactions in this period.</td></tr>') +
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="3">TOTAL (${txs.length} tx)</td><td>${fmtCurrency(sSrp)}</td><td>${fmtCurrency(sDisc)}</td><td>${fmtCurrency(sNet)}</td><td>${fmtCurrency(sCost)}</td><td style="color:var(--green);">${fmtCurrency(sProf)}</td></tr>`;
+    formulaEl.innerHTML = `<strong>Formula:</strong> Net Cash Sales (<code>${fmtCurrency(sNet)}</code>) = Gross SRP (<code>${fmtCurrency(sSrp)}</code>) − Discount (<code>${fmtCurrency(sDisc)}</code>). True Cash Profit = Net − FIFO Cost = <strong>${fmtCurrency(sProf)}</strong>.`;
+  } else if (kind === 'installment') {
+    const badDebtPct = Math.max(0, Math.min(30, Number(document.getElementById('accrualBadDebtPct')?.value) || 3)) / 100;
+    const rows = (sd.receivables?.installments || []).filter((i) => {
+      const dt = String(i.sale_date || '').slice(0, 10);
+      return dt >= sd.start && dt <= sd.end && matchBranch(i.branch_id);
+    });
+    let sDp = 0, sPrin = 0, sSrp = 0, sCost = 0, sGp = 0, sBd = 0;
+    thead.innerHTML = '<tr><th>Date</th><th>Branch</th><th>Unit</th><th>Deposit</th><th>Principal</th><th>Cash-Equiv SRP</th><th>Unit Cost</th><th>Merch GP</th></tr>';
+    tbody.innerHTML =
+      (rows.length
+        ? rows
+            .map((i) => {
+              const dp = Number(i.deposit) || 0;
+              const prin = Number(i.principal_amount) || 0;
+              const srp = dp + prin > 0 ? dp + prin : Number(i.amount) || 0;
+              const matched = estimateProductCostByName(i.unit);
+              const cost = matched > 0 ? matched : srp * 0.85;
+              const gp = Math.max(0, srp - cost);
+              sDp += dp; sPrin += prin; sSrp += srp; sCost += cost; sGp += gp; sBd += prin * badDebtPct;
+              return `<tr><td>${i.sale_date}</td><td>${bNames[i.branch_id] || i.branch_name || ''}</td><td><strong>${i.unit}</strong>${matched > 0 ? '' : ' <span class="small muted">(85% est)</span>'}</td><td>${fmtCurrency(dp)}</td><td>${fmtCurrency(prin)}</td><td>${fmtCurrency(srp)}</td><td>${fmtCurrency(cost)}</td><td style="color:var(--green);"><strong>${fmtCurrency(gp)}</strong></td></tr>`;
+            })
+            .join('')
+        : '<tr><td colspan="8" class="muted">No new installment contracts in this period.</td></tr>') +
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="3">TOTAL (${rows.length} contracts)</td><td>${fmtCurrency(sDp)}</td><td>${fmtCurrency(sPrin)}</td><td>${fmtCurrency(sSrp)}</td><td>${fmtCurrency(sCost)}</td><td style="color:var(--green);">${fmtCurrency(sGp)}</td></tr>`;
+    formulaEl.innerHTML = `<strong>Formula:</strong> Merchandising GP = Cash-Equiv SRP (<code>${fmtCurrency(sSrp)}</code>) − Unit Cost (<code>${fmtCurrency(sCost)}</code>) = <strong>${fmtCurrency(sGp)}</strong>. Prospective Monthly Bad Debt (${(badDebtPct * 100).toFixed(1)}% of Principal <code>${fmtCurrency(sPrin)}</code>) = <strong>${fmtCurrency(sBd)}</strong>.`;
+  } else if (kind === 'accrued_interest') {
+    const d1 = new Date(`${sd.start}T00:00:00Z`);
+    const d2 = new Date(`${sd.end}T00:00:00Z`);
+    const periodMonths = Math.max(0.1, (Math.max(1, Math.round((d2 - d1) / 86400000) + 1)) / 30);
+    const active = (sd.receivables?.installments || []).filter((i) => {
+      const dt = String(i.sale_date || '').slice(0, 10);
+      if (dt > sd.end || !matchBranch(i.branch_id)) return false;
+      const term = Math.max(1, Number(i.term) || 6);
+      const elapsed = (d2 - new Date(`${dt}T00:00:00Z`)) / (86400000 * 30);
+      return elapsed >= 0 && elapsed <= term + 0.5;
+    });
+    let sFc = 0, sAcc = 0;
+    thead.innerHTML = '<tr><th>Sale Date</th><th>Branch</th><th>Unit</th><th>Principal</th><th>Monthly × Term</th><th>Total Finance Chg</th><th>Period Accrued Int.</th></tr>';
+    tbody.innerHTML =
+      (active.length
+        ? active
+            .map((i) => {
+              const term = Math.max(1, Number(i.term) || 6);
+              const mo = Number(i.monthly) || 0;
+              const prin = Number(i.principal_amount) || 0;
+              const fc = Math.max(0, mo * term - prin);
+              const acc = (fc / term) * Math.min(periodMonths, 1);
+              sFc += fc; sAcc += acc;
+              return `<tr><td>${i.sale_date}</td><td>${bNames[i.branch_id] || i.branch_name || ''}</td><td><strong>${i.unit}</strong></td><td>${fmtCurrency(prin)}</td><td>${fmtCurrency(mo)} × ${term}m</td><td>${fmtCurrency(fc)}</td><td style="color:var(--green);"><strong>${fmtCurrency(acc)}</strong></td></tr>`;
+            })
+            .join('')
+        : '<tr><td colspan="7" class="muted">No active installment contracts accruing interest in this period.</td></tr>') +
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="5">TOTAL (${active.length} active contracts)</td><td>${fmtCurrency(sFc)}</td><td style="color:var(--green);">${fmtCurrency(sAcc)}</td></tr>`;
+    formulaEl.innerHTML = `<strong>Accrual Formula:</strong> Monthly Interest = <code>((Monthly × Term) − Principal) ÷ Term</code> × Period Factor (${Math.min(periodMonths, 1).toFixed(2)} mo) = <strong>${fmtCurrency(sAcc)}</strong>.`;
+  } else if (kind === 'expenses') {
+    const exps = (sd.finance?.recentExpenses || []).filter((e) => matchBranch(e.branch_id));
+    let sAmt = 0;
+    thead.innerHTML = '<tr><th>Date</th><th>Branch</th><th>Expense Type</th><th>Particular</th><th>Amount</th></tr>';
+    tbody.innerHTML =
+      (exps.length
+        ? exps
+            .map((e) => {
+              const a = Number(e.amount) || 0;
+              sAmt += a;
+              return `<tr><td>${e.expense_date}</td><td>${e.branch_name || bNames[e.branch_id] || ''}</td><td>${e.expense_type}</td><td>${e.particular || ''}</td><td style="color:var(--danger);"><strong>${fmtCurrency(a)}</strong></td></tr>`;
+            })
+            .join('')
+        : '<tr><td colspan="5" class="muted">No expenses synced in this date range.</td></tr>') +
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="4">TOTAL (${exps.length} entries)</td><td style="color:var(--danger);">${fmtCurrency(sAmt)}</td></tr>`;
+    formulaEl.innerHTML = `<strong>Formula:</strong> Sum of branch operating expenses synced from AB Web for ${sd.start} → ${sd.end} = <strong>${fmtCurrency(sAmt)}</strong> (deducted once in Consolidated P&L).`;
+  } else if (kind === 'opening_allowance') {
+    const pds = (sd.receivables?.pastDues || []).filter((pd) => matchBranch(pd.branch_id));
+    let sBal = 0, sAllow = 0;
+    thead.innerHTML = '<tr><th>Branch</th><th>Customer / Account</th><th>Unit</th><th>Days Due</th><th>Balance</th><th>Tier Rate</th><th>Allowance</th></tr>';
+    tbody.innerHTML =
+      (pds.length
+        ? pds
+            .map((pd) => {
+              const bal = Number(pd.balance) || 0;
+              const days = getEffectiveDaysDue(pd);
+              const tier = getAgingTier(days);
+              const allow = bal * tier.rate;
+              sBal += bal; sAllow += allow;
+              return `<tr><td>${bNames[pd.branch_id] || pd.branch_name || ''}</td><td><strong>${pd.customer_name}</strong><div class="small muted">${pd.account_no}</div></td><td>${pd.unit}</td><td>${days}d</td><td>${fmtCurrency(bal)}</td><td>${Math.round(tier.rate * 100)}%</td><td style="color:#f59e0b;"><strong>${fmtCurrency(allow)}</strong></td></tr>`;
+            })
+            .join('')
+        : '<tr><td colspan="7" class="muted">No past-due accounts found.</td></tr>') +
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="4">TOTAL (${pds.length} past-due accounts)</td><td>${fmtCurrency(sBal)}</td><td>—</td><td style="color:#f59e0b;">${fmtCurrency(sAllow)}</td></tr>`;
+    formulaEl.innerHTML = `<strong>5-Tier Risk Matrix:</strong> 1–30d (5%), 31–60d (20%), 61–90d (50%), 91–180d (80% Repo), 180+d (95% Write-Off). Total Opening Allowance = <strong>${fmtCurrency(sAllow)}</strong>.`;
+  } else if (kind === 'rebates_detected') {
+    const mode = modeOverride || 'DETECTED';
+    const rawPays = periodFilter
+      ? (sd.histFinance?.recentPayments || []).filter((p) => matchBranch(p.branch_id) && (periodFilter === 'ALL' || String(p.payment_date || '').startsWith(periodFilter)))
+      : (sd.finance?.recentPayments || []).filter((p) => matchBranch(p.branch_id));
+    const ra = analyzePaymentRebates(rawPays, mode);
+    const rebEvents = ra.events.filter((ev) => ev.isRebated && ev.activeRebate > 0);
+    let sCash = 0, sFull = 0, sReb = 0, sIntCut = 0, sPrinLoss = 0;
+    thead.innerHTML = '<tr><th>Date</th><th>Branch</th><th>Customer / Account</th><th>Cash Paid (97.5%)</th><th>Est. Full Amort (100%)</th><th>2.5% Rebate</th><th>Cut from Int (~33%)</th><th>Hidden Prin. Loss (~67%)</th></tr>';
+    tbody.innerHTML =
+      (rebEvents.length
+        ? rebEvents
+            .map((ev) => {
+              sCash += ev.activeBaseAmt;
+              sFull += ev.fullAmortCleared;
+              sReb += ev.activeRebate;
+              sIntCut += ev.alreadyCutFromInt;
+              sPrinLoss += ev.unrecordedPrincipalLoss;
+              return `<tr><td>${ev.payment_date}</td><td>${ev.branch_name || bNames[ev.branch_id] || ''}</td><td><strong>${ev.customer_name}</strong><div class="small muted">${ev.account_no}</div></td><td>${fmtCurrency(ev.activeBaseAmt)}</td><td>${fmtCurrency(ev.fullAmortCleared)}</td><td style="color:#f59e0b;"><strong>${fmtCurrency(-ev.activeRebate)}</strong></td><td class="muted">${fmtCurrency(-ev.alreadyCutFromInt)}</td><td style="color:#f59e0b;"><strong>${fmtCurrency(-ev.unrecordedPrincipalLoss)}</strong></td></tr>`;
+            })
+            .join('')
+        : '<tr><td colspan="8" class="muted">No rebated payment events matched under this mode.</td></tr>') +
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="3">TOTAL (${rebEvents.length} early-rebated events)</td><td>${fmtCurrency(sCash)}</td><td>${fmtCurrency(sFull)}</td><td style="color:#f59e0b;">${fmtCurrency(-sReb)}</td><td class="muted">${fmtCurrency(-sIntCut)}</td><td style="color:#f59e0b;">${fmtCurrency(-sPrinLoss)}</td></tr>`;
+    formulaEl.innerHTML = `<strong>Formula (${mode}):</strong> Net Cash = <code>97.5% × Full Amort</code> → 2.5% Rebate = <code>Cash Paid × (0.025 ÷ 0.975)</code> = <strong>${fmtCurrency(sReb)}</strong>. AB Web already shaved <strong>${fmtCurrency(sIntCut)}</strong> from Interest (~33%); the remaining <strong>${fmtCurrency(sPrinLoss)}</strong> (~67% Principal share) is hidden profit overstatement.`;
+  } else if (kind === 'penalties') {
+    const rawPays = periodFilter
+      ? (sd.histFinance?.recentPayments || []).filter((p) => matchBranch(p.branch_id) && (periodFilter === 'ALL' || String(p.payment_date || '').startsWith(periodFilter)))
+      : (sd.finance?.recentPayments || []).filter((p) => matchBranch(p.branch_id));
+    const ra = analyzePaymentRebates(rawPays, 'DETECTED');
+    const lateEvents = ra.events.filter((ev) => ev.penalties > 0);
+    let sCash = 0, sInt = 0, sPen = 0;
+    thead.innerHTML = '<tr><th>Date</th><th>Branch</th><th>Customer / Account</th><th>Payment Collected</th><th>Interest</th><th>Late Penalty (+Income)</th></tr>';
+    tbody.innerHTML =
+      (lateEvents.length
+        ? lateEvents
+            .map((ev) => {
+              sCash += ev.amount;
+              sInt += ev.interest;
+              sPen += ev.penalties;
+              return `<tr><td>${ev.payment_date}</td><td>${ev.branch_name || bNames[ev.branch_id] || ''}</td><td><strong>${ev.customer_name}</strong><div class="small muted">${ev.account_no}</div></td><td>${fmtCurrency(ev.amount)}</td><td>${fmtCurrency(ev.interest)}</td><td style="color:var(--green);"><strong>+${fmtCurrency(ev.penalties)}</strong></td></tr>`;
+            })
+            .join('')
+        : '<tr><td colspan="6" class="muted">No late payment penalties recorded in this period.</td></tr>') +
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="3">TOTAL (${lateEvents.length} late payment events)</td><td>${fmtCurrency(sCash)}</td><td>${fmtCurrency(sInt)}</td><td style="color:var(--green);">+${fmtCurrency(sPen)}</td></tr>`;
+    formulaEl.innerHTML = `<strong>Formula:</strong> Late payment penalties collected = <strong>+${fmtCurrency(sPen)}</strong> across ${lateEvents.length} late payment events (no 2.5% early rebate applies to late payments).`;
+  } else if (kind === 'cash_interest') {
+    const pays = (sd.finance?.recentPayments || []).filter((p) => matchBranch(p.branch_id));
+    const ra = analyzePaymentRebates(pays, 'DETECTED');
+    let sAmt = 0, sInt = 0, sPen = 0, sPrinLoss = 0, sFin = 0;
+    thead.innerHTML = '<tr><th>Date</th><th>Branch</th><th>Customer</th><th>Payment</th><th>AB Web Int.</th><th>Penalties</th><th>Hidden Rebate Adj (~67%)</th><th>True Fin. Inc.</th></tr>';
+    tbody.innerHTML =
+      (ra.events.length
+        ? ra.events
+            .map((ev) => {
+              sAmt += ev.amount; sInt += ev.interest; sPen += ev.penalties; sPrinLoss += ev.unrecordedPrincipalLoss; sFin += ev.trueFinInc;
+              return `<tr><td>${ev.payment_date}</td><td>${ev.branch_name || bNames[ev.branch_id] || ''}</td><td><strong>${ev.customer_name}</strong></td><td>${fmtCurrency(ev.amount)}</td><td>${fmtCurrency(ev.interest)}</td><td style="color:var(--green);">${fmtCurrency(ev.penalties)}</td><td style="color:#f59e0b;">${ev.unrecordedPrincipalLoss > 0 ? fmtCurrency(-ev.unrecordedPrincipalLoss) : '₱0.00'}</td><td style="color:var(--green);"><strong>${fmtCurrency(ev.trueFinInc)}</strong></td></tr>`;
+            })
+            .join('')
+        : '<tr><td colspan="8" class="muted">No payments synced in this period.</td></tr>') +
+      `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="3">TOTAL (${ra.events.length} payment events)</td><td>${fmtCurrency(sAmt)}</td><td>${fmtCurrency(sInt)}</td><td style="color:var(--green);">${fmtCurrency(sPen)}</td><td style="color:#f59e0b;">${fmtCurrency(-sPrinLoss)}</td><td style="color:var(--green);">${fmtCurrency(sFin)}</td></tr>`;
+    formulaEl.innerHTML = `<strong>Formula:</strong> True Cash-Basis Financing Income = AB Web Interest (<code>${fmtCurrency(sInt)}</code>) + Penalties (<code>${fmtCurrency(sPen)}</code>) − Hidden 2.5% Rebate Principal Loss (<code>${fmtCurrency(sPrinLoss)}</code>) = <strong>${fmtCurrency(sFin)}</strong>.`;
+  }
+
+  modal.classList.remove('hidden');
+}
+
+function openReceivablesAllowanceModal(bucketKey = 'ALL', branchFilter = 'ALL') {
+  const rec = state.receivables || state.salesData?.receivables;
+  const modal = document.getElementById('salesDrilldownModal');
+  if (!rec || !modal) return;
+  const bNames = { ALL: 'All Branches', 'br-bonifacio': 'Bonifacio', 'br-molave': 'Molave', 'br-tambulig': 'Tambulig' };
+  const bucketLabels = {
+    ALL: 'All Past-Due Buckets',
+    '1-30': '1–30 Days (5% • Remind)',
+    '31-60': '31–60 Days (20% • CI Visit)',
+    '61-90': '61–90 Days (50% • Final Demand)',
+    '91-180': '91–180 Days (80% • Repo Priority)',
+    '180+': '180+ Days (95% • Write-Off / Legal)',
+  };
+  const activeBranch = branchFilter || 'ALL';
+
+  const allPds = rec.pastDues || [];
+  const filtered = allPds
+    .filter((pd) => {
+      if (activeBranch !== 'ALL' && pd.branch_id !== activeBranch) return false;
+      if (bucketKey === 'ALL') return true;
+      return getAgingTier(getEffectiveDaysDue(pd)).key === bucketKey;
+    })
+    .sort((a, b) => getEffectiveDaysDue(b) - getEffectiveDaysDue(a));
+
+  document.getElementById('salesDrilldownTitle').textContent = `Opening Allowance Audit — ${bNames[activeBranch] || activeBranch}`;
+  document.getElementById('salesDrilldownSub').textContent = `Bucket: ${bucketLabels[bucketKey] || bucketKey} • ${filtered.length} customer account(s)`;
+
+  const formulaEl = document.getElementById('salesDrilldownFormula');
+  const thead = document.querySelector('#salesDrilldownTable thead');
+  const tbody = document.querySelector('#salesDrilldownTable tbody');
+
+  let sBal = 0;
+  let sAllow = 0;
+  const branchBtns = ['ALL', 'br-bonifacio', 'br-molave', 'br-tambulig']
+    .map(
+      (bid) =>
+        `<button type="button" class="${bid === activeBranch ? '' : 'secondary'} rec-modal-br-btn" data-bid="${bid}" style="padding:3px 9px;font-size:11px;min-height:0;">${bNames[bid]}</button>`
+    )
+    .join(' ');
+
+  thead.innerHTML = '<tr><th>Branch</th><th>Customer &amp; Account #</th><th>Unit</th><th>Days Due</th><th>Unpaid Balance</th><th>Tier Rate</th><th>Required Allowance</th></tr>';
+  tbody.innerHTML =
+    (filtered.length
+      ? filtered
+          .map((pd) => {
+            const bal = Number(pd.balance) || 0;
+            const days = getEffectiveDaysDue(pd);
+            const tier = getAgingTier(days);
+            const allow = bal * tier.rate;
+            sBal += bal;
+            sAllow += allow;
+            return `<tr><td>${bNames[pd.branch_id] || pd.branch_name || ''}</td><td><strong>${pd.customer_name}</strong><div class="small muted">${pd.account_no}</div></td><td>${pd.unit || ''}</td><td><strong>${days}d</strong></td><td>${fmtCurrency(bal)}</td><td>${Math.round(tier.rate * 100)}%</td><td style="color:#f59e0b;"><strong>${fmtCurrency(allow)}</strong></td></tr>`;
+          })
+          .join('')
+      : '<tr><td colspan="7" class="muted">No past-due customer accounts in this bucket/branch.</td></tr>') +
+    `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="4">TOTAL (${filtered.length} customers)</td><td>${fmtCurrency(sBal)}</td><td>—</td><td style="color:var(--gold-bright);">${fmtCurrency(sAllow)}</td></tr>`;
+
+  formulaEl.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+      <div><strong>Formula:</strong> <code>Customer Unpaid Balance × Aging Tier Rate</code> → Total Allowance: <strong>${fmtCurrency(sAllow)}</strong> (from <strong>${fmtCurrency(sBal)}</strong> past-due).</div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap;">${branchBtns}</div>
+    </div>
+  `;
+  formulaEl.querySelectorAll('.rec-modal-br-btn').forEach((btn) => {
+    btn.addEventListener('click', () => openReceivablesAllowanceModal(bucketKey, btn.dataset.bid));
+  });
+
+  modal.classList.remove('hidden');
+}
+
+document.getElementById('tab-sales')?.addEventListener('click', (e) => {
+  const cell = e.target.closest('.sales-drill-cell');
+  if (!cell) return;
+  openSalesDrilldown(
+    cell.dataset.drillKind,
+    cell.dataset.drillBranch,
+    cell.dataset.drillLabel,
+    cell.dataset.drillPeriod || '',
+    cell.dataset.drillMode || ''
+  );
+});
+document.getElementById('closeSalesDrilldownBtn')?.addEventListener('click', () => {
+  document.getElementById('salesDrilldownModal')?.classList.add('hidden');
+});
+document.getElementById('salesDrilldownModal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'salesDrilldownModal') e.target.classList.add('hidden');
+});
+
+document.getElementById('salesMonthInput')?.addEventListener('change', (e) => {
+  const ym = e.target.value;
+  if (!/^\d{4}-\d{2}$/.test(ym)) return;
+  const [y, m] = ym.split('-').map(Number);
+  const lastDay = new Date(y, m, 0).getDate();
+  const s = `${ym}-01`;
+  const eDate = `${ym}-${String(lastDay).padStart(2, '0')}`;
+  const startEl = document.getElementById('salesStart');
+  const endEl = document.getElementById('salesEnd');
+  if (startEl) startEl.value = s;
+  if (endEl) endEl.value = eDate;
+  loadSalesSummary();
+});
+document.getElementById('salesApplyBtn')?.addEventListener('click', () => loadSalesSummary(false));
+document.getElementById('salesRefreshBtn')?.addEventListener('click', () => loadSalesSummary(true));
+document.getElementById('salesTypeFilter')?.addEventListener('change', renderSalesSummary);
+
+setInterval(() => {
+  if (state.activeTab === 'sales' && state.userRole === 'ADMIN') {
+    loadSalesSummary().catch(() => {});
+  }
+}, 30000);
 document.getElementById('refreshFinanceBtn').addEventListener('click', loadFinance);
+document.getElementById('finBranchFilter')?.addEventListener('change', loadFinance);
 document.getElementById('refreshActivityBtn').addEventListener('click', loadActivity);
+function shiftActivityDates(deltaDays) {
+  const startEl = document.getElementById('actStart');
+  const endEl = document.getElementById('actEnd');
+  if (!startEl || !endEl) return;
+  const baseStr = endEl.value || startEl.value || todayStr;
+  const dt = new Date(`${baseStr}T12:00:00`);
+  if (Number.isNaN(dt.getTime())) return;
+  dt.setDate(dt.getDate() + deltaDays);
+  const nextStr = dt.toISOString().slice(0, 10);
+  if (nextStr > todayStr) return;
+  startEl.value = nextStr;
+  endEl.value = nextStr;
+  loadActivity();
+}
+document.getElementById('actPrevDayBtn')?.addEventListener('click', () => shiftActivityDates(-1));
+document.getElementById('actNextDayBtn')?.addEventListener('click', () => shiftActivityDates(1));
+document.getElementById('toggleCatalogViewsBtn')?.addEventListener('click', () => {
+  const grid = document.getElementById('activityViewsGrid');
+  const btn = document.getElementById('toggleCatalogViewsBtn');
+  const arrow = document.getElementById('catalogViewsToggleArrow');
+  if (!grid || !btn) return;
+  const willOpen = grid.classList.contains('hidden');
+  grid.classList.toggle('hidden', !willOpen);
+  btn.setAttribute('aria-expanded', String(willOpen));
+  if (arrow) arrow.textContent = willOpen ? '▲' : '▼';
+});
 document.getElementById('syncNowBtn').addEventListener('click', () => api('/api/sync/now', { method: 'POST' }));
 document.getElementById('toggleSyncBtn').addEventListener('click', async () => {
   const res = await api('/api/sync/toggle', { method: 'POST', body: JSON.stringify({ paused: !state.syncState?.paused }) });
@@ -2366,7 +8586,8 @@ const PDF_BRAND_ORDER = [
 function groupInventoryForPdf(items) {
   const map = new Map();
   for (const item of items) {
-    const rawBrand = String(item.brand || item.category || 'OTHER').trim() || 'OTHER';
+    const isFreebie = isFreebieAccessory(item);
+    const rawBrand = isFreebie ? 'FREEBIES' : (String(item.brand || item.category || 'OTHER').trim() || 'OTHER');
     const key = rawBrand.toLowerCase();
     if (!map.has(key)) {
       map.set(key, { brand: rawBrand.toUpperCase(), items: [] });
@@ -2376,12 +8597,17 @@ function groupInventoryForPdf(items) {
   const groups = Array.from(map.values());
   groups.forEach((g) => {
     g.items.sort((a, b) => {
+      if (g.brand === 'FREEBIES') {
+        return String(a.model || a.name).localeCompare(String(b.model || b.name));
+      }
       const pDiff = (Number(a.base_price) || 0) - (Number(b.base_price) || 0);
       if (pDiff !== 0) return pDiff;
       return String(a.model || a.name).localeCompare(String(b.model || b.name));
     });
   });
   groups.sort((a, b) => {
+    if (a.brand === 'FREEBIES') return -1;
+    if (b.brand === 'FREEBIES') return 1;
     const ia = PDF_BRAND_ORDER.indexOf(a.brand.toLowerCase());
     const ib = PDF_BRAND_ORDER.indexOf(b.brand.toLowerCase());
     if (ia !== -1 && ib !== -1) return ia - ib;
@@ -2425,11 +8651,7 @@ function setInventoryDownloadMsg(text, isError) {
   el.classList.toggle('error', Boolean(isError && text));
 }
 
-function generateInventoryPdfForType(productType, reportDateStr, movementsList = []) {
-  const jspdfNs = window.jspdf;
-  if (!jspdfNs || typeof jspdfNs.jsPDF !== 'function') {
-    throw new Error('PDF generator library is still loading. Please try again in a second.');
-  }
+function buildDailyInventoryReportData(productType, reportDateStr, movementsList = []) {
   const { branchLabel, visibleBranches, items } = getScopedInventoryForExport(productType);
   const visibleBranchIds = new Set((visibleBranches || []).map((b) => b.id));
   const dateParts = String(reportDateStr || todayStr).split('-').map(Number);
@@ -2441,7 +8663,6 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
   const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
   const monthName = new Date(year, monthIndex, 1).toLocaleDateString('en-US', { month: 'long' });
 
-  // Build exact day-by-day balance changes from monthStart -> todayStr using synced Stock Card / Sale movements
   const netChangesSinceMonthStart = new Map();
   const monthlyDailyChanges = new Map();
   for (const m of movementsList || []) {
@@ -2463,7 +8684,6 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
     }
   }
 
-  // Reconstruct daily balance per model for days 1..asOfDay
   const itemsWithDaily = items.map((item) => {
     const pid = item.id;
     const changes = monthlyDailyChanges.get(pid) || new Array(daysInMonth + 1).fill(0);
@@ -2483,9 +8703,25 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
     return { ...item, daily, hasPositiveDay };
   });
 
-  // Include any model that had > 0 stock on any day 1..asOfDay in that month
   const activeItems = itemsWithDaily.filter((i) => i.hasPositiveDay);
   const groups = groupInventoryForPdf(activeItems);
+  const dailyTotals = new Array(daysInMonth).fill(0);
+  for (const it of activeItems) {
+    it.daily.forEach((val, idx) => {
+      if (val !== null && val > 0) dailyTotals[idx] += val;
+    });
+  }
+
+  return { branchLabel, year, monthIndex, asOfDay, daysInMonth, monthName, activeItems, groups, dailyTotals };
+}
+
+function generateInventoryPdfForType(productType, reportDateStr, movementsList = [], blankQuantities = false) {
+  const jspdfNs = window.jspdf;
+  if (!jspdfNs || typeof jspdfNs.jsPDF !== 'function') {
+    throw new Error('PDF generator library is still loading. Please try again in a second.');
+  }
+  const { branchLabel, year, asOfDay, daysInMonth, monthName, groups, dailyTotals } =
+    buildDailyInventoryReportData(productType, reportDateStr, movementsList);
 
   const doc = new jspdfNs.jsPDF({
     orientation: 'portrait',
@@ -2507,19 +8743,13 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
   const modelWidth = 125 / 72;
   const priceWidth = 84 / 72;
 
-  const dailyTotals = new Array(daysInMonth).fill(0);
-  for (const it of activeItems) {
-    it.daily.forEach((val, idx) => {
-      if (val !== null && val > 0) dailyTotals[idx] += val;
-    });
-  }
-
+  const isAccessories = productType === 'Accessories';
   const totalModelRows = groups.reduce((s, g) => s + g.items.length, 0);
   const totalVisualRows = Math.max(1, groups.length + totalModelRows + 2);
   const availableHeightPt = (pageHeight - topY - bottomMargin) * 72;
   const rowSlot = availableHeightPt / totalVisualRows;
-  const fontSize = Math.max(3, Math.min(9, rowSlot - 2.5));
-  const cellPadding = Math.max(0.4, Math.min(1.5, fontSize * 0.15)) / 72;
+  const fontSize = isAccessories ? 7.5 : Math.max(5.5, Math.min(9, rowSlot - 2.5));
+  const cellPadding = isAccessories ? 2 / 72 : Math.max(0.6, Math.min(1.5, fontSize * 0.16)) / 72;
 
   const dayPanels = [
     Array.from({ length: Math.min(15, daysInMonth) }, (_, idx) => idx + 1),
@@ -2557,8 +8787,11 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
 
       group.items.forEach((item) => {
         const priceNum = Number(item.base_price) || 0;
-        const priceText = 'PHP ' + priceNum.toLocaleString('en-PH', { maximumFractionDigits: 0 });
+        const priceText = isFreebieAccessory(item)
+          ? ''
+          : 'P ' + priceNum.toLocaleString('en-PH', { maximumFractionDigits: 0 });
         const dayCells = panelDays.map((d) => {
+          if (blankQuantities) return '';
           const val = item.daily ? item.daily[d - 1] : (d <= asOfDay ? item.exportQty : null);
           return val !== null && Number(val) > 0 ? Number(val).toLocaleString('en-PH') : '';
         });
@@ -2576,46 +8809,52 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
         },
       },
       ...panelDays.map((d) => {
+        if (blankQuantities) return '';
         const tot = dailyTotals[d - 1] || 0;
         return tot > 0 ? tot.toLocaleString('en-PH') : '';
       }),
     ];
     bodyRows.push(totalRow);
 
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(12);
-    doc.setTextColor(27, 25, 19);
-    const title = `AB-Gadgetz-${branchLabel}: Daily Inventory of ${productType}`;
-    doc.text(title, margin, 25 / 72);
+    const drawHeader = () => {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(12);
+      doc.setTextColor(27, 25, 19);
+      doc.text(`AB-Gadgetz-${branchLabel}: Daily Inventory of ${productType}`, margin, 25 / 72);
 
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.setTextColor(79, 73, 58);
-    const subtitle = `Month of ${monthName} ${year}`;
-    doc.text(subtitle, pageWidth / 2, 44 / 72, { align: 'center' });
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(79, 73, 58);
+      doc.text(`Month of ${monthName} ${year}`, pageWidth / 2, 44 / 72, { align: 'center' });
+    };
+    drawHeader();
 
     doc.autoTable({
       startY: topY,
-      margin: { left: margin, right: margin, bottom: bottomMargin },
+      margin: { top: topY, left: margin, right: margin, bottom: bottomMargin },
       tableWidth: contentWidth,
-      head: [['Model', 'Unit Price (PHP)', ...panelDays.map((d) => String(d))]],
+      head: [['Model', 'Unit Price (P)', ...panelDays.map((d) => String(d))]],
       body: bodyRows,
       theme: 'grid',
-      pageBreak: 'avoid',
+      showHead: 'everyPage',
+      pageBreak: isAccessories ? 'auto' : 'avoid',
       rowPageBreak: 'avoid',
+      didDrawPage: drawHeader,
       styles: {
         font: 'helvetica',
         fontSize,
         cellPadding,
-        lineColor: [215, 208, 190],
-        lineWidth: 0.25 / 72,
+        lineColor: [27, 25, 19],
+        lineWidth: 1.15 / 72,
         textColor: [27, 25, 19],
         overflow: 'ellipsize',
         valign: 'middle',
       },
       headStyles: {
-        fillColor: [27, 25, 19],
-        textColor: [246, 211, 75],
+        fillColor: [235, 226, 190],
+        textColor: [20, 18, 14],
+        lineColor: [20, 18, 14],
+        lineWidth: 1.4 / 72,
         fontStyle: 'bold',
         halign: 'center',
       },
@@ -2624,6 +8863,40 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
         if (hookData.section === 'body' && hookData.row.index === bodyRows.length - 1) {
           hookData.cell.styles.fillColor = [233, 228, 211];
           hookData.cell.styles.fontStyle = 'bold';
+          hookData.cell.styles.lineWidth = 1.35 / 72;
+        }
+      },
+      didDrawCell(hookData) {
+        if (hookData.column.index !== 1) return;
+        const txt = String((hookData.cell.text && hookData.cell.text[0]) || '');
+        if (!txt) return;
+        const fs = hookData.cell.styles.fontSize || fontSize;
+        const fIn = fs / 72;
+        doc.setFont('helvetica', hookData.cell.styles.fontStyle || 'normal');
+        doc.setFontSize(fs);
+        doc.setDrawColor(27, 25, 19);
+        doc.setLineWidth(Math.max(0.25, fs * 0.05) / 72);
+
+        const drawCrossbars = (px, pW, midY) => {
+          const x1 = px - 0.35 / 72;
+          const x2 = px + pW + 0.45 / 72;
+          doc.line(x1, midY - 0.16 * fIn, x2, midY - 0.16 * fIn);
+          doc.line(x1, midY - 0.03 * fIn, x2, midY - 0.03 * fIn);
+        };
+
+        const midY = hookData.cell.y + hookData.cell.height / 2;
+        if (hookData.section === 'head' && txt.includes('(P)')) {
+          const totalW = doc.getTextWidth(txt);
+          const beforeW = doc.getTextWidth(txt.slice(0, txt.indexOf('(P)') + 1));
+          const pW = doc.getTextWidth('P');
+          const startX = hookData.cell.x + (hookData.cell.width - totalW) / 2;
+          drawCrossbars(startX + beforeW, pW, midY);
+        } else if (hookData.section === 'body' && txt.startsWith('P ')) {
+          const padR = hookData.cell.padding('right');
+          const totalW = doc.getTextWidth(txt);
+          const pW = doc.getTextWidth('P');
+          const startX = hookData.cell.x + hookData.cell.width - padR - totalW;
+          drawCrossbars(startX, pW, midY);
         }
       },
     });
@@ -2631,14 +8904,44 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
 
   const branchSlug = branchLabel.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '');
   const dateSlug = reportDateStr || todayStr;
-  const fileName = `AB_Gadgetz_${branchSlug}_${productType}_Daily_Stock_Balances_${dateSlug}.pdf`;
+  const suffix = blankQuantities ? 'Blank_Count_Sheet' : 'Daily_Stock_Balances';
+  const fileName = `AB_Gadgetz_${branchSlug}_${productType}_${suffix}_${dateSlug}.pdf`;
   doc.save(fileName);
   return fileName;
 }
 
-async function downloadInventoryPdf() {
+async function downloadInventoryPdf(blankQuantities = false) {
   try {
-    setInventoryDownloadMsg('Generating PDF with daily stock history...', false);
+    setInventoryDownloadMsg(
+      blankQuantities ? 'Generating blank physical count sheet PDF...' : 'Generating PDF with daily stock history...',
+      false
+    );
+    const reportDateStr = document.getElementById('inventoryReportDate')?.value || todayStr;
+    const monthStart = `${reportDateStr.slice(0, 7)}-01`;
+    const globalBranchId = document.getElementById('globalBranch')?.value || '';
+    let movementsList = [];
+    if (!blankQuantities) {
+      try {
+        const actData = await api(`/api/activity?start=${monthStart}&end=${todayStr}&branchId=${globalBranchId}`);
+        movementsList = actData?.allMovements || actData?.movements || [];
+      } catch {}
+    }
+    const selectedTypes = getSelectedProductTypes();
+    const typesToExport = selectedTypes.length ? selectedTypes : ['Cellphones'];
+    const files = typesToExport.map((t) => generateInventoryPdfForType(t, reportDateStr, movementsList, blankQuantities));
+    setInventoryDownloadMsg(`Downloaded: ${files.join(', ')}`, false);
+  } catch (err) {
+    setInventoryDownloadMsg(err.message || 'Unable to generate PDF.', true);
+  }
+}
+
+async function downloadInventoryExcel() {
+  try {
+    if (!state.inventory) return;
+    if (!window.ExcelJS) {
+      throw new Error('Excel generator library is still loading. Please try again in a second.');
+    }
+    setInventoryDownloadMsg('Generating formatted Excel workbook...', false);
     const reportDateStr = document.getElementById('inventoryReportDate')?.value || todayStr;
     const monthStart = `${reportDateStr.slice(0, 7)}-01`;
     const globalBranchId = document.getElementById('globalBranch')?.value || '';
@@ -2647,86 +8950,137 @@ async function downloadInventoryPdf() {
       const actData = await api(`/api/activity?start=${monthStart}&end=${todayStr}&branchId=${globalBranchId}`);
       movementsList = actData?.allMovements || actData?.movements || [];
     } catch {}
+
     const selectedTypes = getSelectedProductTypes();
     const typesToExport = selectedTypes.length ? selectedTypes : ['Cellphones'];
-    const files = typesToExport.map((t) => generateInventoryPdfForType(t, reportDateStr, movementsList));
-    setInventoryDownloadMsg(`Downloaded: ${files.join(', ')}`, false);
-  } catch (err) {
-    setInventoryDownloadMsg(err.message || 'Unable to generate PDF.', true);
-  }
-}
+    const workbook = new window.ExcelJS.Workbook();
+    workbook.creator = 'AB Gadgetz';
+    workbook.created = new Date();
 
-function downloadInventoryExcel() {
-  try {
-    if (!state.inventory) return;
-    const reportDateStr = document.getElementById('inventoryReportDate')?.value || todayStr;
-    const selectedTypes = getSelectedProductTypes();
-    const typesToExport = selectedTypes.length ? selectedTypes : ['Cellphones'];
-    const { branches } = state.inventory;
-    const globalBranchId = document.getElementById('globalBranch').value;
-    const visibleBranches = globalBranchId
-      ? branches.filter((b) => b.id === globalBranchId)
-      : branches;
-    const branchLabel = visibleBranches.length === 1 ? visibleBranches[0].name : 'All_Branches';
+    const thinBorder = {
+      top: { style: 'thin', color: { argb: 'FFD7D0BE' } },
+      left: { style: 'thin', color: { argb: 'FFD7D0BE' } },
+      bottom: { style: 'thin', color: { argb: 'FFD7D0BE' } },
+      right: { style: 'thin', color: { argb: 'FFD7D0BE' } },
+    };
 
-    const headers = [
-      'Product Type',
-      'Brand',
-      'Model',
-      'Website Code / SKU',
-      'Unit Price (PHP)',
-      ...(state.userRole === 'ADMIN' ? ['Cost Price (PHP)'] : []),
-      ...visibleBranches.map((b) => `${b.name} Stock`),
-      'Total Available',
-    ];
-    const rows = [headers];
+    let branchSlug = 'All_Branches';
+    for (const productType of typesToExport) {
+      const { branchLabel, year, daysInMonth, monthName, groups, dailyTotals } =
+        buildDailyInventoryReportData(productType, reportDateStr, movementsList);
+      branchSlug = branchLabel.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '');
 
-    for (const t of typesToExport) {
-      const { items } = getScopedInventoryForExport(t);
-      const groups = groupInventoryForPdf(items);
-      for (const g of groups) {
-        for (const item of g.items) {
-          const branchCells = visibleBranches.map((b) => Number(item.byBranch[b.id]?.qtyAvailable || 0));
-          rows.push([
-            t,
-            g.brand,
-            String(item.model || item.name || ''),
-            String(item.website_codes || item.sku || ''),
-            Number(item.base_price) || 0,
-            ...(state.userRole === 'ADMIN' ? [Number(item.cost_price) || 0] : []),
-            ...branchCells,
-            Number(item.exportQty) || 0,
-          ]);
+      const sheet = workbook.addWorksheet(productType, {
+        views: [{ state: 'frozen', xSplit: 2, ySplit: 3 }],
+        pageSetup: { paperSize: 5, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+      });
+
+      const totalCols = 2 + daysInMonth;
+      sheet.getColumn(1).width = 28;
+      sheet.getColumn(2).width = 16;
+      for (let d = 1; d <= daysInMonth; d++) {
+        sheet.getColumn(2 + d).width = 5.5;
+      }
+
+      // Row 1: Title (Apps Script PDF layout)
+      const titleRow = sheet.addRow([`AB-Gadgetz-${branchLabel}: Daily Inventory of ${productType}`]);
+      sheet.mergeCells(1, 1, 1, totalCols);
+      titleRow.font = { name: 'Arial', size: 12, bold: true, color: { argb: 'FF1B1913' } };
+      titleRow.alignment = { vertical: 'middle', horizontal: 'left' };
+      titleRow.height = 22;
+
+      // Row 2: Subtitle
+      const subRow = sheet.addRow([`Month of ${monthName} ${year}`]);
+      sheet.mergeCells(2, 1, 2, totalCols);
+      subRow.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF4F493A' } };
+      subRow.alignment = { vertical: 'middle', horizontal: 'center' };
+      subRow.height = 18;
+
+      // Row 3: Table Header
+      const daysHeaders = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+      const headerRow = sheet.addRow(['Model', 'Unit Price (₱)', ...daysHeaders]);
+      headerRow.height = 20;
+      headerRow.eachCell((cell, colNumber) => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEBE2BE' } };
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF1E1E1E' } };
+        cell.alignment = { vertical: 'middle', horizontal: colNumber === 1 ? 'left' : 'center' };
+        cell.border = thinBorder;
+      });
+
+      // Brand groups + Model rows
+      groups.forEach((group) => {
+        const gRow = sheet.addRow([group.brand]);
+        const rIdx = gRow.number;
+        sheet.mergeCells(rIdx, 1, rIdx, totalCols);
+        gRow.height = 17;
+        for (let c = 1; c <= totalCols; c++) {
+          const cell = gRow.getCell(c);
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2EFE0' } };
+          cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF1B1913' } };
+          cell.alignment = { vertical: 'middle', horizontal: 'left' };
+          cell.border = thinBorder;
         }
+
+        group.items.forEach((item) => {
+          const isFreebie = isFreebieAccessory(item);
+          const priceNum = isFreebie ? null : (Number(item.base_price) || 0);
+          const dayVals = daysHeaders.map((d) => {
+            const val = item.daily ? item.daily[d - 1] : null;
+            return val !== null && Number(val) > 0 ? Number(val) : null;
+          });
+          const mRow = sheet.addRow([String(item.model || item.name || ''), priceNum, ...dayVals]);
+          mRow.height = 16;
+          mRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            cell.font = { name: 'Arial', size: 8.5, color: { argb: 'FF1B1913' } };
+            cell.border = thinBorder;
+            if (colNumber === 1) {
+              cell.alignment = { vertical: 'middle', horizontal: 'left' };
+            } else if (colNumber === 2) {
+              cell.alignment = { vertical: 'middle', horizontal: 'right' };
+              if (priceNum !== null) cell.numFmt = '"₱"#,##0';
+            } else {
+              cell.alignment = { vertical: 'middle', horizontal: 'right' };
+              if (cell.value !== null && cell.value !== '') cell.numFmt = '#,##0';
+            }
+          });
+        });
+      });
+
+      // Footer Row: TOTAL STOCK BALANCE
+      const totalRowVals = [
+        'TOTAL STOCK BALANCE',
+        null,
+        ...daysHeaders.map((d) => (dailyTotals[d - 1] > 0 ? dailyTotals[d - 1] : null)),
+      ];
+      const fRow = sheet.addRow(totalRowVals);
+      sheet.mergeCells(fRow.number, 1, fRow.number, 2);
+      fRow.height = 19;
+      for (let c = 1; c <= totalCols; c++) {
+        const cell = fRow.getCell(c);
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE9E4D3' } };
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF1B1913' } };
+        cell.border = thinBorder;
+        cell.alignment = { vertical: 'middle', horizontal: c <= 2 ? 'left' : 'right' };
+        if (c > 2 && cell.value !== null && cell.value !== '') cell.numFmt = '#,##0';
       }
     }
 
-    const csvContent =
-      '\uFEFF' +
-      rows
-        .map((r) =>
-          r
-            .map((cell) => {
-              const s = String(cell ?? '');
-              return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-            })
-            .join(',')
-        )
-        .join('\r\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    const fileName = `AB_Gadgetz_${branchLabel}_Inventory_${reportDateStr}.csv`;
+    const fileName = `AB_Gadgetz_${branchSlug}_${typesToExport.join('_')}_Daily_Stock_Balances_${reportDateStr}.xlsx`;
     a.href = url;
     a.download = fileName;
     document.body.appendChild(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    setInventoryDownloadMsg(`Downloaded Excel CSV: ${fileName}`, false);
+    setInventoryDownloadMsg(`Downloaded Excel: ${fileName}`, false);
   } catch (err) {
-    setInventoryDownloadMsg(err.message || 'Unable to export Excel CSV.', true);
+    setInventoryDownloadMsg(err.message || 'Unable to export Excel.', true);
   }
 }
 
@@ -2830,36 +9184,53 @@ function downloadReceivablesExcel() {
   URL.revokeObjectURL(url);
 }
 
-document.getElementById('inventoryPdfBtn')?.addEventListener('click', downloadInventoryPdf);
+document.getElementById('inventoryPdfBtn')?.addEventListener('click', () => downloadInventoryPdf(false));
+document.getElementById('inventoryBlankPdfBtn')?.addEventListener('click', () => downloadInventoryPdf(true));
 document.getElementById('inventoryExcelBtn')?.addEventListener('click', downloadInventoryExcel);
 document.getElementById('receivablesPdfBtn')?.addEventListener('click', downloadReceivablesPdf);
 document.getElementById('receivablesExcelBtn')?.addEventListener('click', downloadReceivablesExcel);
+document.getElementById('invPriceRange')?.addEventListener('change', renderInventory);
+document.getElementById('invRamRom')?.addEventListener('change', renderInventory);
+document.getElementById('invPriceSortBtn')?.addEventListener('click', () => {
+  state.invPriceSort = state.invPriceSort === 'desc' ? 'asc' : 'desc';
+  renderInventory();
+});
 
 function applyRolePermissions() {
   const role = state.userRole || 'ADMIN';
   const branchId = state.userBranchId || '';
   const isAdmin = role === 'ADMIN';
 
+  document.body.classList.toggle('role-staff', !isAdmin);
+  document.body.classList.toggle('role-cashier', role === 'CASHIER');
+  document.getElementById('mobileBottomNav')?.classList.toggle('hidden', role === 'CASHIER');
+
   const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
   const branchName = branchNames[branchId] || 'Branch';
 
-  // Update header subtitle & greeting
-  const subEl = document.querySelector('.brand-sub');
-  const greetEl = document.querySelector('.owner-greeting');
+  // Update header subtitle, page title & greeting
+  const subEl = document.getElementById('portalHeaderSub');
+  const greetEl = document.getElementById('portalGreeting');
   if (role === 'CASHIER') {
+    document.title = `Cashier Portal (${branchName}) — AB Gadgetz`;
     if (subEl) subEl.textContent = `CASHIER PORTAL (${branchName.toUpperCase()}) • VIEW & PDF ONLY`;
     if (greetEl) greetEl.textContent = `Cashier • ${branchName}`;
   } else if (role === 'CI') {
+    document.title = `Credit Investigator (${branchName}) — AB Gadgetz`;
     if (subEl) subEl.textContent = `CREDIT INVESTIGATOR (${branchName.toUpperCase()}) • VIEW & PDF ONLY`;
     if (greetEl) greetEl.textContent = `Credit Investigator • ${branchName}`;
   } else {
+    document.title = 'Owner Admin Portal';
     if (subEl) subEl.textContent = 'OWNER ADMIN PORTAL • REALTIME SYNC';
     if (greetEl) greetEl.textContent = 'Welcome, Maynard';
   }
 
-  // Toggle admin-only elements (Excel buttons, Publish buttons, Pause button, Catalog Edit Mode)
+  // Toggle admin-only & cashier-only elements
   document.querySelectorAll('.admin-only-el, .publish-github-btn').forEach((el) => {
     el.classList.toggle('hidden', !isAdmin);
+  });
+  document.querySelectorAll('.cashier-only-el').forEach((el) => {
+    el.classList.toggle('hidden', role !== 'CASHIER');
   });
   document.getElementById('toggleSyncBtn')?.classList.toggle('hidden', !isAdmin);
   const catEditWrap = document.getElementById('catEditMode')?.closest('label');
@@ -2870,13 +9241,56 @@ function applyRolePermissions() {
   const showHiddenWrap = document.getElementById('showHiddenToggle')?.closest('label');
   if (showHiddenWrap) showHiddenWrap.classList.toggle('hidden', !isAdmin);
 
-  // Restrict available tabs by role
+  // Cashier Inventory lockdown: hide Inventory Tools, bulk Cellphones/Accessories switcher, and limit Stock View to Available / Unavailable
+  document.querySelector('.inv-tools-wrap')?.classList.toggle('hidden', !isAdmin);
+  document.getElementById('cashierCatalogFilters')?.classList.toggle('hidden', role !== 'CASHIER');
+  if (!isAdmin) {
+    state.selectedProducts.clear();
+    document.getElementById('invToolDrawer')?.classList.add('hidden');
+    document.getElementById('bulkActionBar')?.classList.add('hidden');
+  }
+  const stockViewSel = document.getElementById('stockViewSelect');
+  if (stockViewSel) {
+    const curVal = stockViewSel.value;
+    if (!isAdmin) {
+      stockViewSel.innerHTML = `
+        <option value="available">Available phones</option>
+        <option value="unavailable">Unavailable</option>
+      `;
+      stockViewSel.value = curVal === 'unavailable' ? 'unavailable' : 'available';
+    } else if (stockViewSel.options.length < 5) {
+      stockViewSel.innerHTML = `
+        <option value="available">Available phones</option>
+        <option value="phaseout">Phaseout products (include 0)</option>
+        <option value="all">All products, incl. unavailable</option>
+        <option value="unavailable">Unavailable</option>
+        <option value="reorder">Reorder suggestions</option>
+      `;
+      if (curVal) stockViewSel.value = curVal;
+    }
+  }
+
+  // For Cashier, place the Date Selector & PDF icon right beside the "INVENTORY" header
+  const datePdfWrap = document.querySelector('.inv-date-pdf-wrap');
+  const cashierHeaderActions = document.getElementById('cashierHeaderActions');
+  const invFilterBar = document.getElementById('invFilterBar');
+  if (datePdfWrap && cashierHeaderActions && invFilterBar) {
+    if (role === 'CASHIER') {
+      cashierHeaderActions.classList.remove('hidden');
+      cashierHeaderActions.appendChild(datePdfWrap);
+    } else {
+      cashierHeaderActions.classList.add('hidden');
+      invFilterBar.appendChild(datePdfWrap);
+    }
+  }
+
+  // Restrict available tabs by role (Cashier uses integrated Inventory + Catalog view, so no separate Catalogs tab)
   const allowedTabs =
     role === 'CASHIER'
-      ? ['inventory', 'catalogs']
+      ? ['inventory']
       : role === 'CI'
         ? ['receivables', 'catalogs']
-        : ['inventory', 'stockChanges', 'activity', 'finance', 'receivables', 'catalogs', 'websiteStock'];
+        : ['inventory', 'sales', 'activity', 'finance', 'receivables', 'catalogs', 'websiteStock', 'staffPins'];
 
   document.querySelectorAll('.tab[data-tab], .mnav-btn[data-tab]').forEach((btn) => {
     const t = btn.dataset.tab;
@@ -2930,8 +9344,40 @@ function connectEvents() {
   eventSource.addEventListener('sync', async (e) => {
     const payload = JSON.parse(e.data);
     updateSyncPill(payload);
+    if (payload.deliveriesUpdated > 0 || payload.ordersUpdated > 0) {
+      await Promise.all([loadSavedPurchaseOrders(), loadAbDeliveries()]);
+      if (state.activeTab === 'inventory' && state.activeInvTool === 'restock') {
+        if (payload.updatedCount > 0) await loadInventory();
+        const editingOrder = Boolean(document.activeElement?.closest('#savedOrderInlineEditor, #pasteOrderBox'));
+        if (!editingOrder) renderSavedOrdersPanel();
+        else {
+          renderOrderVarianceReport();
+          renderAbDeliveriesView();
+        }
+        if (!document.activeElement?.closest('.reorder-qty-inp')) {
+          buildRestockDraftPlan();
+          renderRestockCards();
+        }
+        return;
+      }
+    }
     if (payload.updatedCount > 0 || state.activeTab === 'websiteStock') {
       await refreshActiveTab();
+    }
+  });
+  eventSource.addEventListener('orders', async () => {
+    await Promise.all([loadSavedPurchaseOrders(), loadAbDeliveries()]);
+    if (state.activeTab === 'inventory' && state.activeInvTool === 'restock') {
+      const editingOrder = Boolean(document.activeElement?.closest('#savedOrderInlineEditor, #pasteOrderBox'));
+      if (!editingOrder) renderSavedOrdersPanel();
+      else {
+        renderOrderVarianceReport();
+        renderAbDeliveriesView();
+      }
+      if (!document.activeElement?.closest('.reorder-qty-inp')) {
+        buildRestockDraftPlan();
+        renderRestockCards();
+      }
     }
   });
 }
@@ -2958,21 +9404,181 @@ async function bootApp() {
   connectEvents();
 }
 
+async function loadStaffPins() {
+  const msg = document.getElementById('staffPinsMsg');
+  const tokenWrap = document.getElementById('ghTokenWrap');
+  const tokenInput = document.getElementById('ghPublishTokenInput');
+  const saveBtn = document.getElementById('saveStaffPinsBtn');
+  const keys = [
+    'CASHIER::br-molave',
+    'CASHIER::br-tambulig',
+    'CASHIER::br-bonifacio',
+    'CI::br-molave',
+    'CI::br-tambulig',
+    'CI::br-bonifacio',
+  ];
+
+  const fillInputs = (pins) => {
+    for (const key of keys) {
+      const el = document.getElementById(`pin_${key.replace('::', '_')}`);
+      if (el) el.value = pins[key] || DEFAULT_GH_STAFF_PINS[key] || '';
+    }
+  };
+
+  if (IS_STATIC_GH) {
+    if (tokenWrap) tokenWrap.classList.remove('hidden');
+    if (tokenInput) tokenInput.value = localStorage.getItem('bs_gh_pub_token') || '';
+    if (saveBtn) saveBtn.textContent = 'SAVE & PUBLISH STAFF PINS';
+    try {
+      const payload = await getGhStaffPinsPayload();
+      const decrypted = await decryptGhStaffPins(payload?.encryptedPins);
+      if (decrypted) {
+        fillInputs(decrypted);
+        if (msg) msg.textContent = 'Synced current Staff PINs. To update from phone without PC, enter your GitHub Token above once and click SAVE & PUBLISH STAFF PINS.';
+        return;
+      }
+    } catch {}
+    fillInputs(DEFAULT_GH_STAFF_PINS);
+    if (msg) msg.textContent = 'Showing default Staff PINs. Publish from localhost or enter your GitHub Token above to save changes without a PC.';
+    return;
+  }
+
+  if (tokenWrap) tokenWrap.classList.add('hidden');
+  if (saveBtn) saveBtn.textContent = 'SAVE STAFF PINS';
+  try {
+    const res = await api('/api/staff-pins');
+    fillInputs(res.pins || {});
+    if (msg) msg.textContent = '';
+  } catch (err) {
+    if (msg) msg.textContent = err.message;
+  }
+}
+
+async function publishStaffPinsViaGhApi(token, jsonText) {
+  const repo = 'ab-gadgetz/ab-gadgetz.github.io';
+  const paths = ['public/staff-pins.json', 'dist/data/staff-pins.json'];
+  const contentB64 = btoa(unescape(encodeURIComponent(jsonText)));
+  for (const filePath of paths) {
+    const apiUrl = `https://api.github.com/repos/${repo}/contents/${filePath}`;
+    let sha;
+    const getRes = await fetch(apiUrl, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+    });
+    if (getRes.ok) {
+      const info = await getRes.json();
+      sha = info.sha;
+    }
+    const putRes = await fetch(apiUrl, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message: 'Update Staff PINs from Online Admin Portal',
+        content: contentB64,
+        ...(sha ? { sha } : {}),
+      }),
+    });
+    if (!putRes.ok) {
+      const errData = await putRes.json().catch(() => ({}));
+      throw new Error(errData.message || `GitHub API error (${putRes.status})`);
+    }
+  }
+}
+
+document.getElementById('saveStaffPinsBtn')?.addEventListener('click', async () => {
+  const msg = document.getElementById('staffPinsMsg');
+  const keys = [
+    'CASHIER::br-molave',
+    'CASHIER::br-tambulig',
+    'CASHIER::br-bonifacio',
+    'CI::br-molave',
+    'CI::br-tambulig',
+    'CI::br-bonifacio',
+  ];
+  const pins = {};
+  for (const key of keys) {
+    const inputId = `pin_${key.replace('::', '_')}`;
+    const val = document.getElementById(inputId)?.value.trim() || '';
+    if (!/^\d{6}$/.test(val)) {
+      if (msg) msg.textContent = `PIN for ${key.replace('::', ' ')} must be exactly 6 digits.`;
+      return;
+    }
+    pins[key] = val;
+  }
+
+  if (IS_STATIC_GH) {
+    const token = (document.getElementById('ghPublishTokenInput')?.value || '').trim();
+    if (!token) {
+      if (msg) msg.textContent = 'Paste your GitHub Token in the box above once so you can publish PIN changes from your phone without a PC.';
+      return;
+    }
+    localStorage.setItem('bs_gh_pub_token', token);
+    if (msg) msg.textContent = 'Publishing new Staff PINs to GitHub...';
+    try {
+      const hashes = {};
+      for (const [k, v] of Object.entries(pins)) {
+        const bytes = new TextEncoder().encode(`abg-staff-pin-salt-v1:${v}`);
+        const digest = await crypto.subtle.digest('SHA-256', bytes);
+        hashes[k] = btoa(String.fromCharCode(...new Uint8Array(digest)));
+      }
+      const encryptedPins = await encryptGhStaffPins(pins);
+      const payloadText = JSON.stringify({ updatedAt: new Date().toISOString(), hashes, encryptedPins }, null, 2);
+      await publishStaffPinsViaGhApi(token, payloadText);
+      if (msg) msg.textContent = '✓ Staff PINs published! Your Staff Portal (/staff/) now uses the new PINs immediately—no PC needed.';
+    } catch (err) {
+      if (msg) msg.textContent = `Publish failed: ${err.message}`;
+    }
+    return;
+  }
+
+  try {
+    await api('/api/staff-pins', { method: 'PUT', body: JSON.stringify({ pins }) });
+    if (msg) msg.textContent = 'Staff PINs saved locally! Click "🚀 Publish PINs to Online Staff Portal" to sync to https://ab-gadgetz.github.io/staff/.';
+  } catch (err) {
+    if (msg) msg.textContent = err.message;
+  }
+});
+
 function updateAuthRoleUI() {
   const roleSel = document.getElementById('loginRoleSelect');
+  const branchSel = document.getElementById('loginBranchSelect');
   const branchWrap = document.getElementById('loginBranchWrap');
   const isSetup = document.getElementById('authGate')?.dataset.mode === 'setup';
   if (!roleSel || !branchWrap) return;
   if (isSetup) {
     roleSel.value = 'ADMIN';
-    branchWrap.classList.add('hidden');
-    return;
   }
-  const role = roleSel.value;
-  branchWrap.classList.toggle('hidden', role === 'ADMIN');
+  const role = roleSel.value || 'ADMIN';
+  const branchId = branchSel?.value || 'br-molave';
+
+  document.querySelectorAll('#loginRoleBoxes .login-choice-box').forEach((box) => {
+    box.classList.toggle('active', box.dataset.role === role);
+  });
+  document.querySelectorAll('#loginBranchBoxes .login-choice-box').forEach((box) => {
+    box.classList.toggle('active', box.dataset.branch === branchId);
+  });
+
+  branchWrap.classList.toggle('hidden', isSetup || role === 'ADMIN');
 }
 
-document.getElementById('loginRoleSelect')?.addEventListener('change', updateAuthRoleUI);
+document.querySelectorAll('#loginRoleBoxes .login-choice-box').forEach((box) => {
+  box.addEventListener('click', () => {
+    const roleSel = document.getElementById('loginRoleSelect');
+    if (roleSel) roleSel.value = box.dataset.role;
+    updateAuthRoleUI();
+  });
+});
+
+document.querySelectorAll('#loginBranchBoxes .login-choice-box').forEach((box) => {
+  box.addEventListener('click', () => {
+    const branchSel = document.getElementById('loginBranchSelect');
+    if (branchSel) branchSel.value = box.dataset.branch;
+    updateAuthRoleUI();
+  });
+});
 
 async function checkAuth() {
   const isStaffPath = window.location.pathname.includes('/staff');
@@ -2985,28 +9591,37 @@ async function checkAuth() {
   }
   document.getElementById('appShell').classList.add('hidden');
   document.getElementById('authGate').classList.remove('hidden');
+  const subEl = document.getElementById('portalHeaderSub');
+  if (isStaffPath) {
+    document.title = 'Staff Portal — AB Gadgetz';
+    if (subEl) subEl.textContent = 'STAFF PORTAL • VIEW & PDF ONLY';
+  } else {
+    document.title = 'Owner Admin Portal';
+    if (subEl) subEl.textContent = 'OWNER ADMIN PORTAL • REALTIME SYNC';
+  }
   const isSetup = !status.pinConfigured && !isStaffPath;
   document.getElementById('authTitle').textContent = isSetup
     ? 'Create Owner PIN (First-Time Setup)'
     : isStaffPath
       ? 'Staff Portal Login'
-      : 'Owner & Staff Portal Login';
+      : 'Owner Login';
   document.getElementById('authSubtitle').textContent = isSetup
-    ? 'Set a 6–12 digit PIN to protect your portal for online/phone access.'
+    ? 'Set a 6-digit PIN to protect your portal for online/phone access.'
     : isStaffPath
-      ? 'Select your Staff Role & Branch, then enter your 6-digit PIN (View & PDF Download Only).'
-      : 'Select your account role and enter your 6-digit PIN to unlock the portal.';
+      ? 'Tap your Role and Branch below, then enter your 6-digit PIN (View & PDF Download Only).'
+      : 'Enter your 6-digit Owner PIN to unlock the portal.';
   document.getElementById('authSubmitBtn').textContent = isSetup ? 'SAVE PIN & UNLOCK' : 'UNLOCK PORTAL';
   document.getElementById('authGate').dataset.mode = isSetup ? 'setup' : 'login';
 
+  const roleWrap = document.getElementById('loginRoleWrap');
   const roleSel = document.getElementById('loginRoleSelect');
   if (roleSel) {
-    const adminOpt = roleSel.querySelector('option[value="ADMIN"]');
     if (isStaffPath) {
-      if (adminOpt) adminOpt.hidden = true;
+      if (roleWrap) roleWrap.classList.remove('hidden');
       if (roleSel.value === 'ADMIN') roleSel.value = 'CASHIER';
-    } else if (adminOpt) {
-      adminOpt.hidden = false;
+    } else {
+      if (roleWrap) roleWrap.classList.add('hidden');
+      roleSel.value = 'ADMIN';
     }
   }
   updateAuthRoleUI();

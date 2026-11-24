@@ -7,13 +7,14 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="AB Gadgetz" />
-  <link rel="manifest" href="../manifest.webmanifest" />
+  <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="../ab-logo-square.png" type="image/png" />
   <link rel="apple-touch-icon" href="../ab-logo-square.png" />
   <title>Owner Admin Portal</title>
-  <link rel="stylesheet" href="../styles.css" />
+  <link rel="stylesheet" href="../styles.css?v=1795487777769" />
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 </head>
 <body>
   <div class="wrap">
@@ -23,27 +24,38 @@
     </div>
 
     <!-- OWNER & STAFF PIN LOGIN / SETUP GATE -->
-    <div id="authGate" class="card hidden" style="max-width:420px;margin:24px auto;">
+    <div id="authGate" class="card hidden" style="max-width:420px;margin:16px auto;">
       <h3 id="authTitle" style="margin:0 0 6px;color:var(--gold-bright);">Portal Login</h3>
-      <p id="authSubtitle" class="muted small" style="margin:0 0 12px;">Select your account role and enter your PIN to unlock the portal.</p>
-      <div style="margin-bottom:10px;">
-        <label for="loginRoleSelect">ACCOUNT ROLE</label>
-        <select id="loginRoleSelect">
-          <option value="ADMIN">Owner (Admin Portal)</option>
-          <option value="CASHIER">Cashier (Inventory &amp; Branch Catalog)</option>
-          <option value="CI">Credit Investigator (Receivables &amp; Branch Catalog)</option>
-        </select>
+      <p id="authSubtitle" class="muted small" style="margin:0 0 12px;">Tap your role and enter your 6-digit PIN.</p>
+      <input type="hidden" id="loginRoleSelect" value="ADMIN" />
+      <input type="hidden" id="loginBranchSelect" value="br-molave" />
+      <div id="loginRoleWrap" class="hidden" style="margin-bottom:10px;">
+        <label>ACCOUNT ROLE</label>
+        <div class="login-box-grid cols-2" id="loginRoleBoxes">
+          <button type="button" class="login-choice-box active" data-role="CASHIER">
+            <strong>Cashier</strong>
+          </button>
+          <button type="button" class="login-choice-box" data-role="CI">
+            <strong>Credit Investigator</strong>
+          </button>
+        </div>
       </div>
       <div id="loginBranchWrap" class="hidden" style="margin-bottom:10px;">
-        <label for="loginBranchSelect">ASSIGNED BRANCH</label>
-        <select id="loginBranchSelect">
-          <option value="br-molave">Molave</option>
-          <option value="br-tambulig">Tambulig</option>
-          <option value="br-bonifacio">Bonifacio</option>
-        </select>
+        <label>ASSIGNED BRANCH</label>
+        <div class="login-box-grid login-branch-grid" id="loginBranchBoxes">
+          <button type="button" class="login-choice-box active" data-branch="br-molave">
+            <strong>Molave</strong>
+          </button>
+          <button type="button" class="login-choice-box" data-branch="br-tambulig">
+            <strong>Tambulig</strong>
+          </button>
+          <button type="button" class="login-choice-box" data-branch="br-bonifacio">
+            <strong>Bonifacio</strong>
+          </button>
+        </div>
       </div>
-      <label for="ownerPinInput" id="pinInputLabel">PIN</label>
-      <input type="password" id="ownerPinInput" inputmode="numeric" maxlength="12" placeholder="Enter 6–12 digit PIN" />
+      <label for="ownerPinInput" id="pinInputLabel">6-DIGIT PIN</label>
+      <input type="password" id="ownerPinInput" inputmode="numeric" maxlength="6" pattern="\d{6}" placeholder="Enter 6-digit PIN" />
       <button type="button" id="authSubmitBtn" style="width:100%;margin-top:12px;">UNLOCK PORTAL</button>
       <div id="authErrorMsg" class="error-msg"></div>
     </div>
@@ -51,7 +63,7 @@
     <div id="appShell" class="hidden">
     <div class="card owner-bar">
       <div class="owner-bar-main">
-        <strong>Welcome, Maynard</strong>
+        <strong id="portalGreeting">Welcome, Maynard</strong>
         <div class="owner-branch">
           <label for="globalBranch">BRANCH</label>
           <select id="globalBranch">
@@ -73,10 +85,13 @@
 
     <div class="nav-drawer-wrap">
       <div class="nav-toggle-bar">
-        <button type="button" id="menuToggleBtn" class="hamburger-btn" aria-expanded="false" aria-controls="mainTabsMenu">
-          <span aria-hidden="true">☰</span>
-          <span id="currentTabLabel">INVENTORY</span>
-        </button>
+        <div class="nav-heading-row">
+          <button type="button" id="menuToggleBtn" class="hamburger-btn" aria-expanded="false" aria-controls="mainTabsMenu">
+            <span id="menuHamburgerIcon" aria-hidden="true">☰</span>
+            <span id="currentTabLabel">INVENTORY</span>
+          </button>
+          <div id="cashierHeaderActions" class="hidden"></div>
+        </div>
         <div class="nav-type-checks" id="productTypeFilter">
           <label class="stock-view-option selected" style="padding:7px 12px;">
             <input type="radio" name="productType" value="Cellphones" checked />
@@ -91,18 +106,19 @@
       </div>
       <nav class="tabs hidden" id="mainTabsMenu" role="tablist">
         <button type="button" class="tab active" data-tab="inventory">INVENTORY</button>
+        <button type="button" class="tab" data-tab="sales">SALES</button>
         <button type="button" class="tab" data-tab="receivables">RECEIVABLES</button>
         <button type="button" class="tab" data-tab="finance">FINANCE &amp; P&amp;L</button>
-        <button type="button" class="tab" data-tab="stockChanges">STOCK CHANGES</button>
         <button type="button" class="tab" data-tab="websiteStock">WEBSITE STOCK</button>
         <button type="button" class="tab" data-tab="catalogs">CUSTOMER CATALOGS</button>
         <button type="button" class="tab" data-tab="activity">ACTIVITY LOG</button>
+        <button type="button" class="tab" data-tab="staffPins">STAFF PINS</button>
       </nav>
     </div>
 
     <!-- TAB 1: INVENTORY -->
     <section id="tab-inventory" class="tab-panel active card">
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+      <div id="invFilterBar" class="inv-filter-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
         <div class="inv-tools-wrap" style="margin-bottom:0;">
           <button type="button" id="invToolsMenuBtn" class="grid-menu-btn" aria-expanded="false" aria-controls="invToolsMenu">
             <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true">
@@ -117,13 +133,15 @@
           </button>
           <div class="inventory-tool-tabs hidden" id="invToolsMenu">
             <button type="button" class="inv-tool-btn" data-tool="filters" aria-expanded="false">FILTERS &amp; SEARCH</button>
+            <button type="button" class="inv-tool-btn" data-tool="stockswap" aria-expanded="false">STOCK SWAP</button>
             <button type="button" class="inv-tool-btn" data-tool="restock" aria-expanded="false">RESTOCK</button>
+            <button type="button" class="inv-tool-btn" data-tool="costcompare" aria-expanded="false">COST COMPARE</button>
             <button type="button" class="inv-tool-btn" data-tool="health" aria-expanded="false">HEALTH</button>
             <button type="button" class="inv-tool-btn" data-tool="lifecycle" aria-expanded="false">LIFECYCLE</button>
           </div>
         </div>
 
-        <div style="display:flex;align-items:center;gap:6px;">
+        <div class="inv-group-wrap" style="display:flex;align-items:center;gap:6px;">
           <label for="cardGroupingMode" style="margin:0;color:var(--muted);font-size:11px;">GROUPING</label>
           <select id="cardGroupingMode" style="width:auto;padding:7px 10px;font-size:12px;">
             <option value="brand">Group by Brand</option>
@@ -131,7 +149,7 @@
           </select>
         </div>
 
-        <div style="display:flex;align-items:center;gap:6px;">
+        <div class="inv-stockview-wrap" style="display:flex;align-items:center;gap:6px;">
           <label for="stockViewSelect" style="margin:0;color:var(--muted);font-size:11px;">STOCK VIEW</label>
           <select id="stockViewSelect" style="width:auto;padding:7px 10px;font-size:12px;">
             <option value="available">Available phones</option>
@@ -142,7 +160,22 @@
           </select>
         </div>
 
-        <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
+        <div id="cashierCatalogFilters" class="inv-cashier-filters hidden" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          <select id="invPriceRange" style="width:auto;padding:7px 10px;font-size:12px;">
+            <option value="ALL">All Prices</option>
+            <option value="0-5000">Under ₱5,000</option>
+            <option value="5000-8000">₱5,000 – ₱8,000</option>
+            <option value="8000-12000">₱8,000 – ₱12,000</option>
+            <option value="12000-18000">₱12,000 – ₱18,000</option>
+            <option value="18000-9999999">₱18,000+</option>
+          </select>
+          <select id="invRamRom" style="width:auto;padding:7px 10px;font-size:12px;">
+            <option value="ALL">All RAM/ROM</option>
+          </select>
+          <button type="button" id="invPriceSortBtn" class="secondary" style="padding:7px 10px;font-size:12px;">Price ↑</button>
+        </div>
+
+        <div class="inv-date-pdf-wrap" style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
           <div style="display:flex;align-items:center;gap:6px;">
             <label for="inventoryReportDate" style="margin:0;color:var(--muted);font-size:11px;">INVENTORY AS OF DATE</label>
             <input type="date" id="inventoryReportDate" aria-label="Inventory as of date" style="width:auto;padding:6px 10px;font-size:12px;" />
@@ -155,6 +188,14 @@
                 <text x="5.5" y="17" fill="#fff" font-size="6.5" font-family="Arial" font-weight="700">PDF</text>
               </svg>
               <span>PDF</span>
+            </button>
+            <button type="button" id="inventoryBlankPdfBtn" class="download-icon cashier-only-el hidden" title="Download blank count sheet PDF (no quantities)" aria-label="Download blank count sheet PDF">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="#3b5998" d="M4 2h11l5 5v15H4z"/>
+                <path fill="#fff" d="M14 2v6h6"/>
+                <text x="4" y="17" fill="#fff" font-size="5" font-family="Arial" font-weight="700">COUNT</text>
+              </svg>
+              <span>BLANK</span>
             </button>
             <button type="button" id="inventoryExcelBtn" class="download-icon admin-only-el" title="Download inventory Excel" aria-label="Download inventory Excel">
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -184,35 +225,384 @@
         </div>
       </div>
 
-      <!-- Tool Panel: Restock / Planning -->
-      <div id="tool-restock" class="sub-panel hidden">
-        <h3>Order Budget &amp; Cash-on-Hand (Finance Export)</h3>
-        <div class="summary-grid" id="budgetSummaryGrid" style="margin-bottom:12px;"></div>
-        <h3>Restock &amp; Inter-Branch Transfers</h3>
-        <p class="muted small">Active models at or below reorder point, plus inter-branch transfer opportunities.</p>
-        <div class="table-wrap" style="margin-top:8px;">
-          <table class="data-table" id="reorderTable">
-            <thead>
-              <tr>
-                <th>Model</th>
-                <th>Branch</th>
-                <th>Avail / Reorder</th>
-                <th>Suggested Order</th>
-                <th>Est. Cost (DP)</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+      <!-- Tool Panel: Stock Swap Generator (All Branches) -->
+      <div id="tool-stockswap" class="sub-panel hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+          <div>
+            <h3 style="margin:0;">Stock Swap Suggestions (All Branches)</h3>
+            <p class="muted small" style="margin:3px 0 0;">Moves surplus units from well-stocked branches to branches with 0 stock or low stock.</p>
+          </div>
+          <button type="button" id="stockSwapPdfBtn" class="download-icon" title="Download Stock Swap Plan PDF" aria-label="Download Stock Swap Plan PDF">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="#bd3b32" d="M4 2h11l5 5v15H4z"/>
+              <path fill="#fff" d="M14 2v6h6"/>
+              <text x="5.5" y="17" fill="#fff" font-size="6.5" font-family="Arial" font-weight="700">PDF</text>
+            </svg>
+            <span>PDF</span>
+          </button>
         </div>
-        <h3 style="margin-top:14px;">Inter-Branch Transfer Opportunities</h3>
+        <div class="grid-3" style="margin-bottom:10px;">
+          <div>
+            <label for="swapTypeFilter">PRODUCT TYPE</label>
+            <select id="swapTypeFilter">
+              <option value="Cellphones">Cellphones</option>
+              <option value="Accessories">Accessories</option>
+              <option value="ALL">All Products</option>
+            </select>
+          </div>
+          <div>
+            <label for="swapBranchFilter">TARGET BRANCH</label>
+            <select id="swapBranchFilter">
+              <option value="ALL">All Branches</option>
+              <option value="br-molave">Into Molave</option>
+              <option value="br-tambulig">Into Tambulig</option>
+              <option value="br-bonifacio">Into Bonifacio</option>
+            </select>
+          </div>
+          <div>
+            <label for="swapModeFilter">SWAP PRIORITY</label>
+            <select id="swapModeFilter">
+              <option value="ZERO_ONLY">0-Stock Fill Only</option>
+              <option value="ALL_BALANCE">Include Low-Stock Balance</option>
+            </select>
+          </div>
+        </div>
+        <div class="summary-grid" id="stockSwapSummaryGrid" style="margin-bottom:10px;"></div>
+        <div id="stockSwapGroupedList"></div>
+        <div id="stockSwapCopyStatus" class="muted small" style="margin-top:8px;"></div>
+      </div>
+
+      <!-- Tool Panel: Restock / Supplier Reorder -->
+      <div id="tool-restock" class="sub-panel hidden">
+        <div class="sub-panel" style="padding:12px;margin-bottom:12px;">
+          <div id="orderFundsToggle" style="display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <strong style="font-size:12px;letter-spacing:0.6px;color:var(--text);">ORDER FUNDS &amp; NET BUDGET</strong>
+              <span id="orderFundsMissingBadge" class="badge badge-danger hidden" style="font-size:10px;">1 due date missing</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <strong id="orderFundsNetHeader" style="color:var(--gold-bright);font-size:13px;">Net ₱0.00</strong>
+              <span id="orderFundsCaret" class="muted" style="font-weight:700;">+</span>
+            </div>
+          </div>
+
+          <div id="orderFundsBody" class="hidden" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-soft);">
+            <div style="font-size:11px;font-weight:800;letter-spacing:0.6px;color:var(--muted);margin-bottom:8px;">AVAILABLE CASH</div>
+            <div class="grid-2" style="gap:10px;margin-bottom:12px;">
+              <div>
+                <label for="fundMetrobank">Cash in Bank — Metrobank</label>
+                <input type="text" inputmode="decimal" id="fundMetrobank" placeholder="0.00" />
+              </div>
+              <div>
+                <label for="fundMaribank">Cash in Bank — MariBank</label>
+                <input type="text" inputmode="decimal" id="fundMaribank" placeholder="0.00" />
+              </div>
+              <div>
+                <label for="fundGcash">GCash</label>
+                <input type="text" inputmode="decimal" id="fundGcash" placeholder="0.00" />
+              </div>
+            </div>
+
+            <div style="font-size:11px;font-weight:800;letter-spacing:0.6px;color:var(--muted);margin-bottom:4px;">UNDEPOSITED BRANCH SALES</div>
+            <p class="muted small" style="margin:0 0 8px;">Record each unbanked day by branch, sales date, and amount. Mark it deposited when banked: it moves into Metrobank and stops counting as undeposited cash.</p>
+            <div id="undepositedSalesList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px;"></div>
+            <button type="button" id="addUndepositedSaleBtn" class="secondary" style="padding:6px 12px;font-size:11.5px;margin-bottom:14px;">+ ADD BRANCH SALES DAY</button>
+
+            <div style="font-size:11px;font-weight:800;letter-spacing:0.6px;color:var(--muted);margin-bottom:8px;">LESS: BILLS &amp; OTHER DEDUCTIONS</div>
+            <div class="grid-3" style="gap:8px;margin-bottom:10px;" id="creditCardsBudgetGrid"></div>
+            <div id="otherDeductionsList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px;"></div>
+            <button type="button" id="addDeductionBtn" class="secondary" style="padding:6px 12px;font-size:11.5px;margin-bottom:12px;">+ ADD BILL / DEDUCTION</button>
+
+            <div class="summary-grid" id="budgetSummaryGrid"></div>
+          </div>
+        </div>
+
+        <!-- Saved Orders Made, Pending Deliveries & Real-Time Variance Report -->
+        <div class="sub-panel" style="padding:12px;margin-bottom:12px;">
+          <div id="savedOrdersToggle" style="display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <strong style="font-size:12px;letter-spacing:0.6px;color:var(--text);">PENDING ORDERS, DELIVERIES &amp; VARIANCE REPORT</strong>
+              <span id="savedOrdersCountBadge" class="badge badge-warn" style="font-size:10px;">0 saved</span>
+              <span id="pendingUnitsBadge" class="badge badge-ok hidden" style="font-size:10px;">0 pcs waiting delivery</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span id="savedOrdersSummaryHdr" class="small muted">Track pending orders, physical receipts &amp; AB Web deliveries</span>
+              <span id="savedOrdersCaret" class="muted" style="font-weight:700;">−</span>
+            </div>
+          </div>
+          <div id="savedOrdersBody" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border-soft);">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button type="button" class="po-subview-btn active" data-poview="orders" style="padding:5px 10px;font-size:11.5px;min-height:0;">ORDERS &amp; PENDING</button>
+                <button type="button" class="secondary po-subview-btn" data-poview="variance" style="padding:5px 10px;font-size:11.5px;min-height:0;">VARIANCE REPORT</button>
+                <button type="button" class="secondary po-subview-btn" data-poview="deliveries" style="padding:5px 10px;font-size:11.5px;min-height:0;">AB WEB DELIVERIES (LIVE)</button>
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button type="button" id="logNewPendingOrderBtn" style="padding:5px 10px;font-size:11.5px;min-height:0;">+ LOG PENDING ORDER</button>
+                <button type="button" id="pasteOrderBtn" class="secondary" style="padding:5px 10px;font-size:11.5px;min-height:0;">PASTE EXCEL / TEXT</button>
+                <button type="button" id="syncAbDeliveriesBtn" class="secondary" style="padding:5px 10px;font-size:11.5px;min-height:0;">SYNC &amp; MATCH AB WEB</button>
+              </div>
+            </div>
+
+            <!-- Paste Spreadsheet / Text Order Importer -->
+            <div id="pasteOrderBox" class="hidden" style="margin-bottom:10px;padding:10px;border-radius:8px;border:1px solid var(--gold);background:rgba(255,255,255,0.03);">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+                <strong style="font-size:12px;color:var(--gold-bright);">PASTE ORDER FROM EXCEL / MESSENGER (AUTO-MATCHES MODELS)</strong>
+                <button type="button" id="closePasteOrderBtn" class="secondary" style="padding:3px 8px;font-size:11px;min-height:0;">✕</button>
+              </div>
+              <div class="grid-3" style="gap:8px;margin-bottom:8px;">
+                <div>
+                  <label for="pasteOrderTitleInp" style="font-size:10.5px;">ORDER TITLE</label>
+                  <input type="text" id="pasteOrderTitleInp" placeholder="e.g. AB Main Supplier Order 11/24" style="padding:5px 8px;font-size:12px;" />
+                </div>
+                <div>
+                  <label for="pasteOrderBranchSel" style="font-size:10.5px;">DEFAULT BRANCH (IF NOT IN TEXT)</label>
+                  <select id="pasteOrderBranchSel" style="padding:5px 8px;font-size:12px;">
+                    <option value="br-molave">Molave</option>
+                    <option value="br-tambulig">Tambulig</option>
+                    <option value="br-bonifacio">Bonifacio</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="pasteOrderSupplierSel" style="font-size:10.5px;">SUPPLIER</label>
+                  <select id="pasteOrderSupplierSel" style="padding:5px 8px;font-size:12px;">
+                    <option value="AB Main Supplier">AB Main Supplier</option>
+                    <option value="A&K">A&amp;K</option>
+                    <option value="Online Purchase">Online Purchase</option>
+                  </select>
+                </div>
+              </div>
+              <textarea id="pasteOrderText" rows="5" placeholder="Paste rows from Excel or chat, e.g.:&#10;MOLAVE&#10;Infinix Smart 20 4/128  5  7049&#10;Tecno Spark go 3 4/128  5  6974&#10;TAMBULIG&#10;Itel A100C s 3/64  3  4507" style="width:100%;padding:8px;font-size:12px;background:var(--bg-soft);color:var(--text);border:1px solid var(--border);border-radius:6px;"></textarea>
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px;">
+                <span id="pasteOrderStatus" class="small muted">Supports tabs, spaces, hyphens, and branch headers (Molave / Tambulig / Bonifacio).</span>
+                <button type="button" id="parseAndCreateOrderBtn" style="padding:6px 14px;font-size:12px;">CREATE PENDING ORDER</button>
+              </div>
+            </div>
+
+            <div id="poView-orders">
+              <div id="savedOrdersList" style="display:flex;flex-direction:column;gap:8px;"></div>
+              <div id="savedOrderInlineEditor" class="hidden" style="margin-top:12px;padding:12px;border-radius:10px;border:1px solid var(--gold);background:rgba(255,255,255,0.03);"></div>
+            </div>
+
+            <div id="poView-variance" class="hidden">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                  <select id="varianceOrderFilter" style="width:auto;padding:5px 9px;font-size:12px;">
+                    <option value="ALL">All Orders (Ordered vs Delivered)</option>
+                  </select>
+                  <select id="varianceTypeFilter" style="width:auto;padding:5px 9px;font-size:12px;">
+                    <option value="ALL">All Line Items</option>
+                    <option value="VARIANCES_ONLY">Variances Only (Short / Over / Price Diff)</option>
+                    <option value="PENDING_ONLY">Still Waiting Delivery</option>
+                    <option value="NOT_IN_AB">Received but NOT Yet in AB Web</option>
+                  </select>
+                </div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                  <button type="button" id="variancePdfBtn" class="secondary" style="padding:5px 10px;font-size:11.5px;min-height:0;">PDF VARIANCE REPORT</button>
+                  <button type="button" id="varianceExcelBtn" class="secondary" style="padding:5px 10px;font-size:11.5px;min-height:0;">EXCEL VARIANCE</button>
+                </div>
+              </div>
+              <div class="summary-grid" id="varianceKpiGrid" style="margin-bottom:10px;"></div>
+              <div id="varianceInsightBanner" class="sub-panel" style="padding:9px 12px;margin-bottom:10px;font-size:12px;border-left:3px solid var(--gold);"></div>
+              <div class="table-wrap" style="max-height:380px;overflow-y:auto;">
+                <table class="data-table" id="orderVarianceTable">
+                  <thead>
+                    <tr>
+                      <th>Order / Date</th>
+                      <th>Branch</th>
+                      <th>Model</th>
+                      <th>Requested</th>
+                      <th>Approved</th>
+                      <th>Delivered</th>
+                      <th>Qty Var.</th>
+                      <th>Approved ₱ → Billed ₱</th>
+                      <th>₱ Impact</th>
+                      <th>AB Web Record / Status</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div id="poView-deliveries" class="hidden">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                <div class="small muted">Real-time synced from <code>https://app.abgadgetz.com.ph/panel/deliveries</code> (auto-checked every 15s locally / on Sync Now).</div>
+                <select id="abDeliveryBranchFilter" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="ALL">All Branches</option>
+                  <option value="br-molave">Molave</option>
+                  <option value="br-tambulig">Tambulig</option>
+                  <option value="br-bonifacio">Bonifacio</option>
+                </select>
+              </div>
+              <div class="table-wrap" style="max-height:360px;overflow-y:auto;">
+                <table class="data-table" id="abDeliveriesTable">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Delivery #</th>
+                      <th>Branch</th>
+                      <th>Status</th>
+                      <th>Delivered / Received</th>
+                      <th>Items Summary</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sub-panel" style="padding:12px;margin-bottom:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+            <strong style="font-size:12px;letter-spacing:0.6px;color:var(--muted);">ORDER FROM &amp; PLAN PRIORITY</strong>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <select id="restockPriorityMode" style="width:auto;padding:5px 10px;font-size:12px;" title="How BUILD PLAN ranks and allocates your Net Order Budget">
+                <option value="LOW_END_DEMAND">Priority: Low-End Cellphones + Store Demand</option>
+                <option value="DEMAND_FIRST">Priority: Highest Store Demand First</option>
+                <option value="SAVINGS_FIRST">Priority: Biggest Supplier Savings First</option>
+              </select>
+              <select id="restockTypeFilter" style="width:auto;padding:5px 10px;font-size:12px;">
+                <option value="Cellphones">Cellphones</option>
+                <option value="Accessories">Accessories</option>
+                <option value="ALL">All Products</option>
+              </select>
+            </div>
+          </div>
+          <div class="grid-2" style="gap:8px;margin-bottom:6px;" id="restockSupplierRadios">
+            <label style="display:flex;align-items:center;gap:8px;margin:0;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.03);cursor:pointer;font-size:13px;">
+              <input type="radio" name="restockSupplierMode" value="LOWEST" checked style="width:16px;height:16px;margin:0;accent-color:var(--gold);" />
+              <span>Lowest available price per model</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;margin:0;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.03);cursor:pointer;font-size:13px;">
+              <input type="radio" name="restockSupplierMode" value="AB" style="width:16px;height:16px;margin:0;accent-color:var(--gold);" />
+              <span>AB Main Supplier only</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;margin:0;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.03);cursor:pointer;font-size:13px;">
+              <input type="radio" name="restockSupplierMode" value="AK" style="width:16px;height:16px;margin:0;accent-color:var(--gold);" />
+              <span>A&amp;K only</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;margin:0;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.03);cursor:pointer;font-size:13px;">
+              <input type="radio" name="restockSupplierMode" value="ONLINE" style="width:16px;height:16px;margin:0;accent-color:var(--gold);" />
+              <span>Online Purchase only</span>
+            </label>
+          </div>
+          <p class="muted small" style="margin:4px 0 10px;">When a specific supplier is selected, models without that supplier's cost are excluded.</p>
+          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+            <div style="flex:1;min-width:200px;">
+              <label for="restockBudgetInput">NET ORDER BUDGET (₱)</label>
+              <input type="text" inputmode="decimal" id="restockBudgetInput" placeholder="Leave blank for no cap" />
+            </div>
+            <button type="button" id="buildRestockPlanBtn">BUILD PLAN</button>
+            <button type="button" id="previewRestockPlanBtn" class="secondary">PREVIEW / EXPORT</button>
+            <button type="button" id="saveNewRestockOrderBtn" class="secondary" title="Save selected items as an order on the main screen to edit supplier-approved prices and quantities">SAVE ORDER</button>
+          </div>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+          <div id="restockDraftSummary" class="muted small"></div>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <input type="search" id="restockSearchInput" placeholder="Search model..." style="width:150px;padding:5px 9px;font-size:12px;" />
+            <select id="restockBrandFilter" style="width:auto;padding:5px 9px;font-size:12px;">
+              <option value="ALL">All Brands</option>
+            </select>
+            <select id="restockShowFilter" style="width:auto;padding:5px 9px;font-size:12px;">
+              <option value="SELECTED">Selected / Budgeted Only</option>
+              <option value="ALL">All Low-Stock</option>
+              <option value="ZERO">Out of Stock (0) Only</option>
+              <option value="PENDING_COVERED">Has Pending Order Waiting Delivery</option>
+            </select>
+            <label style="display:flex;align-items:center;gap:5px;margin:0;font-size:12px;cursor:pointer;" title="Subtract pending orders waiting for delivery from Restock quantities">
+              <input type="checkbox" id="restockDeductPendingChk" checked style="width:15px;height:15px;margin:0;accent-color:var(--gold);" />
+              <span>Consider Pending Orders</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:5px;margin:0;font-size:12px;cursor:pointer;" title="Auto-hide old web-synced models with 0 stock and 0 sales/reorders">
+              <input type="checkbox" id="restockExcludeObsoleteChk" checked style="width:15px;height:15px;margin:0;accent-color:var(--gold);" />
+              <span>Hide Obsolete / Non-Moving</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:5px;margin:0;font-size:12px;cursor:pointer;">
+              <input type="checkbox" id="reorderSelectAllChk" style="width:15px;height:15px;margin:0;accent-color:var(--gold);" />
+              <span>Select All Visible</span>
+            </label>
+          </div>
+        </div>
+        <div id="restockObsoleteBanner" class="sub-panel hidden" style="padding:8px 12px;margin-bottom:8px;font-size:12px;border-left:3px solid #f59e0b;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;"></div>
+        <div id="restockObsoletePanel" class="sub-panel hidden" style="padding:10px;margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+            <strong style="font-size:12.5px;">Obsolete &amp; Non-Moving Web-Synced Products (0 Sales / No Reorders)</strong>
+            <button type="button" id="markAllObsoletePhaseoutBtn" class="danger" style="padding:5px 10px;font-size:11px;min-height:0;">MARK ALL DEAD (0 STOCK) AS PHASEOUT</button>
+          </div>
+          <div class="table-wrap" style="max-height:260px;overflow-y:auto;">
+            <table class="data-table" id="restockObsoleteTable">
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th>Stock (All Branches)</th>
+                  <th>Sales / Movements</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div id="reorderCardGrid" class="brand-grid"></div>
+      </div>
+
+      <!-- Tool Panel: Website vs 3-Supplier Cost Comparison & Restock Impact -->
+      <div id="tool-costcompare" class="sub-panel hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+          <div>
+            <h3 style="margin:0;">Website Cost vs 3-Supplier Cost Analysis</h3>
+            <p class="muted small" style="margin:3px 0 0;">Compares AB Website recorded cost against AB Main Supplier, A&amp;K, and Online Purchase (shared across <strong>all branches</strong>)—and highlights which products save money when reordering.</p>
+          </div>
+          <button type="button" id="applyCostPriorityRestockBtn" style="padding:7px 12px;font-size:12px;">OPEN IN RESTOCK PLAN</button>
+        </div>
+
+        <div class="summary-grid" id="costCompareSummaryGrid" style="margin-bottom:12px;"></div>
+        <div id="costCompareInsightBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12.5px;border-left:3px solid var(--gold);"></div>
+
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+          <input type="search" id="costCompareSearch" placeholder="Search model or brand..." style="width:180px;padding:6px 10px;font-size:12px;" />
+          <select id="costCompareType" style="width:auto;padding:6px 10px;font-size:12px;">
+            <option value="Cellphones">Cellphones</option>
+            <option value="Accessories">Accessories</option>
+            <option value="ALL">All Products</option>
+          </select>
+          <select id="costCompareStockFilter" style="width:auto;padding:6px 10px;font-size:12px;">
+            <option value="IN_STOCK">Available / Has Units Left (&gt; 0)</option>
+            <option value="ALL">All Stock Status</option>
+            <option value="OUT_OF_STOCK">Out of Stock (0)</option>
+          </select>
+          <select id="costCompareFilter" style="width:auto;padding:6px 10px;font-size:12px;">
+            <option value="ALL">All Products</option>
+            <option value="SAVINGS">Supplier Cheaper than Website</option>
+            <option value="OVERPAY">Website Cheaper than Suppliers</option>
+            <option value="LOW_STOCK_SAVINGS">Low-Stock + Savings (Priority Order)</option>
+            <option value="MISSING">Missing Supplier Cost</option>
+          </select>
+          <select id="costCompareSort" style="width:auto;padding:6px 10px;font-size:12px;">
+            <option value="SAVINGS_DESC">Sort: Biggest Savings First</option>
+            <option value="MARGIN_DESC">Sort: Highest Margin % First</option>
+            <option value="NEED_SAVINGS">Sort: Restock Priority (Low Stock + Savings)</option>
+            <option value="MODEL_ASC">Sort: Model A–Z</option>
+          </select>
+        </div>
+
         <div class="table-wrap">
-          <table class="data-table" id="transferTable">
+          <table class="data-table" id="costCompareTable">
             <thead>
               <tr>
                 <th>Model</th>
-                <th>From Branch</th>
-                <th>To Branch</th>
-                <th>Suggested Transfer</th>
+                <th>Current Price &amp; Margin</th>
+                <th>AB Website Cost</th>
+                <th>AB Main</th>
+                <th>A&amp;K</th>
+                <th>Online</th>
+                <th>Best Supplier &amp; Diff</th>
+                <th>Restock Analysis</th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -263,6 +653,297 @@
       <div id="brandGrid" class="brand-grid"></div>
     </section>
 
+    <!-- TAB: ADMIN SALES SUMMARY (DAILY & MONTHLY CASH SALES) -->
+    <section id="tab-sales" class="tab-panel card">
+      <div class="sub-panel">
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+          <div>
+            <h3 style="margin:0;">Daily &amp; Accumulated Cash Sales (All Branches)</h3>
+            <p class="muted small" style="margin:3px 0 0;">Live branch cash sales summary by day, month, or custom date range (net of cash discount).</p>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span id="salesLiveStatus" class="badge badge-ok" style="font-size:11px;">● LIVE</span>
+            <button type="button" id="salesRefreshBtn" class="secondary" style="padding:6px 12px;font-size:12px;">Refresh</button>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">
+          <div>
+            <label for="salesMonthInput">MONTH</label>
+            <div style="display:flex;align-items:center;gap:4px;">
+              <button type="button" id="salesPrevMonthBtn" class="secondary" style="padding:6px 9px;font-size:13px;" title="Previous Month">‹</button>
+              <input type="month" id="salesMonthInput" style="width:auto;padding:6px 8px;font-size:12px;" />
+              <button type="button" id="salesNextMonthBtn" class="secondary" style="padding:6px 9px;font-size:13px;" title="Next Month">›</button>
+            </div>
+          </div>
+          <div>
+            <label>YEAR VIEW</label>
+            <div style="display:flex;align-items:center;gap:4px;">
+              <button type="button" id="salesPrevYearBtn" class="secondary" style="padding:6px 9px;font-size:13px;" title="Previous Year">‹</button>
+              <button type="button" id="salesYearBtn" class="secondary" style="padding:6px 10px;font-size:12px;font-weight:700;min-width:60px;" title="Show full year">2026</button>
+              <button type="button" id="salesNextYearBtn" class="secondary" style="padding:6px 9px;font-size:13px;" title="Next Year">›</button>
+            </div>
+          </div>
+          <div>
+            <label for="salesStart">FROM</label>
+            <input type="date" id="salesStart" style="width:auto;padding:6px 10px;font-size:12px;" />
+          </div>
+          <div>
+            <label for="salesEnd">TO</label>
+            <input type="date" id="salesEnd" style="width:auto;padding:6px 10px;font-size:12px;" />
+          </div>
+          <div>
+            <label for="salesTypeFilter">PRODUCT TYPE</label>
+            <select id="salesTypeFilter" style="width:auto;padding:6px 10px;font-size:12px;">
+              <option value="ALL">All Products</option>
+              <option value="Cellphones">Cellphones</option>
+              <option value="Accessories">Accessories</option>
+            </select>
+          </div>
+          <button type="button" id="salesApplyBtn" style="padding:7px 14px;font-size:12px;">APPLY RANGE</button>
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;" id="salesToolsBar">
+          <button type="button" class="sales-tool-btn active" data-salestool="summary" style="padding:7px 12px;font-size:12px;">DAILY &amp; MONTHLY CASH</button>
+          <button type="button" class="secondary sales-tool-btn" data-salestool="cashpnl" style="padding:7px 12px;font-size:12px;">CASH SALES P&amp;L</button>
+          <button type="button" class="secondary sales-tool-btn" data-salestool="installment" style="padding:7px 12px;font-size:12px;">INSTALLMENT (ACCRUAL)</button>
+          <button type="button" class="secondary sales-tool-btn" data-salestool="consolidated" style="padding:7px 12px;font-size:12px;border-color:var(--gold);color:var(--gold-bright);">CONSOLIDATED P&amp;L (REAL NET INCOME)</button>
+          <button type="button" class="secondary sales-tool-btn" data-salestool="rebates" style="padding:7px 12px;font-size:12px;">REBATES &amp; PENALTIES</button>
+          <button type="button" class="secondary sales-tool-btn" data-salestool="charts" style="padding:7px 12px;font-size:12px;">CHARTS (MONTHLY &amp; YEARLY)</button>
+        </div>
+
+        <div id="salesTool-summary">
+          <div class="summary-grid" id="salesKpiGrid" style="margin-bottom:14px;"></div>
+
+          <h4 style="margin:0 0 8px;color:var(--gold-bright);">Daily Cash Sales by Branch</h4>
+          <div class="table-wrap" style="margin-bottom:16px;">
+            <table class="data-table" id="salesDailyTable">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Molave</th>
+                  <th>Tambulig</th>
+                  <th>Bonifacio</th>
+                  <th>Daily Total</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+
+          <h4 style="margin:0 0 8px;color:var(--gold-bright);">Monthly Accumulated Cash Sales by Branch</h4>
+          <div class="table-wrap">
+            <table class="data-table" id="salesMonthlyTable">
+              <thead>
+                <tr>
+                  <th>Month</th>
+                  <th>Molave</th>
+                  <th>Tambulig</th>
+                  <th>Bonifacio</th>
+                  <th>Monthly Total</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- SALES TOOL 2: CASH SALES P&L (GROSS CASH SALES -> NET INCOME PER BRANCH) -->
+        <div id="salesTool-cashpnl" class="hidden">
+          <div id="cashPnlAuditBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--green);"></div>
+          <div class="table-wrap">
+            <table class="data-table" id="salesCashPnlTable">
+              <thead>
+                <tr>
+                  <th>Cash Sales Income Statement</th>
+                  <th>Bonifacio</th>
+                  <th>Molave</th>
+                  <th>Tambulig</th>
+                  <th>Total (All Branches)</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- SALES TOOL 3: INSTALLMENT SALES (ACCRUAL METHOD P&L vs CASH-PAYMENT BASIS) -->
+        <div id="salesTool-installment" class="hidden">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+            <div>
+              <h4 style="margin:0;color:var(--gold-bright);">Installment Sales Income Statement — Accrual Method (PFRS 15 / Effective Interest)</h4>
+              <p class="muted small" style="margin:2px 0 0;">Recognizes merchandising profit at release and accrues interest monthly as earned (not when cash is collected), minus a bad-debt provision.</p>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <label for="accrualBadDebtPct" style="margin:0;font-size:11px;color:var(--muted);">MONTHLY BAD DEBT (% of New Principal):</label>
+              <input type="number" id="accrualBadDebtPct" value="3" min="0" max="30" step="0.5" style="width:60px;padding:4px 6px;font-size:12px;text-align:center;" />
+            </div>
+          </div>
+
+          <div class="table-wrap" style="margin-bottom:12px;">
+            <table class="data-table" id="salesInstallmentAccrualTable">
+              <thead>
+                <tr>
+                  <th>Installment Accrual P&amp;L Line Item</th>
+                  <th>Bonifacio</th>
+                  <th>Molave</th>
+                  <th>Tambulig</th>
+                  <th>Total (All Branches)</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+
+          <div id="installmentAccrualGuide" class="sub-panel" style="padding:12px;font-size:12px;border-left:3px solid var(--gold);line-height:1.55;"></div>
+        </div>
+
+        <!-- SALES TOOL 4: CONSOLIDATED CASH + INSTALLMENT P&L (REAL NET INCOME, EXPENSES DEDUCTED ONCE) -->
+        <div id="salesTool-consolidated" class="hidden">
+          <div id="consolidatedPnlBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--gold);"></div>
+          <div class="table-wrap" style="margin-bottom:16px;">
+            <table class="data-table" id="salesConsolidatedTable">
+              <thead>
+                <tr>
+                  <th>Consolidated Income Statement (Cash + Installment)</th>
+                  <th>Bonifacio</th>
+                  <th>Molave</th>
+                  <th>Tambulig</th>
+                  <th>Total (All Branches)</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+
+          <div class="sub-panel" style="padding:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+              <div>
+                <h4 style="margin:0;color:var(--gold-bright);">Restated Historical Net Income (Opening Allowance Spread)</h4>
+                <p class="muted small" style="margin:2px 0 0;">Spreads the One-Time Opening Bad Debt Allowance back to historical months as if it had been recorded from the beginning.</p>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <select id="restatedGroupMode" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="MONTHLY">Monthly (All History)</option>
+                  <option value="ANNUAL">Annual (By Year)</option>
+                </select>
+                <select id="restatedBranchFilter" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="ALL">All Branches</option>
+                  <option value="br-bonifacio">Bonifacio</option>
+                  <option value="br-molave">Molave</option>
+                  <option value="br-tambulig">Tambulig</option>
+                </select>
+                <select id="restatedSpreadMode" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="VINTAGE">Spread by Origination Period (Exact Vintage)</option>
+                  <option value="EVEN">Spread Evenly Across All Periods</option>
+                </select>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table" id="salesHistoricalRestatedTable">
+                <thead>
+                  <tr>
+                    <th id="restatedPeriodHeader">Month</th>
+                    <th>Cash GP</th>
+                    <th>Inst. GP + Accrued Int.</th>
+                    <th>Operating Expenses</th>
+                    <th>Unadjusted Net Income</th>
+                    <th>Spread Bad Debt</th>
+                    <th>Corrected Historical Net Income</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- SALES TOOL 5: GRAPHICAL COMPARISON (MONTHLY & YEARLY PER BRANCH & ALL BRANCHES) -->
+        <div id="salesTool-charts" class="hidden">
+          <div class="sub-panel" style="padding:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+              <div>
+                <h4 style="margin:0;color:var(--gold-bright);">Graphical Sales &amp; Profit Comparison</h4>
+                <p class="muted small" style="margin:2px 0 0;">Compare monthly or yearly performance across Molave, Tambulig, Bonifacio, and All Branches.</p>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <select id="salesChartPeriod" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="MONTHLY">Monthly Comparison</option>
+                  <option value="YEARLY">Yearly Comparison</option>
+                </select>
+                <select id="salesChartMetric" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="NET_CASH">Net Cash Sales</option>
+                  <option value="GROSS_CASH">Gross Cash Sales (SRP)</option>
+                  <option value="CASH_GP">True Cash Sales Profit</option>
+                  <option value="CONSOLIDATED_NET">Consolidated Net Income</option>
+                </select>
+                <select id="salesChartBranch" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="GROUPED">All Branches (Side-by-Side)</option>
+                  <option value="TOTAL">Total Combined (All Branches)</option>
+                  <option value="br-molave">Molave Only</option>
+                  <option value="br-tambulig">Tambulig Only</option>
+                  <option value="br-bonifacio">Bonifacio Only</option>
+                </select>
+              </div>
+            </div>
+            <div id="salesChartLegend" style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-bottom:10px;"></div>
+            <div id="salesChartContainer" style="overflow-x:auto;padding-bottom:8px;"></div>
+            <div id="salesChartAnalysisBox" class="sub-panel" style="margin-top:12px;padding:12px;font-size:12.5px;border-left:3px solid var(--gold);line-height:1.55;"></div>
+          </div>
+        </div>
+
+        <!-- SALES TOOL 6: REBATES & PENALTIES COMPARATIVE REPORT (MONTHLY & ANNUAL) -->
+        <div id="salesTool-rebates" class="hidden">
+          <div class="sub-panel" style="padding:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+              <div>
+                <h4 style="margin:0;color:var(--gold-bright);">Rebates &amp; Penalties Comparative Analysis (2.5% Auto-Deducted Detection)</h4>
+                <p class="muted small" style="margin:2px 0 0;">Detects hidden 2.5% early-payment rebates auto-deducted by AB Web before cash posting, computes unrecorded Principal profit overstatement (~67%), and compares against late Penalties &amp; OpEx.</p>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <select id="rebatesDetectionMode" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="DETECTED">Detected 2.5% Rebates (Non-₱5 Fingerprint)</option>
+                  <option value="CEILING">Ceiling Estimate (All No-Penalty = Early 2.5%)</option>
+                  <option value="RECORDED">AB Web Recorded Only (Raw ₱0)</option>
+                </select>
+                <select id="rebatesGroupMode" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="MONTHLY">Monthly Comparison</option>
+                  <option value="ANNUAL">Annual Comparison (By Year)</option>
+                </select>
+                <select id="rebatesBranchFilter" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="ALL">All Branches</option>
+                  <option value="br-bonifacio">Bonifacio</option>
+                  <option value="br-molave">Molave</option>
+                  <option value="br-tambulig">Tambulig</option>
+                </select>
+              </div>
+            </div>
+            <div class="summary-grid" id="rebatesKpiGrid" style="margin-bottom:12px;"></div>
+            <div id="rebatesInsightBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--gold);line-height:1.55;"></div>
+            <div class="table-wrap">
+              <table class="data-table" id="salesRebatesTable">
+                <thead>
+                  <tr>
+                    <th id="rebatesPeriodHdr">Month</th>
+                    <th>Branch</th>
+                    <th>Payment Events</th>
+                    <th>Penalties (+Income)</th>
+                    <th>2.5% Rebates (−Income)</th>
+                    <th>Hidden Profit Adj (~67% Prin)</th>
+                    <th>Net Impact (Pen − Reb)</th>
+                    <th>Operating Expenses</th>
+                    <th>Expense Offset %</th>
+                    <th>True Fin. Income</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- TAB: RECEIVABLES & PAST DUES -->
     <section id="tab-receivables" class="tab-panel card">
       <div class="sub-panel">
@@ -294,6 +975,31 @@
           </div>
         </div>
         <div class="summary-grid" id="receivablesKpiGrid" style="grid-template-columns:repeat(4,minmax(0,1fr));"></div>
+      </div>
+
+      <div class="sub-panel" id="receivablesAgingPanel">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+          <div>
+            <h3 style="margin:0;">Past-Due Aging, Risk Exposure &amp; Bad Debt Allowance (Synced with Sales P&amp;L)</h3>
+            <p class="muted small" style="margin:3px 0 0;">5-tier PFRS 9 risk matrix: 1–30d (5% Remind), 31–60d (20% CI Visit), 61–90d (50% Demand / Non-Accrual), 91–180d (80% Repo Priority), 180+d (95% Write-Off).</p>
+          </div>
+          <div id="receivablesAgingSummaryPill" class="badge badge-warn" style="font-size:11.5px;"></div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" id="receivablesAgingTable">
+            <thead>
+              <tr>
+                <th>Aging Risk Tier</th>
+                <th>Provision Rate</th>
+                <th>Accounts</th>
+                <th>Past-Due Balance</th>
+                <th>Required Allowance</th>
+                <th>Risk Management Action</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </div>
 
       <div class="sub-panel">
@@ -364,6 +1070,15 @@
           </div>
           <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
             <div>
+              <label for="finBranchFilter">BRANCH</label>
+              <select id="finBranchFilter" style="width:auto;">
+                <option value="">Total (All Branches)</option>
+                <option value="br-molave">Molave</option>
+                <option value="br-tambulig">Tambulig</option>
+                <option value="br-bonifacio">Bonifacio</option>
+              </select>
+            </div>
+            <div>
               <label for="finStart">FROM</label>
               <input type="date" id="finStart" style="width:auto;" />
             </div>
@@ -376,6 +1091,30 @@
         </div>
 
         <div class="summary-grid" id="financeKpiGrid" style="grid-template-columns:repeat(4,minmax(0,1fr));"></div>
+      </div>
+
+      <div class="sub-panel" id="financeIncomeStatementCard" style="margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+          <div>
+            <h3 style="margin:0;">Comparative Income Statement (Proper P&amp;L vs AB Web Dashboard)</h3>
+            <p class="muted small" style="margin:3px 0 0;">Separates true Sales Revenue, COGS, Financing Income, and Expenses—and spots why AB Web's "Gross Sales" differs (Cash Inflow vs Revenue).</p>
+          </div>
+        </div>
+        <div id="financeAnalysisNote" class="sub-panel" style="padding:10px 12px;margin-bottom:10px;font-size:12px;border-left:3px solid var(--gold);"></div>
+        <div class="table-wrap">
+          <table class="data-table" id="financeIncomeStmtTable">
+            <thead>
+              <tr>
+                <th>Income Statement Line Item</th>
+                <th>Bonifacio</th>
+                <th>Molave</th>
+                <th>Tambulig</th>
+                <th>Total (All Branches)</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </div>
 
       <div class="grid-2">
@@ -449,31 +1188,6 @@
               <tbody></tbody>
             </table>
           </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- TAB 2: STOCK CHANGES (PHOTOS MANAGER ONLY) -->
-    <section id="tab-stockChanges" class="tab-panel card">
-      <!-- PHOTOS -->
-      <div id="sc-photos" class="sc-panel">
-        <div class="sub-panel">
-          <h3>Product Photos Manager</h3>
-          <p class="muted small">Right-click any product photo online → <strong>Copy image address</strong>, then paste the URL below to add it to your Inventory &amp; Customer Catalog.</p>
-          <div style="margin-bottom:10px;">
-            <label for="photoProduct">Select Product</label>
-            <select id="photoProduct"></select>
-          </div>
-          <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">
-            <div style="flex:1;min-width:240px;">
-              <label for="photoUrlInput">Paste Image Address (URL)</label>
-              <input type="url" id="photoUrlInput" placeholder="https://..." />
-            </div>
-            <button type="button" id="addPhotoBtn">ADD PHOTO</button>
-            <button type="button" class="publish-github-btn secondary" style="border-color:var(--gold);color:var(--gold-bright);">🚀 PUBLISH TO LIVE CATALOGS</button>
-          </div>
-          <div id="photoPreviewGrid" style="display:flex;gap:10px;flex-wrap:wrap;"></div>
-          <div id="photoMsg" class="status-msg"></div>
         </div>
       </div>
     </section>
@@ -563,7 +1277,7 @@
         </div>
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
           <p class="muted small" id="catalogBranchMeta" style="margin:0;"></p>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          <div class="admin-only-el" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
             <button type="button" class="publish-github-btn" style="padding:5px 10px;border-radius:7px;font-size:11px;">🚀 Publish to Live Catalogs</button>
             <a href="https://ab-gadgetz.github.io/molave/" target="_blank" class="secondary" style="padding:4px 9px;border-radius:7px;font-size:11px;text-decoration:none;border:1px solid var(--border-soft);color:var(--gold-bright);">Molave Live ↗</a>
             <a href="https://ab-gadgetz.github.io/tambulig/" target="_blank" class="secondary" style="padding:4px 9px;border-radius:7px;font-size:11px;text-decoration:none;border:1px solid var(--border-soft);color:var(--gold-bright);">Tambulig Live ↗</a>
@@ -580,7 +1294,7 @@
     <section id="tab-activity" class="tab-panel card">
       <div class="sub-panel">
         <h3>Sales Summary &amp; Activity Log</h3>
-        <div class="grid-3" style="margin-bottom:10px;">
+        <div class="act-date-bar" style="margin-bottom:10px;">
           <div>
             <label for="actStart">FROM</label>
             <input type="date" id="actStart" />
@@ -589,8 +1303,10 @@
             <label for="actEnd">TO</label>
             <input type="date" id="actEnd" />
           </div>
-          <div style="display:flex;align-items:flex-end;">
-            <button type="button" id="refreshActivityBtn" style="width:100%;">APPLY DATES</button>
+          <div class="act-date-nav-wrap" style="display:flex;align-items:flex-end;gap:6px;">
+            <button type="button" id="actPrevDayBtn" class="secondary" title="Previous day (Yesterday)" aria-label="Previous day" style="padding:8px 12px;font-size:15px;font-weight:800;">‹</button>
+            <button type="button" id="refreshActivityBtn" style="flex:1;">APPLY DATES</button>
+            <button type="button" id="actNextDayBtn" class="secondary" title="Next day" aria-label="Next day" style="padding:8px 12px;font-size:15px;font-weight:800;">›</button>
           </div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
@@ -606,7 +1322,13 @@
           </div>
         </div>
 
-        <div class="summary-grid" id="activityViewsGrid" style="grid-template-columns:repeat(4,1fr);margin-bottom:10px;"></div>
+        <div style="margin-bottom:8px;">
+          <button type="button" id="toggleCatalogViewsBtn" class="secondary" aria-expanded="false" style="width:100%;display:flex;justify-content:space-between;align-items:center;padding:7px 12px;font-size:12px;font-weight:700;border-radius:9px;">
+            <span id="catalogViewsToggleLabel">Catalog Views (0 views)</span>
+            <span id="catalogViewsToggleArrow">▼</span>
+          </button>
+          <div class="summary-grid hidden" id="activityViewsGrid" style="grid-template-columns:repeat(4,1fr);margin-top:6px;"></div>
+        </div>
         <div class="summary-grid" id="activitySalesGrid" style="grid-template-columns:repeat(4,1fr);"></div>
         <div id="installmentDpSummary" class="sub-panel hidden" style="margin-bottom:10px;border-color:var(--gold);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
           <div>
@@ -622,6 +1344,69 @@
             <tbody></tbody>
           </table>
         </div>
+      </div>
+    </section>
+
+    <!-- TAB 8: STAFF PINS (ADMIN ONLY) -->
+    <section id="tab-staffPins" class="tab-panel card">
+      <div class="sub-panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+          <div>
+            <h3 style="margin:0;">Staff Portal PIN Settings</h3>
+            <p class="muted small" style="margin:4px 0 0;">Set a different 6-digit PIN for each branch and role (Cashier &amp; Credit Investigator). Staff can only view and download PDFs.</p>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <a href="https://ab-gadgetz.github.io/staff/" target="_blank" class="secondary" style="padding:7px 12px;border-radius:8px;font-size:12px;text-decoration:none;border:1px solid var(--border-soft);color:var(--gold-bright);">Open Staff Portal ↗</a>
+          </div>
+        </div>
+
+        <div class="grid-2" style="margin-bottom:14px;">
+          <div class="sub-panel">
+            <h4 style="margin:0 0 10px;color:var(--gold-bright);">Cashier PINs (Inventory &amp; Branch Catalog)</h4>
+            <div class="staff-pin-row">
+              <label for="pin_CASHIER_br-molave">MOLAVE CASHIER PIN</label>
+              <input type="text" id="pin_CASHIER_br-molave" inputmode="numeric" maxlength="6" pattern="\d{6}" placeholder="6-digit PIN (e.g. 111111)" />
+            </div>
+            <div class="staff-pin-row">
+              <label for="pin_CASHIER_br-tambulig">TAMBULIG CASHIER PIN</label>
+              <input type="text" id="pin_CASHIER_br-tambulig" inputmode="numeric" maxlength="6" pattern="\d{6}" placeholder="6-digit PIN (e.g. 112222)" />
+            </div>
+            <div class="staff-pin-row">
+              <label for="pin_CASHIER_br-bonifacio">BONIFACIO CASHIER PIN</label>
+              <input type="text" id="pin_CASHIER_br-bonifacio" inputmode="numeric" maxlength="6" pattern="\d{6}" placeholder="6-digit PIN (e.g. 113333)" />
+            </div>
+          </div>
+
+          <div class="sub-panel">
+            <h4 style="margin:0 0 10px;color:var(--gold-bright);">Credit Investigator PINs (Receivables &amp; Branch Catalog)</h4>
+            <div class="staff-pin-row">
+              <label for="pin_CI_br-molave">MOLAVE CREDIT INVESTIGATOR PIN</label>
+              <input type="text" id="pin_CI_br-molave" inputmode="numeric" maxlength="6" pattern="\d{6}" placeholder="6-digit PIN (e.g. 221111)" />
+            </div>
+            <div class="staff-pin-row">
+              <label for="pin_CI_br-tambulig">TAMBULIG CREDIT INVESTIGATOR PIN</label>
+              <input type="text" id="pin_CI_br-tambulig" inputmode="numeric" maxlength="6" pattern="\d{6}" placeholder="6-digit PIN (e.g. 222222)" />
+            </div>
+            <div class="staff-pin-row">
+              <label for="pin_CI_br-bonifacio">BONIFACIO CREDIT INVESTIGATOR PIN</label>
+              <input type="text" id="pin_CI_br-bonifacio" inputmode="numeric" maxlength="6" pattern="\d{6}" placeholder="6-digit PIN (e.g. 223333)" />
+            </div>
+          </div>
+        </div>
+
+        <div id="ghTokenWrap" class="sub-panel hidden" style="margin-bottom:12px;">
+          <label for="ghPublishTokenInput">GITHUB PUBLISH TOKEN (FOR NO-PC PHONE UPDATES)</label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:4px;">
+            <input type="password" id="ghPublishTokenInput" placeholder="Paste GitHub Token once to publish PINs from phone without PC" style="flex:1;min-width:220px;" />
+          </div>
+          <p class="muted small" style="margin:4px 0 0;">Saved only on this device. Leave blank if publishing from your PC.</p>
+        </div>
+
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+          <button type="button" id="saveStaffPinsBtn">SAVE STAFF PINS</button>
+          <button type="button" class="secondary publish-github-btn" style="border-color:var(--gold);color:var(--gold-bright);">🚀 Publish PINs to Online Staff Portal</button>
+        </div>
+        <div id="staffPinsMsg" class="status-msg" style="margin-top:10px;"></div>
       </div>
     </section>
     </div>
@@ -719,6 +1504,130 @@
     </div>
   </div>
 
-  <script src="../app.js"></script>
+  <!-- ADMIN PRODUCT PHOTOS MODAL (CLICK CARD / THUMBNAIL IN INVENTORY) -->
+  <div id="adminPhotoModal" class="calc-modal hidden" role="dialog" aria-modal="true">
+    <div class="calc-modal-sheet" style="max-width:640px;">
+      <div class="calc-modal-head">
+        <div style="min-width:0;">
+          <h3 id="adminPhotoModalTitle" style="margin:0;color:var(--gold-bright);">Product Photos</h3>
+          <div id="adminPhotoModalSub" class="small muted"></div>
+        </div>
+        <button type="button" id="closeAdminPhotoModalBtn" class="secondary" style="padding:6px 12px;">✕</button>
+      </div>
+
+      <p class="muted small" style="margin:0 0 10px;">Paste an image address (URL) to add photos, remove unwanted photos, or use <strong>◀ / ▶ / Make 1st</strong> to arrange which photo appears first.</p>
+
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">
+        <div style="flex:1;min-width:220px;">
+          <label for="photoUrlInput">Paste Image Address (URL)</label>
+          <input type="url" id="photoUrlInput" placeholder="https://..." />
+        </div>
+        <button type="button" id="addPhotoBtn">+ ADD PHOTO</button>
+        <button type="button" class="publish-github-btn secondary" style="border-color:var(--gold);color:var(--gold-bright);">🚀 Publish</button>
+      </div>
+
+      <div id="photoPreviewGrid" style="display:flex;gap:10px;flex-wrap:wrap;"></div>
+      <div id="photoMsg" class="status-msg" style="margin-top:10px;"></div>
+
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border-soft);">
+        <div style="font-size:11px;font-weight:800;letter-spacing:0.6px;color:var(--muted);margin-bottom:8px;">SUPPLIER COSTS (₱) — SAVED FOR PAST &amp; FUTURE ORDERS</div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:8px;">
+          <div>
+            <label for="modalCostAb" style="font-size:11px;">AB Main Supplier</label>
+            <input type="number" id="modalCostAb" min="0" step="0.01" placeholder="0" style="padding:6px 8px;font-size:12px;" />
+          </div>
+          <div>
+            <label for="modalCostAk" style="font-size:11px;">A&amp;K</label>
+            <input type="number" id="modalCostAk" min="0" step="0.01" placeholder="0" style="padding:6px 8px;font-size:12px;" />
+          </div>
+          <div>
+            <label for="modalCostOnline" style="font-size:11px;">Online Purchase</label>
+            <input type="number" id="modalCostOnline" min="0" step="0.01" placeholder="0" style="padding:6px 8px;font-size:12px;" />
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <button type="button" id="saveModalCostsBtn" style="padding:6px 14px;font-size:12px;">SAVE COSTS</button>
+          <span id="modalCostsMsg" class="small" style="color:var(--gold-bright);"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- REORDER PLAN PREVIEW MODAL (MATCHES APPS SCRIPT) -->
+  <div id="reorderPreviewModal" class="calc-modal hidden" role="dialog" aria-modal="true">
+    <div class="calc-modal-sheet" style="max-width:740px;background:#faf8f2;color:#1b1913;border:1px solid #d5ceb8;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+        <div>
+          <h3 style="margin:0;color:#1b1913;font-size:17px;letter-spacing:0.4px;">AB-GADGETZ · REORDER PLAN</h3>
+          <div id="reorderPreviewPrepared" style="font-size:12px;color:#6b6351;margin-top:2px;"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <label style="display:flex;align-items:center;gap:5px;margin:0;font-size:11px;font-weight:700;color:#1b1913;cursor:pointer;">
+            <input type="checkbox" id="reorderShowCostsChk" style="width:15px;height:15px;margin:0;accent-color:#8a6d1b;" />
+            SHOW COSTS
+          </label>
+          <button type="button" id="reorderPrintBtn" style="padding:6px 12px;font-size:11px;background:#fff;color:#1b1913;border:1px solid #ccc4ad;">PRINT</button>
+          <button type="button" id="closeReorderPreviewBtn" style="padding:6px 12px;font-size:11px;background:#fff;color:#1b1913;border:1px solid #ccc4ad;">CLOSE</button>
+        </div>
+      </div>
+
+      <div id="reorderPreviewMetrics" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;"></div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+        <strong style="font-size:12px;letter-spacing:0.6px;color:#4f493a;">SELECTED PRODUCTS</strong>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <button type="button" id="reorderCopyBtn" class="download-icon" title="Copy Reorder Request" aria-label="Copy Reorder Request" style="background:#1c212b;color:#fff;border-color:#2c3442;">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            <span>COPY</span>
+          </button>
+          <button type="button" id="reorderPdfBtn" class="download-icon" title="Download Reorder Plan PDF" aria-label="Download Reorder Plan PDF">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="#bd3b32" d="M4 2h11l5 5v15H4z"/>
+              <path fill="#fff" d="M14 2v6h6"/>
+              <text x="5.5" y="17" fill="#fff" font-size="6.5" font-family="Arial" font-weight="700">PDF</text>
+            </svg>
+            <span>PDF</span>
+          </button>
+          <button type="button" id="reorderExcelBtn" class="download-icon" title="Download Reorder Plan Excel" aria-label="Download Reorder Plan Excel">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="#1d6f42" d="M4 2h11l5 5v15H4z"/>
+              <path fill="#fff" d="M14 2v6h6"/>
+              <text x="5.8" y="17" fill="#fff" font-size="7" font-family="Arial" font-weight="700">X</text>
+            </svg>
+            <span>EXCEL</span>
+          </button>
+        </div>
+      </div>
+
+      <div id="reorderPreviewStatus" style="font-size:12px;font-weight:600;color:#1d6f42;margin-bottom:8px;"></div>
+      <div id="reorderPreviewBody" style="max-height:55vh;overflow-y:auto;padding-right:4px;"></div>
+
+      <div style="display:flex;gap:10px;margin-top:14px;">
+        <button type="button" id="reorderBackToEditBtn" style="flex:1;background:#e5e7eb;color:#1b1913;border:1px solid #cbd5e1;">BACK TO EDIT</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SALES LINE-ITEM AUDIT DRILL-DOWN MODAL -->
+  <div id="salesDrilldownModal" class="calc-modal hidden" role="dialog" aria-modal="true">
+    <div class="calc-modal-sheet" style="max-width:920px;">
+      <div class="calc-modal-head">
+        <div style="min-width:0;">
+          <h3 id="salesDrilldownTitle" style="margin:0;color:var(--gold-bright);">Line Item Breakdown</h3>
+          <div id="salesDrilldownSub" class="small muted"></div>
+        </div>
+        <button type="button" id="closeSalesDrilldownBtn" class="secondary" style="padding:6px 12px;">✕</button>
+      </div>
+      <div id="salesDrilldownFormula" class="sub-panel" style="padding:8px 12px;margin-bottom:10px;font-size:12px;border-left:3px solid var(--gold);"></div>
+      <div class="table-wrap" style="max-height:58vh;overflow-y:auto;">
+        <table class="data-table" id="salesDrilldownTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="../app.js?v=1795487777769"></script>
 </body>
 </html>

@@ -186,6 +186,29 @@
     </div>
   </div>
 
+  <!-- FLOATING COMPARE BAR (2 or 3 PRODUCTS) -->
+  <div id="pubCompareBar" class="pub-compare-bar hidden">
+    <div id="pubCompareItems" class="pub-compare-items"></div>
+    <div style="display:flex;gap:6px;flex-shrink:0;">
+      <button type="button" id="pubCompareClearBtn" class="secondary" style="padding:7px 10px;font-size:11.5px;">Clear</button>
+      <button type="button" id="pubCompareOpenBtn" style="padding:7px 12px;font-size:12px;font-weight:800;">Compare (0)</button>
+    </div>
+  </div>
+
+  <!-- PRODUCT COMPARE MODAL -->
+  <div id="pubCompareModal" class="calc-modal hidden" role="dialog" aria-modal="true">
+    <div class="calc-modal-sheet" style="max-width:760px;">
+      <div class="calc-modal-head">
+        <div>
+          <h3 style="margin:0;color:var(--gold-bright);">Compare Units</h3>
+          <div class="small muted">Side-by-side comparison with category winners</div>
+        </div>
+        <button type="button" id="closeCompareModalBtn" class="secondary" style="padding:6px 12px;">✕</button>
+      </div>
+      <div id="pubCompareTableWrap" style="overflow-x:auto;"></div>
+    </div>
+  </div>
+
   <script src="../catalog.js"></script>
 </body>
 </html>

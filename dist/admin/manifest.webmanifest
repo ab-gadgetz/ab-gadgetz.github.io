@@ -1,0 +1,17 @@
+{
+  "name": "AB Gadgetz Admin",
+  "short_name": "AB Admin",
+  "start_url": "/admin/",
+  "display": "standalone",
+  "background_color": "#15191f",
+  "theme_color": "#15191f",
+  "icons": [
+    {
+      "src": "/ab-logo-square.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "scope": "/admin/"
+}

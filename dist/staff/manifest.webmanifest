@@ -1,0 +1,17 @@
+{
+  "name": "AB Gadgetz Staff",
+  "short_name": "AB Staff",
+  "start_url": "/staff/",
+  "display": "standalone",
+  "background_color": "#15191f",
+  "theme_color": "#15191f",
+  "icons": [
+    {
+      "src": "/ab-logo-square.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "scope": "/staff/"
+}
