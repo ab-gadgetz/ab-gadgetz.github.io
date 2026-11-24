@@ -2113,10 +2113,15 @@ function buildPendingOrdersLookup() {
     if (label) pAgg.refs.add(label);
   };
 
-  const pendingStatuses = new Set(['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received']);
+  const pendingStatuses = new Set(['Sent to Supplier', 'Supplier Approved', 'At Warehouse (AB Web INITIAL)', 'Partially Received']);
+  const linkedAbRefs = new Set();
   for (const o of state.savedOrders || []) {
     if (!pendingStatuses.has(o.status)) continue;
+    for (const ref of String(o.abDeliveryRefs || '').split(',').map((s) => s.trim()).filter(Boolean)) {
+      linkedAbRefs.add(ref);
+    }
     for (const it of o.items || []) {
+      if (it.abDeliveryNo && it.abDeliveryNo !== 'PENDING IN AB WEB') linkedAbRefs.add(String(it.abDeliveryNo).trim());
       if (it.approved === false || it.isExtraItem) continue;
       const appQty = Math.max(0, Number(it.qty) || 0);
       const recQty =
@@ -2128,9 +2133,10 @@ function buildPendingOrdersLookup() {
     }
   }
 
-  // Also include any in-transit AB Web deliveries whose header status is not RECEIVED yet
+  // Also include unlinked AB Web deliveries whose header status is not RECEIVED yet (e.g. INITIAL at warehouse for pick-up)
   for (const d of state.abDeliveries || []) {
     if (String(d.status || '').toUpperCase() === 'RECEIVED') continue;
+    if (d.deliveryNo && linkedAbRefs.has(String(d.deliveryNo).trim())) continue;
     for (const dl of d.items || []) {
       if (dl.productId && (Number(dl.deliveredQty) || 0) > (Number(dl.receivedQty) || 0)) {
         addPending(dl.productId, d.branchId, (Number(dl.deliveredQty) || 0) - (Number(dl.receivedQty) || 0), d.deliveryNo);
@@ -2655,7 +2661,7 @@ function computeOrderSummaryMetrics(items, orderStatus = 'Supplier Approved') {
   let requestedTotal = 0;
   let approvedTotal = 0;
   let deliveredTotal = 0;
-  const isPendingStatus = ['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received'].includes(orderStatus);
+  const isPendingStatus = ['Sent to Supplier', 'Supplier Approved', 'At Warehouse (AB Web INITIAL)', 'Partially Received'].includes(orderStatus);
 
   for (const it of items || []) {
     const rq = Math.max(0, Number(it.requestedQty ?? it.qty) || 0);
@@ -2821,7 +2827,10 @@ function applyEditedPricesToLocalInventory(items) {
 }
 
 function reconcileStaticOrdersWithDeliveries(onlyPoId = null) {
-  const deliveries = (state.abDeliveries || []).filter((d) => String(d.status || '').toUpperCase() === 'RECEIVED');
+  const deliveries = (state.abDeliveries || [])
+    .filter((d) => ['INITIAL', 'RECEIVED'].includes(String(d.status || '').toUpperCase()))
+    .slice()
+    .sort((a, b) => String(a.deliveryDate || '').localeCompare(String(b.deliveryDate || '')) || (Number(a.id || a.portalDeliveryId) || 0) - (Number(b.id || b.portalDeliveryId) || 0));
   if (!deliveries.length) return 0;
   const orders = getLocalSavedOrders();
   const claimed = new Set();
@@ -2833,13 +2842,14 @@ function reconcileStaticOrdersWithDeliveries(onlyPoId = null) {
   const now = new Date().toISOString();
   for (const po of orders) {
     if (onlyPoId && po.id !== onlyPoId) continue;
-    if (!['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received', 'Received (Pending AB Web)'].includes(po.status)) continue;
+    if (!['Sent to Supplier', 'Supplier Approved', 'At Warehouse (AB Web INITIAL)', 'Partially Received', 'Received (Pending AB Web)'].includes(po.status)) continue;
     const orderDate = String(po.createdAt || '').slice(0, 10);
     const refs = new Set(String(po.abDeliveryRefs || '').split(',').map((s) => s.trim()).filter(Boolean));
     let changed = false;
     for (const deliv of deliveries) {
       if (orderDate && deliv.deliveryDate < orderDate) continue;
       if (claimed.has(deliv.deliveryNo) && !refs.has(deliv.deliveryNo)) continue;
+      const dStatus = String(deliv.status || '').toUpperCase();
       let matched = false;
       for (const dl of deliv.items || []) {
         if (!dl.productId) continue;
@@ -2852,16 +2862,21 @@ function reconcileStaticOrdersWithDeliveries(onlyPoId = null) {
         );
         if (!target) continue;
         matched = true;
-        if (target.abDeliveryNo !== deliv.deliveryNo) {
+        if (target.abDeliveryNo !== deliv.deliveryNo || target.abDeliveryStatus !== dStatus) {
           target.abDeliveryNo = deliv.deliveryNo;
-          target.receivedDate = target.receivedDate || deliv.deliveryDate;
-          if (target.receivedQty === undefined || target.receivedQty === null || target.receivedQty === '') {
-            target.receivedQty = Number(dl.receivedQty ?? dl.deliveredQty) || 0;
+          target.abDeliveryStatus = dStatus;
+          target.abDeliveryDate = deliv.deliveryDate;
+          target.abDeliveredQty = Number(dl.deliveredQty) || 0;
+          if (dStatus === 'RECEIVED') {
+            target.receivedDate = target.receivedDate || deliv.deliveryDate;
+            if (target.receivedQty === undefined || target.receivedQty === null || target.receivedQty === '') {
+              target.receivedQty = Number(dl.receivedQty ?? dl.deliveredQty) || 0;
+            }
+            if (target.receivedCost === undefined || target.receivedCost === null || target.receivedCost === '') {
+              target.receivedCost = Number(target.unitCost) || 0;
+            }
+            target.abReportedQty = Number(dl.receivedQty ?? dl.deliveredQty) || 0;
           }
-          if (target.receivedCost === undefined || target.receivedCost === null || target.receivedCost === '') {
-            target.receivedCost = Number(target.unitCost) || 0;
-          }
-          target.abReportedQty = Number(dl.receivedQty ?? dl.deliveredQty) || 0;
           changed = true;
         }
       }
@@ -2877,9 +2892,11 @@ function reconcileStaticOrdersWithDeliveries(onlyPoId = null) {
       const appItems = (po.items || []).filter((it) => it.approved !== false && (Number(it.qty) || 0) > 0);
       const anyRec = (po.items || []).some((it) => Number(it.receivedQty) > 0 || (it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== ''));
       const allDone = appItems.length > 0 && appItems.every((it) => it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== '');
+      const anyInitial = (po.items || []).some((it) => String(it.abDeliveryStatus || '').toUpperCase() === 'INITIAL' && it.abDeliveryNo);
       const hasMissingAb = (po.items || []).some((it) => Number(it.receivedQty) > 0 && (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB'));
       if (allDone) po.status = hasMissingAb ? 'Received (Pending AB Web)' : 'Received';
       else if (anyRec) po.status = 'Partially Received';
+      else if (anyInitial) po.status = 'At Warehouse (AB Web INITIAL)';
       updatedOrders++;
     }
   }
@@ -2894,10 +2911,10 @@ function renderSavedOrdersPanel() {
   const hdrEl = document.getElementById('savedOrdersSummaryHdr');
   const orders = state.savedOrders || [];
 
-  const pendingOrders = orders.filter((o) => ['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received'].includes(o.status));
+  const pendingOrders = orders.filter((o) => ['Sent to Supplier', 'Supplier Approved', 'At Warehouse (AB Web INITIAL)', 'Partially Received'].includes(o.status));
   const totalPendingUnits = pendingOrders.reduce((s, o) => s + (computeOrderSummaryMetrics(o.items, o.status).pendingUnits || 0), 0);
   const totalPendingCost = orders.reduce((s, o) => {
-    if (!['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received'].includes(o.status)) return s;
+    if (!['Sent to Supplier', 'Supplier Approved', 'At Warehouse (AB Web INITIAL)', 'Partially Received'].includes(o.status)) return s;
     for (const it of o.items || []) {
       if (it.approved === false || it.isExtraItem) continue;
       const app = Math.max(0, Number(it.qty) || 0);
@@ -2924,7 +2941,7 @@ function renderSavedOrdersPanel() {
     if (!orders.length) {
       hdrEl.textContent = 'Log pending orders, edit supplier approvals & reconcile deliveries';
     } else {
-      hdrEl.innerHTML = `${pendingOrders.length} pending (<strong style="color:#60a5fa;">${fmtNum(totalPendingUnits)} pcs / ${fmtCurrency(totalPendingCost)}</strong> on order) • Considers Restock automatically`;
+      hdrEl.innerHTML = `${pendingOrders.length} finalized pending (<strong style="color:#60a5fa;">${fmtNum(totalPendingUnits)} pcs / ${fmtCurrency(totalPendingCost)}</strong> on order) • Considers Restock automatically`;
     }
   }
 
@@ -2934,7 +2951,7 @@ function renderSavedOrdersPanel() {
   if (!listEl) return;
 
   if (!orders.length) {
-    listEl.innerHTML = '<div class="muted small" style="padding:6px 0;">No orders logged yet. Click <strong>+ LOG PENDING ORDER</strong>, <strong>PASTE EXCEL / TEXT</strong>, or build a Restock plan &amp; click <strong>SAVE ORDER</strong>.</div>';
+    listEl.innerHTML = '<div class="muted small" style="padding:6px 0;">No orders logged yet. Click <strong>+ LOG PENDING ORDER</strong>, <strong>PASTE EXCEL / TEXT</strong>, or build a Restock plan &amp; click <strong>SAVE PLAN</strong>.</div>';
     renderSavedOrderInlineEditor();
     return;
   }
@@ -2958,19 +2975,34 @@ function renderSavedOrdersPanel() {
         m.deliveredUnits > 0 || o.status === 'Received' || o.status === 'Received (Pending AB Web)' || o.status === 'Partially Received'
           ? ` → Delivered: <strong style="color:${m.qtyVariance === 0 ? 'var(--green)' : '#f59e0b'};">${fmtNum(m.deliveredUnits)} pcs</strong> (${fmtCurrency(m.deliveredTotal)}${m.qtyVariance !== 0 ? `, Var ${m.qtyVariance >= 0 ? '+' : ''}${m.qtyVariance} pcs` : ''})`
           : '';
+      const warehouseUnits = (o.items || [])
+        .filter((it) => String(it.abDeliveryStatus || '').toUpperCase() === 'INITIAL' && it.abDeliveryNo && (it.receivedQty === null || it.receivedQty === undefined || it.receivedQty === ''))
+        .reduce((s, it) => s + (Number(it.abDeliveredQty ?? it.qty) || 0), 0);
       const missingAbCount = (o.items || []).filter(
         (it) => Number(it.receivedQty) > 0 && (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB')
       ).length;
+      const missingFromPartialAb =
+        o.status !== 'Draft' && o.status !== 'Cancelled' && Boolean(o.abDeliveryRefs)
+          ? (o.items || []).filter((it) => it.approved !== false && !it.isExtraItem && (Number(it.qty) || 0) > 0 && !it.abDeliveryNo).length
+          : 0;
       const pendTag =
-        m.pendingUnits > 0
-          ? `<span class="badge badge-warn" style="font-size:10px;">⏳ ${fmtNum(m.pendingUnits)} pcs pending delivery</span>`
+        o.status === 'Draft'
+          ? `<span class="badge badge-warn" style="font-size:10px;">Not Yet Finalized</span>`
+          : m.pendingUnits > 0
+            ? `<span class="badge badge-warn" style="font-size:10px;">⏳ ${fmtNum(m.pendingUnits)} pcs pending delivery</span>`
+            : '';
+      const warehouseTag =
+        warehouseUnits > 0
+          ? `<span class="badge badge-warn" style="font-size:10px;background:rgba(96,165,250,0.18);color:#93c5fd;border-color:rgba(96,165,250,0.4);">🚚 ${fmtNum(warehouseUnits)} pcs @ Warehouse (For Pick-Up)</span>`
           : '';
       const abMissTag =
-        missingAbCount > 0
-          ? `<span class="badge badge-danger" style="font-size:10px;">${missingAbCount} line(s) not yet in AB Web</span>`
-          : o.abDeliveryRefs
-            ? `<span class="badge badge-ok" style="font-size:10px;">AB: ${o.abDeliveryRefs}</span>`
-            : '';
+        missingFromPartialAb > 0
+          ? `<span class="badge badge-danger" style="font-size:10px;">⚠ ${missingFromPartialAb} item(s) missing in AB Web deliveries</span>`
+          : missingAbCount > 0
+            ? `<span class="badge badge-danger" style="font-size:10px;">${missingAbCount} line(s) not yet in AB Web</span>`
+            : o.abDeliveryRefs
+              ? `<span class="badge badge-ok" style="font-size:10px;">AB: ${o.abDeliveryRefs}</span>`
+              : '';
       const dtLabel = String(o.createdAt || o.updatedAt || '').slice(0, 10);
       return `
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.03);">
@@ -2980,6 +3012,7 @@ function renderSavedOrdersPanel() {
               <strong style="font-size:13px;">${o.title}</strong>
               <span class="badge ${statusColor(o.status)}" style="font-size:10px;">${o.status}</span>
               ${pendTag}
+              ${warehouseTag}
               ${abMissTag}
             </div>
             <div class="small muted" style="margin-top:3px;">
@@ -2990,8 +3023,8 @@ function renderSavedOrdersPanel() {
             ${o.notes ? `<div class="small muted" style="margin-top:2px;">Note: ${o.notes}</div>` : ''}
           </div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            <button type="button" class="saved-po-edit-btn" data-poid="${o.id}" style="padding:5px 10px;font-size:11px;min-height:0;">EDIT / RECORD DELIVERY</button>
-            <button type="button" class="secondary saved-po-preview-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">PREVIEW</button>
+            <button type="button" class="saved-po-edit-btn" data-poid="${o.id}" style="padding:5px 10px;font-size:11px;min-height:0;">${o.status === 'Draft' ? 'EDIT / FINALIZE' : 'EDIT / RECORD DELIVERY'}</button>
+            <button type="button" class="secondary saved-po-preview-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">${o.status === 'Draft' ? 'PREVIEW / FINALIZE' : 'PREVIEW'}</button>
             <button type="button" class="secondary saved-po-copy-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">COPY</button>
             <button type="button" class="secondary saved-po-pdf-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">PDF</button>
             <button type="button" class="secondary saved-po-del-btn" data-poid="${o.id}" style="padding:5px 8px;font-size:11px;min-height:0;color:var(--danger);">✕</button>
@@ -3380,18 +3413,24 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
                       const recCostRaw = r.receivedCost !== undefined && r.receivedCost !== null && r.receivedCost !== '' ? Number(r.receivedCost) : curCost;
                       const delivQtyNum = recQtyRaw === '' ? 0 : Math.max(0, Number(recQtyRaw) || 0);
                       const hasRec = recQtyRaw !== '';
+                      const abStatusU = String(r.abDeliveryStatus || '').toUpperCase();
+                      const isWhInit = !hasRec && r.abDeliveryNo && r.abDeliveryNo !== 'PENDING IN AB WEB' && abStatusU === 'INITIAL';
                       const qVar = hasRec ? delivQtyNum - (isApp ? curQty : 0) : 0;
                       const cVar = hasRec ? recCostRaw - curCost : 0;
                       const varTag = hasRec
                         ? qVar === 0 && Math.abs(cVar) < 0.01
                           ? `<span style="color:var(--green);font-weight:700;font-size:10.5px;">✓ Match</span>`
                           : `<span style="color:${qVar < 0 || cVar > 0 ? '#ef4444' : '#f59e0b'};font-weight:700;font-size:10.5px;">${qVar !== 0 ? `${qVar > 0 ? '+' : ''}${qVar} pcs` : ''}${Math.abs(cVar) >= 0.01 ? ` ${cVar > 0 ? '+' : ''}${fmtCurrency(cVar)}/pc` : ''}</span>`
-                        : `<span class="muted" style="font-size:10px;">pending delivery</span>`;
+                        : isWhInit
+                          ? `<span style="color:#60a5fa;font-weight:700;font-size:10.5px;">🚚 @ Warehouse (${Number(r.abDeliveredQty ?? curQty)} pcs)</span>`
+                          : `<span class="muted" style="font-size:10px;">pending delivery</span>`;
                       const abTag = hasRec
                         ? r.abDeliveryNo && r.abDeliveryNo !== 'PENDING IN AB WEB'
                           ? `<span class="badge badge-ok" style="font-size:9.5px;">${r.abDeliveryNo}</span>`
                           : `<span class="badge badge-danger" style="font-size:9.5px;">Not in AB Web</span>`
-                        : '';
+                        : isWhInit
+                          ? `<span class="badge badge-warn" style="font-size:9.5px;background:rgba(96,165,250,0.18);color:#93c5fd;">${r.abDeliveryNo} (INITIAL)</span>`
+                          : '';
                       return `
                         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);font-size:12px;${isApp || isExtra ? '' : 'opacity:0.48;'}">
                           <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer;flex:1;min-width:190px;flex-wrap:wrap;">
@@ -3451,7 +3490,7 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
       <div>
         <label for="mainPoStatusSel" style="font-size:10.5px;">ORDER / DELIVERY STATUS</label>
         <select id="mainPoStatusSel" style="padding:5px 8px;font-size:12px;">
-          ${['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received', 'Received (Pending AB Web)', 'Received', 'Cancelled']
+          ${['Draft', 'Sent to Supplier', 'Supplier Approved', 'At Warehouse (AB Web INITIAL)', 'Partially Received', 'Received (Pending AB Web)', 'Received', 'Cancelled']
             .map((st) => `<option value="${st}" ${po.status === st ? 'selected' : ''}>${st}</option>`)
             .join('')}
         </select>
@@ -3689,7 +3728,7 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
     const missingAb = (po.items || []).some((it) => Number(it.receivedQty) > 0 && (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB'));
     if (!['Cancelled', 'Draft'].includes(status)) {
       if (allRec && status !== 'Received') status = missingAb ? 'Received (Pending AB Web)' : 'Received';
-      else if (anyRec && !allRec && ['Sent to Supplier', 'Supplier Approved'].includes(status)) status = 'Partially Received';
+      else if (anyRec && !allRec && ['Sent to Supplier', 'Supplier Approved', 'At Warehouse (AB Web INITIAL)'].includes(status)) status = 'Partially Received';
     }
     const refs = [...new Set((po.items || []).map((it) => String(it.abDeliveryNo || '').trim()).filter((r) => r && r !== 'PENDING IN AB WEB'))].join(', ');
 
@@ -3796,11 +3835,18 @@ async function matchSingleOrderWithAbWeb(poId = 'ALL') {
 function buildVarianceReportRows() {
   const orderFilter = document.getElementById('varianceOrderFilter')?.value || 'ALL';
   const typeFilter = document.getElementById('varianceTypeFilter')?.value || 'ALL';
-  const orders = (state.savedOrders || []).filter((o) => o.status !== 'Cancelled' && (orderFilter === 'ALL' || o.id === orderFilter));
+  const orders = (state.savedOrders || []).filter((o) => {
+    if (o.status === 'Cancelled') return false;
+    if (orderFilter !== 'ALL') return o.id === orderFilter;
+    return o.status !== 'Draft';
+  });
+
+  const abList = (state.abDeliveries || []).filter((d) => ['INITIAL', 'RECEIVED'].includes(String(d.status || '').toUpperCase()));
 
   const out = [];
   for (const o of orders) {
     const ordDate = String(o.createdAt || '').slice(0, 10);
+    const poHasAnyAbRef = Boolean(String(o.abDeliveryRefs || '').trim()) || (o.items || []).some((x) => Boolean(x.abDeliveryNo && x.abDeliveryNo !== 'PENDING IN AB WEB'));
     for (const it of o.items || []) {
       const reqQty = Math.max(0, Number(it.requestedQty ?? it.qty) || 0);
       const isApp = it.approved !== false && !it.isExtraItem;
@@ -3809,26 +3855,48 @@ function buildVarianceReportRows() {
       const hasRec = it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== '';
       const delQty = hasRec ? Math.max(0, Number(it.receivedQty) || 0) : 0;
       const delCost = hasRec ? Math.max(0, Number(it.receivedCost ?? appCost) || 0) : appCost;
-      const qtyVar = hasRec ? delQty - appQty : 0;
-      const unitPriceVar = hasRec ? delCost - appCost : 0;
-      const pesoImpact = hasRec ? delQty * delCost - appQty * appCost : 0;
       const abRef = String(it.abDeliveryNo || '').trim();
-      const missingInAb = hasRec && delQty > 0 && (!abRef || abRef === 'PENDING IN AB WEB');
+      const abStatus = String(it.abDeliveryStatus || (abRef && abRef !== 'PENDING IN AB WEB' ? 'RECEIVED' : '')).toUpperCase();
+      const hasAbRef = Boolean(abRef && abRef !== 'PENDING IN AB WEB');
+      const abQty = hasAbRef ? Number(it.abDeliveredQty ?? it.abReportedQty ?? (hasRec ? delQty : 0)) : 0;
+      const isWarehouseInitial = hasAbRef && abStatus === 'INITIAL' && !hasRec;
 
-      let rowStatus = 'Waiting Delivery';
+      const qtyVar = hasRec ? delQty - appQty : isWarehouseInitial ? abQty - appQty : 0;
+      const unitPriceVar = hasRec ? delCost - appCost : 0;
+      const pesoImpact = hasRec ? delQty * delCost - appQty * appCost : isWarehouseInitial ? (abQty - appQty) * appCost : 0;
+      const missingInAb = hasRec && delQty > 0 && !hasAbRef;
+      const notInAbDeliveries = isApp && appQty > 0 && !hasAbRef;
+      const hasBranchAbAfterOrder = abList.some((d) => (!ordDate || String(d.deliveryDate || '') >= ordDate) && (!it.branchId || d.branchId === it.branchId));
+      const confirmedMissingInAb = notInAbDeliveries && (poHasAnyAbRef || hasBranchAbAfterOrder || hasRec);
+
+      let rowStatus = 'Waiting AB Web Delivery';
       if (it.isExtraItem) rowStatus = 'Extra / Substituted';
       else if (!isApp) rowStatus = 'Cancelled by Supplier';
       else if (hasRec) {
         if (qtyVar < 0) rowStatus = `Short (${qtyVar})`;
         else if (qtyVar > 0) rowStatus = `Over (+${qtyVar})`;
         else if (Math.abs(unitPriceVar) >= 0.01) rowStatus = 'Price Diff';
+        else if (missingInAb) rowStatus = 'Received (Not in AB Web)';
         else rowStatus = 'Matched ✓';
+      } else if (isWarehouseInitial) {
+        if (abQty < appQty) rowStatus = `At Warehouse · Short (${abQty - appQty})`;
+        else if (abQty > appQty) rowStatus = `At Warehouse · Over (+${abQty - appQty})`;
+        else rowStatus = 'At Warehouse (Pick-Up)';
+      } else if (confirmedMissingInAb) {
+        rowStatus = 'Missing in AB Web Delivery';
       }
 
-      const isVariance = Boolean(it.isExtraItem) || (hasRec && (qtyVar !== 0 || Math.abs(unitPriceVar) >= 0.01)) || !isApp;
+      const isVariance =
+        Boolean(it.isExtraItem) ||
+        confirmedMissingInAb ||
+        (hasRec && (qtyVar !== 0 || Math.abs(unitPriceVar) >= 0.01 || missingInAb)) ||
+        (isWarehouseInitial && abQty !== appQty) ||
+        !isApp;
+
+      if (typeFilter === 'NOT_IN_AB' && !notInAbDeliveries) continue;
+      if (typeFilter === 'AT_WAREHOUSE' && !isWarehouseInitial) continue;
       if (typeFilter === 'VARIANCES_ONLY' && !isVariance) continue;
       if (typeFilter === 'PENDING_ONLY' && (hasRec || !isApp)) continue;
-      if (typeFilter === 'NOT_IN_AB' && !missingInAb) continue;
 
       out.push({
         orderId: o.id,
@@ -3841,16 +3909,22 @@ function buildVarianceReportRows() {
         reqQty,
         appQty,
         delQty: hasRec ? delQty : null,
+        abQty: hasAbRef ? abQty : null,
+        abStatus,
+        isWarehouseInitial,
         qtyVar,
         appCost,
         delCost: hasRec ? delCost : null,
         unitPriceVar,
         pesoImpact,
         hasRec,
+        hasAbRef,
         isApp,
         isExtra: Boolean(it.isExtraItem),
         abRef,
         missingInAb,
+        notInAbDeliveries,
+        confirmedMissingInAb,
         rowStatus,
       });
     }
@@ -3865,60 +3939,69 @@ function renderOrderVarianceReport() {
   const tbody = document.querySelector('#orderVarianceTable tbody');
   if (!tbody) return;
 
-  const orders = (state.savedOrders || []).filter((o) => o.status !== 'Cancelled');
+  const orders = (state.savedOrders || []).filter((o) => o.status !== 'Cancelled' && o.status !== 'Draft');
+  const allNonCancelled = (state.savedOrders || []).filter((o) => o.status !== 'Cancelled');
   if (orderSel) {
     const prev = orderSel.value || 'ALL';
     orderSel.innerHTML =
-      '<option value="ALL">All Orders (Ordered vs Delivered)</option>' +
-      orders.map((o) => `<option value="${o.id}">${o.id} — ${o.title} (${o.status})</option>`).join('');
+      '<option value="ALL">All Finalized Orders (Ordered vs AB Web)</option>' +
+      allNonCancelled.map((o) => `<option value="${o.id}">${o.id} — ${o.title} (${o.status})</option>`).join('');
     if ([...orderSel.options].some((opt) => opt.value === prev)) orderSel.value = prev;
   }
 
   const rows = buildVarianceReportRows();
-  let sumAppQty = 0, sumDelQty = 0, sumPendingQty = 0, sumAppVal = 0, sumDelVal = 0, sumPriceImpact = 0;
-  let shortUnits = 0, overUnits = 0, missingAbCount = 0;
+  let sumAppQty = 0, sumDelQty = 0, sumAbRecordedQty = 0, sumWarehouseQty = 0, sumPendingQty = 0, sumAppVal = 0, sumDelVal = 0, sumPriceImpact = 0;
+  let shortUnits = 0, overUnits = 0, missingAbLines = 0, missingAbUnits = 0, confirmedMissingLines = 0;
 
   for (const r of rows) {
     sumAppQty += r.appQty;
     sumAppVal += r.appQty * r.appCost;
+    if (r.hasAbRef) sumAbRecordedQty += Math.max(0, r.abQty || 0);
+    if (r.isWarehouseInitial) sumWarehouseQty += Math.max(0, r.abQty || r.appQty);
+    if (r.notInAbDeliveries) {
+      missingAbLines++;
+      missingAbUnits += r.appQty;
+      if (r.confirmedMissingInAb) confirmedMissingLines++;
+    }
     if (r.hasRec) {
       sumDelQty += r.delQty;
       sumDelVal += r.delQty * r.delCost;
       sumPriceImpact += r.delQty * (r.delCost - r.appCost);
       if (r.qtyVar < 0) shortUnits += Math.abs(r.qtyVar);
       if (r.qtyVar > 0) overUnits += r.qtyVar;
-      if (r.missingInAb) missingAbCount++;
     } else if (r.isApp) {
       sumPendingQty += r.appQty;
+      if (r.isWarehouseInitial && r.qtyVar < 0) shortUnits += Math.abs(r.qtyVar);
+      if (r.isWarehouseInitial && r.qtyVar > 0) overUnits += r.qtyVar;
     }
   }
 
   const reportedAppQty = Math.max(0, sumAppQty - sumPendingQty);
-  const fillRate = reportedAppQty > 0 ? (sumDelQty / reportedAppQty) * 100 : 0;
+  const abRecordPct = sumAppQty > 0 ? (sumAbRecordedQty / sumAppQty) * 100 : 0;
   const netQtyVar = sumDelQty - reportedAppQty;
   const netValVar = sumDelVal - (sumAppVal - rows.filter((r) => !r.hasRec && r.isApp).reduce((s, r) => s + r.appQty * r.appCost, 0));
 
   if (kpiGrid) {
     kpiGrid.innerHTML = `
       <div class="summary-box">
-        DELIVERY FILL RATE (REPORTED LINES)
-        <strong style="color:${fillRate >= 98 ? 'var(--green)' : '#f59e0b'};">${fillRate.toFixed(1)}%</strong>
-        <span class="summary-note">${fmtNum(sumDelQty)} delivered vs ${fmtNum(reportedAppQty)} reported • ${fmtNum(sumPendingQty)} pcs still pending</span>
+        FINALIZED vs AB WEB RECORDED
+        <strong style="color:${abRecordPct >= 99 ? 'var(--green)' : '#f59e0b'};">${fmtNum(sumAbRecordedQty)} / ${fmtNum(sumAppQty)} pcs</strong>
+        <span class="summary-note">${abRecordPct.toFixed(1)}% in AB Web • Branch Received: ${fmtNum(sumDelQty)} pcs</span>
+      </div>
+      <div class="summary-box" style="border-color:${sumWarehouseQty > 0 ? '#60a5fa' : 'var(--border)'};">
+        AT WAREHOUSE (FOR PICK-UP)
+        <strong style="color:${sumWarehouseQty > 0 ? '#60a5fa' : 'var(--muted)'};">${fmtNum(sumWarehouseQty)} pcs</strong>
+        <span class="summary-note">AB Web status INITIAL (arrived at warehouse, awaiting branch pick-up)</span>
+      </div>
+      <div class="summary-box" style="border-color:${confirmedMissingLines > 0 ? 'var(--danger)' : missingAbLines > 0 ? '#f59e0b' : 'var(--green)'};">
+        MISSING IN AB WEB DELIVERIES
+        <strong style="color:${confirmedMissingLines > 0 ? 'var(--danger)' : missingAbLines > 0 ? '#f59e0b' : 'var(--green)'};">${missingAbLines > 0 ? `${fmtNum(missingAbLines)} line(s) / ${fmtNum(missingAbUnits)} pcs` : '0 Missing ✓'}</strong>
+        <span class="summary-note">${confirmedMissingLines > 0 ? `${confirmedMissingLines} line(s) missing even with newer AB Web deliveries` : 'Ordered items not yet recorded in AB Web /panel/deliveries'}</span>
       </div>
       <div class="summary-box">
-        QUANTITY VARIANCE (SHORT vs OVER)
-        <strong style="color:${netQtyVar === 0 ? 'var(--green)' : netQtyVar < 0 ? 'var(--danger)' : '#f59e0b'};">${netQtyVar >= 0 ? '+' : ''}${fmtNum(netQtyVar)} pcs</strong>
-        <span class="summary-note">Short: −${fmtNum(shortUnits)} pcs • Over/Extra: +${fmtNum(overUnits)} pcs</span>
-      </div>
-      <div class="summary-box">
-        INVOICE / PRICE VARIANCE
-        <strong style="color:${sumPriceImpact <= 0 ? 'var(--green)' : 'var(--danger)'};">${sumPriceImpact >= 0 ? '+' : ''}${fmtCurrency(sumPriceImpact)}</strong>
-        <span class="summary-note">Total Peso Var (incl. qty): ${netValVar >= 0 ? '+' : ''}${fmtCurrency(netValVar)}</span>
-      </div>
-      <div class="summary-box" style="border-color:${missingAbCount > 0 ? 'var(--danger)' : 'var(--green)'};">
-        AB WEB RECORD SYNC STATUS
-        <strong style="color:${missingAbCount > 0 ? '#f59e0b' : 'var(--green)'};">${missingAbCount > 0 ? `${fmtNum(missingAbCount)} Missing in AB` : 'Synced'}</strong>
-        <span class="summary-note">${missingAbCount > 0 ? 'Delivered physically, still not in AB Web /panel/deliveries' : 'All recorded deliveries matched in AB Web'}</span>
+        QUANTITY &amp; PRICE VARIANCE
+        <strong style="color:${shortUnits === 0 && sumPriceImpact <= 0 ? 'var(--green)' : 'var(--danger)'};">${shortUnits > 0 ? `−${fmtNum(shortUnits)} short` : `${netQtyVar >= 0 ? '+' : ''}${fmtNum(netQtyVar)} pcs`}</strong>
+        <span class="summary-note">Over: +${fmtNum(overUnits)} pcs • Price Var: ${sumPriceImpact >= 0 ? '+' : ''}${fmtCurrency(sumPriceImpact)} (${netValVar >= 0 ? '+' : ''}${fmtCurrency(netValVar)})</span>
       </div>
     `;
   }
@@ -3926,19 +4009,21 @@ function renderOrderVarianceReport() {
   if (banner) {
     const latestAb = (state.abDeliveries || [])[0];
     const brNameMap = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
-    const latestStr = latestAb ? `Latest AB Web delivery synced: <strong>${latestAb.deliveryDate} (${latestAb.deliveryNo} • ${latestAb.branchName || brNameMap[latestAb.branchId] || latestAb.branchId || ''})</strong>.` : '';
-    banner.innerHTML = `<strong>Order vs. Delivery Audit:</strong> Showing <strong>${rows.length}</strong> line item(s). ${
-      missingAbCount > 0
-        ? `<strong style="color:#f59e0b;">${missingAbCount} line(s)</strong> are physically recorded as delivered but <strong>not yet in AB Web</strong> (keep tracking until they appear on AB Web). `
-        : ''
-    }${shortUnits > 0 ? `<strong style="color:var(--danger);">${shortUnits} unit(s) short-delivered</strong> — check backorder or next Restock. ` : ''}${latestStr}`;
+    const latestStr = latestAb ? `Latest AB Web delivery: <strong>${latestAb.deliveryDate} (${latestAb.deliveryNo} • ${latestAb.status} • ${latestAb.branchName || brNameMap[latestAb.branchId] || latestAb.branchId || ''})</strong>.` : '';
+    banner.innerHTML = `<strong>Finalized Orders vs. AB Web Delivery Audit:</strong> Comparing <strong>${rows.length}</strong> line item(s) across ${orders.length} finalized order(s). ${
+      confirmedMissingLines > 0
+        ? `<strong style="color:var(--danger);">${confirmedMissingLines} finalized item(s) MISSING in AB Web deliveries</strong> (deliveries have already arrived in AB Web for these branches/orders without this item). `
+        : missingAbLines > 0
+          ? `<strong style="color:#f59e0b;">${missingAbLines} item(s) (${fmtNum(missingAbUnits)} pcs)</strong> not yet recorded in AB Web deliveries. `
+          : ''
+    }${sumWarehouseQty > 0 ? `<strong style="color:#60a5fa;">${fmtNum(sumWarehouseQty)} pcs</strong> arrived at warehouse (AB Web <code>INITIAL</code> — subject for pick-up). ` : ''}${shortUnits > 0 ? `<strong style="color:var(--danger);">${shortUnits} unit(s) short-delivered</strong>. ` : ''}${latestStr}`;
   }
 
   tbody.innerHTML = rows.length
     ? rows
         .map((r) => {
-          const varColor = !r.hasRec
-            ? 'var(--muted)'
+          const varColor = !r.hasRec && !r.isWarehouseInitial
+            ? r.confirmedMissingInAb ? 'var(--danger)' : 'var(--muted)'
             : r.qtyVar < 0
               ? 'var(--danger)'
               : r.qtyVar > 0 || r.isExtra
@@ -3947,11 +4032,21 @@ function renderOrderVarianceReport() {
           const priceDisp = r.hasRec
             ? `${fmtCurrency(r.appCost)} → <strong style="color:${Math.abs(r.unitPriceVar) < 0.01 ? 'var(--text)' : r.unitPriceVar < 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(r.delCost)}</strong>`
             : fmtCurrency(r.appCost);
-          const abBadge = !r.hasRec
-            ? `<span class="badge badge-warn" style="font-size:10px;">Waiting Delivery</span>`
-            : r.missingInAb
-              ? `<span class="badge badge-danger" style="font-size:10px;">Not Yet in AB Web</span>`
-              : `<span class="badge badge-ok" style="font-size:10px;">${r.abRef}</span>`;
+          let abBadge = `<span class="badge badge-warn" style="font-size:10px;">Waiting AB Web</span>`;
+          if (r.hasRec && r.missingInAb) {
+            abBadge = `<span class="badge badge-danger" style="font-size:10px;">Received · Missing in AB Web</span>`;
+          } else if (r.hasRec) {
+            abBadge = `<span class="badge badge-ok" style="font-size:10px;">${r.abRef} (RECEIVED)</span>`;
+          } else if (r.isWarehouseInitial) {
+            abBadge = `<span class="badge badge-warn" style="font-size:10px;background:rgba(96,165,250,0.18);color:#93c5fd;border-color:rgba(96,165,250,0.4);">🚚 ${r.abRef} (INITIAL · Pick-Up)</span>`;
+          } else if (r.confirmedMissingInAb) {
+            abBadge = `<span class="badge badge-danger" style="font-size:10px;">⚠ MISSING IN AB WEB</span>`;
+          }
+          const recCellText = r.hasRec
+            ? `<strong>${fmtNum(r.delQty)}</strong>`
+            : r.isWarehouseInitial
+              ? `<strong style="color:#60a5fa;">${fmtNum(r.abQty)} (WH)</strong>`
+              : '<span class="muted">—</span>';
           return `
             <tr>
               <td><strong>${r.orderId}</strong><div class="small muted">${r.orderDate}</div></td>
@@ -3959,15 +4054,15 @@ function renderOrderVarianceReport() {
               <td><strong>${r.displayModel}</strong><div class="small muted">${r.supplier}</div></td>
               <td>${fmtNum(r.reqQty)}</td>
               <td><strong>${fmtNum(r.appQty)}</strong></td>
-              <td>${r.hasRec ? `<strong>${fmtNum(r.delQty)}</strong>` : '<span class="muted">—</span>'}</td>
-              <td style="color:${varColor};font-weight:700;">${r.hasRec ? `${r.qtyVar > 0 ? '+' : ''}${r.qtyVar}` : '—'}</td>
+              <td>${recCellText}</td>
+              <td style="color:${varColor};font-weight:700;">${r.hasRec || r.isWarehouseInitial ? `${r.qtyVar > 0 ? '+' : ''}${r.qtyVar}` : '—'}</td>
               <td>${priceDisp}</td>
-              <td style="color:${r.pesoImpact === 0 ? 'var(--muted)' : r.pesoImpact < 0 ? '#f59e0b' : 'var(--danger)'};"><strong>${r.hasRec ? `${r.pesoImpact >= 0 ? '+' : ''}${fmtCurrency(r.pesoImpact)}` : '—'}</strong></td>
+              <td style="color:${r.pesoImpact === 0 ? 'var(--muted)' : r.pesoImpact < 0 ? '#f59e0b' : 'var(--danger)'};"><strong>${r.hasRec || r.isWarehouseInitial ? `${r.pesoImpact >= 0 ? '+' : ''}${fmtCurrency(r.pesoImpact)}` : '—'}</strong></td>
               <td>${abBadge}<div class="small" style="color:${varColor};margin-top:2px;">${r.rowStatus}</div></td>
             </tr>`;
         })
         .join('')
-    : '<tr><td colspan="10" class="muted">No order lines match this variance filter.</td></tr>';
+    : '<tr><td colspan="10" class="muted">No finalized order lines match this variance filter.</td></tr>';
 }
 
 function renderAbDeliveriesView() {
@@ -4032,12 +4127,20 @@ function downloadVariancePdf() {
       r.displayModel,
       r.reqQty,
       r.appQty,
-      r.hasRec ? r.delQty : '—',
-      r.hasRec ? (r.qtyVar > 0 ? `+${r.qtyVar}` : r.qtyVar) : '—',
+      r.hasRec ? r.delQty : r.isWarehouseInitial ? `${r.abQty} (WH)` : '—',
+      r.hasRec || r.isWarehouseInitial ? (r.qtyVar > 0 ? `+${r.qtyVar}` : r.qtyVar) : '—',
       `PHP ${fmtNum(Math.round(r.appCost))}`,
       r.hasRec ? `PHP ${fmtNum(Math.round(r.delCost))}` : '—',
-      r.hasRec ? `PHP ${fmtNum(Math.round(r.pesoImpact))}` : '—',
-      r.hasRec ? (r.missingInAb ? `Not in AB Web (${r.rowStatus})` : `${r.abRef} (${r.rowStatus})`) : 'Waiting Delivery',
+      r.hasRec || r.isWarehouseInitial ? `PHP ${fmtNum(Math.round(r.pesoImpact))}` : '—',
+      r.hasRec
+        ? r.missingInAb
+          ? `Not in AB Web (${r.rowStatus})`
+          : `${r.abRef} (${r.rowStatus})`
+        : r.isWarehouseInitial
+          ? `${r.abRef} (INITIAL · Pick-Up)`
+          : r.confirmedMissingInAb
+            ? 'MISSING IN AB WEB DELIVERY'
+            : r.rowStatus,
     ]),
     theme: 'grid',
     styles: { font: 'helvetica', fontSize: 7.5, cellPadding: 3 / 72, lineColor: [60, 60, 60], lineWidth: 0.65 / 72 },
@@ -4070,16 +4173,24 @@ async function downloadVarianceExcel() {
       r.displayModel,
       r.reqQty,
       r.appQty,
-      r.hasRec ? r.delQty : '',
-      r.hasRec ? r.qtyVar : '',
+      r.hasRec ? r.delQty : r.isWarehouseInitial ? r.abQty : '',
+      r.hasRec || r.isWarehouseInitial ? r.qtyVar : '',
       r.appCost,
       r.hasRec ? r.delCost : '',
-      r.hasRec ? r.pesoImpact : '',
-      r.hasRec ? (r.missingInAb ? `Not Yet in AB Web (${r.rowStatus})` : `${r.abRef} (${r.rowStatus})`) : 'Waiting Delivery',
+      r.hasRec || r.isWarehouseInitial ? r.pesoImpact : '',
+      r.hasRec
+        ? r.missingInAb
+          ? `Not Yet in AB Web (${r.rowStatus})`
+          : `${r.abRef} (${r.rowStatus})`
+        : r.isWarehouseInitial
+          ? `${r.abRef} (INITIAL · Pick-Up)`
+          : r.confirmedMissingInAb
+            ? 'MISSING IN AB WEB DELIVERY'
+            : r.rowStatus,
     ]);
     er.getCell(9).numFmt = '"₱"#,##0.00';
-    if (r.hasRec) {
-      er.getCell(10).numFmt = '"₱"#,##0.00';
+    if (r.hasRec || r.isWarehouseInitial) {
+      if (r.hasRec) er.getCell(10).numFmt = '"₱"#,##0.00';
       er.getCell(11).numFmt = '"₱"#,##0.00';
     }
   }
@@ -4095,15 +4206,23 @@ async function downloadVarianceExcel() {
   a.click();
 }
 
-async function createSavedOrderFromDraft() {
+async function createSavedOrderFromDraft(opts = {}) {
+  const {
+    initialStatus = 'Sent to Supplier',
+    excludeUnchecked = false,
+    openInPreview = false,
+  } = opts || {};
   if (!state.restockPlan) buildRestockDraftPlan();
-  const draftSelected = (state.restockPlan || []).filter((r) => r.selected && Number(r.qty) > 0);
+  const draftSelected = (state.restockPlan || []).filter(
+    (r) => r.selected && Number(r.qty) > 0 && (!excludeUnchecked || !state.previewUncheckedKeys?.has(r.key))
+  );
   if (!draftSelected.length) {
-    alert('Select at least one product in the Restock cards before saving an order.');
-    return;
+    alert('Select at least one product before saving.');
+    return null;
   }
   const mode = document.querySelector('input[name="restockSupplierMode"]:checked')?.value || 'LOWEST';
-  const title = `Restock Order • ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  const prefix = initialStatus === 'Draft' ? 'Saved Plan' : 'Restock Order';
+  const title = `${prefix} • ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
   const itemsPayload = draftSelected.map((r) => ({
     key: r.key,
     productId: r.productId,
@@ -4128,6 +4247,9 @@ async function createSavedOrderFromDraft() {
     receivedCost: Number(r.unitCost) || 0,
     receivedDate: '',
     abDeliveryNo: '',
+    abDeliveryStatus: '',
+    abDeliveryDate: '',
+    abDeliveredQty: null,
     abReportedQty: null,
     isExtraItem: false,
   }));
@@ -4142,13 +4264,13 @@ async function createSavedOrderFromDraft() {
     createdOrder = {
       id,
       title,
-      status: 'Sent to Supplier',
+      status: initialStatus,
       supplierFilter: mode,
       notes: '',
       expectedDate: '',
       abDeliveryRefs: '',
       items: itemsPayload,
-      ...computeOrderSummaryMetrics(itemsPayload, 'Sent to Supplier'),
+      ...computeOrderSummaryMetrics(itemsPayload, initialStatus),
       createdAt: now,
       updatedAt: now,
     };
@@ -4158,7 +4280,7 @@ async function createSavedOrderFromDraft() {
   } else {
     const res = await api('/api/purchase-orders', {
       method: 'POST',
-      body: JSON.stringify({ title, status: 'Sent to Supplier', supplierFilter: mode, notes: '', items: itemsPayload }),
+      body: JSON.stringify({ title, status: initialStatus, supplierFilter: mode, notes: '', items: itemsPayload }),
     });
     createdOrder = res?.order || null;
     await loadSavedPurchaseOrders();
@@ -4167,12 +4289,21 @@ async function createSavedOrderFromDraft() {
   if (createdOrder) {
     state.restockExcludedKeys = new Set();
     state.previewUncheckedKeys = new Set();
-    openSavedOrderInlineEditor(createdOrder);
     renderSavedOrdersPanel();
     buildRestockDraftPlan();
     renderRestockCards();
-    renderSavedOrderInlineEditor(`Order ${createdOrder.id} saved — Restock now deducts these pending units automatically ✓`);
+    if (openInPreview) {
+      state.previewOrderOverride = createdOrder;
+      renderReorderPreviewModal(
+        `Saved plan ${createdOrder.id} (${createdOrder.status}) ✓ — Tick SHOW COSTS to adjust supplier prices, or click FINALIZE AS ORDERED when ready.`
+      );
+      document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
+    } else {
+      openSavedOrderInlineEditor(createdOrder);
+      renderSavedOrderInlineEditor(`Order ${createdOrder.id} saved — Restock now deducts these pending units automatically ✓`);
+    }
   }
+  return createdOrder;
 }
 
 function getGroupedReorderPlan(overrideOrder = null, filterPreviewUnchecked = false) {
@@ -4183,7 +4314,9 @@ function getGroupedReorderPlan(overrideOrder = null, filterPreviewUnchecked = fa
       : null;
 
   const selected = activeOrd
-    ? activeOrd.items.filter((r) => r.approved !== false && Number(r.qty) > 0)
+    ? activeOrd.items
+        .map((r, idx) => ({ ...r, _itemIdx: idx }))
+        .filter((r) => r.approved !== false && Number(r.qty) > 0)
     : (state.restockPlan || []).filter(
         (r) => r.selected && Number(r.qty) > 0 && (!filterPreviewUnchecked || !state.previewUncheckedKeys?.has(r.key))
       );
@@ -4234,64 +4367,135 @@ function buildReorderCopyText(overrideOrder = null) {
   return parts.join('\n\n');
 }
 
+function renderPreviewMetricsSummary(selectedRows, showCosts) {
+  const metricsEl = document.getElementById('reorderPreviewMetrics');
+  if (!metricsEl) return;
+  const totalUnits = selectedRows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+  const totalCost = selectedRows.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.unitCost) || 0), 0);
+  const branchTotals = new Map(BRANCH_ORDER.map((b) => [b, { qty: 0, cost: 0 }]));
+  for (const r of selectedRows) {
+    if (!branchTotals.has(r.branchName)) branchTotals.set(r.branchName, { qty: 0, cost: 0 });
+    const bt = branchTotals.get(r.branchName);
+    bt.qty += Number(r.qty) || 0;
+    bt.cost += (Number(r.qty) || 0) * (Number(r.unitCost) || 0);
+  }
+  const branchPills = [...branchTotals.entries()]
+    .filter(([, v]) => v.qty > 0)
+    .map(
+      ([b, v]) =>
+        `<span style="display:inline-block;padding:4px 8px;border-radius:6px;background:#fff;border:1px solid #d5ceb8;font-size:12px;color:#1b1913;"><strong>${b}:</strong> ${v.qty} pcs${showCosts ? ` (${fmtCurrency(v.cost)})` : ''}</span>`
+    )
+    .join(' ');
+  metricsEl.innerHTML = `
+    <div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:130px;">
+      <div style="font-size:10px;font-weight:700;color:#6b6351;">ORDER UNITS</div>
+      <div style="font-size:18px;font-weight:800;color:#1b1913;">${fmtNum(totalUnits)}</div>
+    </div>
+    ${
+      showCosts
+        ? `<div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:150px;">
+            <div style="font-size:10px;font-weight:700;color:#6b6351;">EST. TOTAL COST</div>
+            <div style="font-size:18px;font-weight:800;color:#1d6f42;">${fmtCurrency(totalCost)}</div>
+          </div>`
+        : ''
+    }
+    <div style="flex:1;min-width:220px;">
+      <div style="font-size:10px;font-weight:700;color:#6b6351;margin-bottom:4px;">BRANCH SUBTOTALS</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">${branchPills || '<span style="font-size:12px;color:#6b6351;">None</span>'}</div>
+    </div>
+  `;
+}
+
+async function autoSaveSavedPreviewItemCost(order, itemIdx, newCost, persistNow = true) {
+  if (!order || !Array.isArray(order.items) || !order.items[itemIdx]) return;
+  const it = order.items[itemIdx];
+  const cleanCost = Math.max(0, Number(newCost) || 0);
+  it.unitCost = cleanCost;
+  if (it.receivedQty === undefined || it.receivedQty === null || it.receivedQty === '') {
+    it.receivedCost = cleanCost;
+  }
+  Object.assign(order, computeOrderSummaryMetrics(order.items, order.status));
+
+  const activeRows = order.items.filter((r) => r.approved !== false && Number(r.qty) > 0);
+  renderPreviewMetricsSummary(activeRows, Boolean(document.getElementById('reorderShowCostsChk')?.checked));
+
+  if (!persistNow) return;
+
+  // Persist order update & auto-save price to the specific supplier it was ordered from
+  if (IS_STATIC_GH) {
+    const all = getLocalSavedOrders();
+    const idx = all.findIndex((o) => o.id === order.id);
+    const updated = { ...order, updatedAt: new Date().toISOString(), ...computeOrderSummaryMetrics(order.items, order.status) };
+    if (idx >= 0) all[idx] = updated;
+    else all.unshift(updated);
+    setLocalSavedOrders(all);
+    state.savedOrders = all.map((o) => ({ ...o, ...computeOrderSummaryMetrics(o.items, o.status) }));
+    state.previewOrderOverride = updated;
+  } else {
+    const res = await api(`/api/purchase-orders/${encodeURIComponent(order.id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ items: order.items, syncSupplierCosts: true }),
+    });
+    if (res?.order) {
+      state.previewOrderOverride = res.order;
+      const list = state.savedOrders || [];
+      const ix = list.findIndex((o) => o.id === res.order.id);
+      if (ix >= 0) list[ix] = res.order;
+    }
+  }
+
+  const supName = String(it.supplier || 'AB Main Supplier');
+  if (it.productId && cleanCost > 0) {
+    const supUpper = supName.toUpperCase();
+    const costPatch = supUpper.includes('A&K')
+      ? { costAk: cleanCost }
+      : supUpper.includes('ONLINE')
+        ? { costOnline: cleanCost }
+        : { costAb: cleanCost };
+    await saveProductSupplierCosts(it.productId, costPatch);
+  }
+
+  renderSavedOrdersPanel();
+  renderInventory();
+  renderRestockCards();
+
+  const stEl = document.getElementById('reorderPreviewStatus');
+  if (stEl) {
+    stEl.style.color = '#1d6f42';
+    stEl.textContent = `Auto-saved ${fmtCurrency(cleanCost)} for ${it.displayModel || it.model} (${supName}) ✓`;
+  }
+}
+
 function renderReorderPreviewModal(statusNote = '') {
   const modal = document.getElementById('reorderPreviewModal');
   if (!modal) return;
   if (!state.previewUncheckedKeys) state.previewUncheckedKeys = new Set();
   if (!state.restockExcludedKeys) state.restockExcludedKeys = new Set();
   const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked);
-  const { selected, grouped, isSaved } = getGroupedReorderPlan(null, false);
+  const { selected, grouped, isSaved, order } = getGroupedReorderPlan(null, false);
   const activeSelected = isSaved ? selected : selected.filter((r) => !state.previewUncheckedKeys.has(r.key));
+
+  const titleEl = document.getElementById('reorderPreviewTitle');
+  if (titleEl) {
+    titleEl.textContent = isSaved && order
+      ? `AB-GADGETZ · ${order.id} (${String(order.status || 'Draft').toUpperCase()})`
+      : 'AB-GADGETZ · REORDER PLAN';
+  }
 
   const prepEl = document.getElementById('reorderPreviewPrepared');
   if (prepEl) {
-    prepEl.textContent = `Prepared ${new Date().toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    })}`;
+    prepEl.textContent = isSaved && order
+      ? `${order.title || 'Saved Order'} · Order Date ${String(order.createdAt || '').slice(0, 10) || todayStr}`
+      : `Prepared ${new Date().toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+        })}`;
   }
 
-  const totalUnits = activeSelected.reduce((s, r) => s + (Number(r.qty) || 0), 0);
-  const totalCost = activeSelected.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.unitCost) || 0), 0);
-  const branchTotals = new Map(BRANCH_ORDER.map((b) => [b, { qty: 0, cost: 0 }]));
-  for (const r of activeSelected) {
-    if (!branchTotals.has(r.branchName)) branchTotals.set(r.branchName, { qty: 0, cost: 0 });
-    const bt = branchTotals.get(r.branchName);
-    bt.qty += Number(r.qty) || 0;
-    bt.cost += (Number(r.qty) || 0) * (Number(r.unitCost) || 0);
-  }
-
-  const metricsEl = document.getElementById('reorderPreviewMetrics');
-  if (metricsEl) {
-    const branchPills = [...branchTotals.entries()]
-      .filter(([, v]) => v.qty > 0)
-      .map(
-        ([b, v]) =>
-          `<span style="display:inline-block;padding:4px 8px;border-radius:6px;background:#fff;border:1px solid #d5ceb8;font-size:12px;"><strong>${b}:</strong> ${v.qty} pcs${showCosts ? ` (${fmtCurrency(v.cost)})` : ''}</span>`
-      )
-      .join(' ');
-    metricsEl.innerHTML = `
-      <div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:130px;">
-        <div style="font-size:10px;font-weight:700;color:#6b6351;">ORDER UNITS</div>
-        <div style="font-size:18px;font-weight:800;color:#1b1913;">${fmtNum(totalUnits)}</div>
-      </div>
-      ${
-        showCosts
-          ? `<div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:150px;">
-              <div style="font-size:10px;font-weight:700;color:#6b6351;">EST. TOTAL COST</div>
-              <div style="font-size:18px;font-weight:800;color:#1d6f42;">${fmtCurrency(totalCost)}</div>
-            </div>`
-          : ''
-      }
-      <div style="flex:1;min-width:220px;">
-        <div style="font-size:10px;font-weight:700;color:#6b6351;margin-bottom:4px;">BRANCH SUBTOTALS</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;">${branchPills || '<span style="font-size:12px;color:#6b6351;">None</span>'}</div>
-      </div>
-    `;
-  }
+  renderPreviewMetricsSummary(activeSelected, showCosts);
 
   const bodyEl = document.getElementById('reorderPreviewBody');
   const prevScrollTop = bodyEl ? bodyEl.scrollTop : 0;
@@ -4318,18 +4522,27 @@ function renderReorderPreviewModal(statusNote = '') {
                       : r.model || r.displayModel;
                     const rowKey = r.key || `${r.productId}::${r.branchId}`;
                     const isChecked = isSaved || !state.previewUncheckedKeys.has(rowKey);
+                    const costArea = !showCosts
+                      ? ''
+                      : isSaved
+                        ? `<span style="display:inline-flex;align-items:center;gap:4px;color:#4f493a;font-size:11.5px;">
+                            <span>₱</span>
+                            <input type="number" min="0" step="1" class="reorder-saved-cost-inp" data-item-idx="${r._itemIdx}" value="${Number(r.unitCost) || 0}" title="Edit unit cost (auto-saves to ${sup.supplier})" style="width:76px;padding:2px 5px;font-size:11.5px;font-weight:700;background:#fff;color:#1b1913;border:1px solid #b8ab87;border-radius:5px;text-align:right;" />
+                            <span>× ${r.qty} = <strong class="reorder-saved-row-sub" data-item-idx="${r._itemIdx}" style="color:#1b1913;">${fmtCurrency(r.unitCost * r.qty)}</strong></span>
+                          </span>`
+                        : `<span style="color:#4f493a;font-size:11.5px;">${fmtCurrency(r.unitCost)} × ${r.qty} = <strong style="color:#1b1913;">${fmtCurrency(r.unitCost * r.qty)}</strong></span>`;
                     return `
-                    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid #e6e0ce;font-size:12.5px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid #e6e0ce;font-size:12.5px;color:#1b1913;">
                       ${
                         isSaved
-                          ? `<span>${nameLabel}</span>`
-                          : `<label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer;flex:1;min-width:0;font-weight:400;">
+                          ? `<span style="color:#1b1913;font-weight:500;">${nameLabel}</span>`
+                          : `<label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer;flex:1;min-width:0;font-weight:500;font-size:12.5px;color:#1b1913;text-transform:none;letter-spacing:0;">
                               <input type="checkbox" class="reorder-preview-item-chk" data-key="${String(rowKey).replace(/"/g, '&quot;')}" ${isChecked ? 'checked' : ''} style="width:16px;height:16px;margin:0;accent-color:#b45309;flex-shrink:0;" />
-                              <span style="${isChecked ? '' : 'text-decoration:line-through;opacity:0.45;color:#6b6351;'}">${nameLabel}</span>
+                              <span style="color:${isChecked ? '#1b1913' : '#6b6351'};${isChecked ? '' : 'text-decoration:line-through;opacity:0.55;'}">${nameLabel}</span>
                             </label>`
                       }
-                      <span style="display:flex;align-items:center;gap:12px;white-space:nowrap;${isChecked ? '' : 'opacity:0.45;'}">
-                        ${showCosts ? `<span style="color:#4f493a;font-size:11.5px;">${fmtCurrency(r.unitCost)} × ${r.qty} = <strong>${fmtCurrency(r.unitCost * r.qty)}</strong></span>` : ''}
+                      <span style="display:flex;align-items:center;gap:10px;white-space:nowrap;${isChecked ? '' : 'opacity:0.45;'}">
+                        ${costArea}
                         <strong style="color:#b45309;">${r.qty} ${r.qty === 1 ? 'pc' : 'pcs'}</strong>
                       </span>
                     </div>`;
@@ -4353,6 +4566,30 @@ function renderReorderPreviewModal(statusNote = '') {
             renderReorderPreviewModal();
           });
         });
+      } else if (showCosts && order) {
+        const timers = new Map();
+        bodyEl.querySelectorAll('.reorder-saved-cost-inp').forEach((inp) => {
+          const itemIdx = Number(inp.dataset.itemIdx);
+          inp.addEventListener('input', () => {
+            const val = Math.max(0, Number(inp.value) || 0);
+            const subEl = bodyEl.querySelector(`.reorder-saved-row-sub[data-item-idx="${itemIdx}"]`);
+            const rowQty = Number(order.items?.[itemIdx]?.qty) || 0;
+            if (subEl) subEl.textContent = fmtCurrency(val * rowQty);
+            autoSaveSavedPreviewItemCost(order, itemIdx, val, false);
+            clearTimeout(timers.get(itemIdx));
+            timers.set(
+              itemIdx,
+              setTimeout(() => {
+                autoSaveSavedPreviewItemCost(order, itemIdx, val, true);
+              }, 600)
+            );
+          });
+          inp.addEventListener('change', () => {
+            clearTimeout(timers.get(itemIdx));
+            const val = Math.max(0, Number(inp.value) || 0);
+            autoSaveSavedPreviewItemCost(order, itemIdx, val, true);
+          });
+        });
       }
     }
   }
@@ -4362,6 +4599,15 @@ function renderReorderPreviewModal(statusNote = '') {
     rebuildBtn.classList.toggle('hidden', isSaved);
     const uncnt = state.previewUncheckedKeys.size;
     rebuildBtn.textContent = uncnt > 0 ? `BUILD PLAN AGAIN (EXCLUDE ${uncnt} UNAVAILABLE)` : 'BUILD PLAN AGAIN';
+  }
+  const savePlanBtn = document.getElementById('reorderSavePlanBtn');
+  if (savePlanBtn) {
+    savePlanBtn.classList.toggle('hidden', isSaved);
+  }
+  const finalizeBtn = document.getElementById('reorderFinalizeOrderBtn');
+  if (finalizeBtn) {
+    const canFinalize = Boolean(isSaved && order && order.status === 'Draft');
+    finalizeBtn.classList.toggle('hidden', !canFinalize);
   }
   const resetBtn = document.getElementById('reorderResetExcludedBtn');
   if (resetBtn) {
@@ -4377,6 +4623,16 @@ function renderReorderPreviewModal(statusNote = '') {
     if (statusNote) {
       stEl.style.color = '#1d6f42';
       stEl.textContent = statusNote;
+    } else if (isSaved && order) {
+      if (order.status === 'Draft') {
+        stEl.style.color = '#b45309';
+        stEl.textContent = showCosts
+          ? 'Saved Draft — edit any unit cost (auto-saves to its specific supplier), then click FINALIZE AS ORDERED.'
+          : 'Saved Draft — tick SHOW COSTS to adjust supplier prices, or click FINALIZE AS ORDERED once sent.';
+      } else {
+        stEl.style.color = '#1d6f42';
+        stEl.textContent = `Finalized (${order.status}) ✓ — compared automatically against AB Web deliveries.${showCosts ? ' Cost changes auto-save to supplier.' : ''}`;
+      }
     } else if (uncnt > 0) {
       stEl.style.color = '#b45309';
       stEl.textContent = `${uncnt} unit(s) unchecked as unavailable — click BUILD PLAN AGAIN to refill budget with next available units.`;
@@ -4963,7 +5219,7 @@ document.getElementById('previewRestockPlanBtn')?.addEventListener('click', () =
   document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
 });
 
-document.getElementById('saveNewRestockOrderBtn')?.addEventListener('click', createSavedOrderFromDraft);
+document.getElementById('saveNewRestockOrderBtn')?.addEventListener('click', () => createSavedOrderFromDraft());
 
 document.getElementById('restockPriorityMode')?.addEventListener('change', () => {
   buildRestockDraftPlan();
@@ -5034,6 +5290,80 @@ document.getElementById('reorderRebuildPlanBtn')?.addEventListener('click', () =
       ? `Rebuilt plan excluding ${newlyExcluded} unavailable item(s) — budget refilled with next available units ✓`
       : 'Rebuilt plan with updated exclusions ✓'
   );
+});
+document.getElementById('reorderSavePlanBtn')?.addEventListener('click', async () => {
+  const btn = document.getElementById('reorderSavePlanBtn');
+  if (btn) btn.textContent = 'SAVING...';
+  try {
+    await createSavedOrderFromDraft({ initialStatus: 'Draft', excludeUnchecked: true, openInPreview: true });
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    if (btn) btn.textContent = 'SAVE PLAN';
+  }
+});
+document.getElementById('reorderFinalizeOrderBtn')?.addEventListener('click', async () => {
+  const ord = state.previewOrderOverride;
+  if (!ord) return;
+  const btn = document.getElementById('reorderFinalizeOrderBtn');
+  if (btn) btn.textContent = 'FINALIZING...';
+  try {
+    // Flush any live cost edits currently typed into .reorder-saved-cost-inp
+    document.querySelectorAll('#reorderPreviewBody .reorder-saved-cost-inp').forEach((inp) => {
+      const idx = Number(inp.dataset.itemIdx);
+      const val = Math.max(0, Number(inp.value) || 0);
+      if (ord.items?.[idx]) {
+        ord.items[idx].unitCost = val;
+        if (ord.items[idx].receivedQty === undefined || ord.items[idx].receivedQty === null || ord.items[idx].receivedQty === '') {
+          ord.items[idx].receivedCost = val;
+        }
+      }
+    });
+
+    const nextStatus = 'Supplier Approved';
+    ord.status = nextStatus;
+    if (IS_STATIC_GH) {
+      const all = getLocalSavedOrders();
+      const idx = all.findIndex((o) => o.id === ord.id);
+      const updated = { ...ord, status: nextStatus, updatedAt: new Date().toISOString(), ...computeOrderSummaryMetrics(ord.items, nextStatus) };
+      if (idx >= 0) all[idx] = updated;
+      else all.unshift(updated);
+      setLocalSavedOrders(all);
+      reconcileStaticOrdersWithDeliveries(updated.id);
+      const reloaded = getLocalSavedOrders().find((o) => o.id === updated.id) || updated;
+      state.savedOrders = getLocalSavedOrders().map((o) => ({ ...o, ...computeOrderSummaryMetrics(o.items, o.status) }));
+      state.previewOrderOverride = reloaded;
+    } else {
+      const res = await api(`/api/purchase-orders/${encodeURIComponent(ord.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: nextStatus, items: ord.items, syncSupplierCosts: true }),
+      });
+      if (res?.order) state.previewOrderOverride = res.order;
+      await api(`/api/purchase-orders/${encodeURIComponent(ord.id)}/match-deliveries`, { method: 'POST', body: JSON.stringify({}) }).catch(() => null);
+      await loadSavedPurchaseOrders();
+      const latest = (state.savedOrders || []).find((o) => o.id === ord.id);
+      if (latest) state.previewOrderOverride = latest;
+    }
+
+    // Save edited item costs to each item's specific supplier in local state / backend
+    for (const it of (state.previewOrderOverride?.items || [])) {
+      const c = Number(it.unitCost) || 0;
+      if (!it.productId || it.approved === false || !(c > 0)) continue;
+      const supU = String(it.supplier || '').toUpperCase();
+      const patch = supU.includes('A&K') ? { costAk: c } : supU.includes('ONLINE') ? { costOnline: c } : { costAb: c };
+      await saveProductSupplierCosts(it.productId, patch).catch(() => null);
+    }
+
+    renderSavedOrdersPanel();
+    renderInventory();
+    buildRestockDraftPlan();
+    renderRestockCards();
+    renderReorderPreviewModal(`Finalized as Ordered (${ord.id}) ✓ — Supplier costs synced & pending deliveries will compare with AB Web.`);
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    if (btn) btn.textContent = 'FINALIZE AS ORDERED';
+  }
 });
 document.getElementById('reorderResetExcludedBtn')?.addEventListener('click', () => {
   state.restockExcludedKeys = new Set();

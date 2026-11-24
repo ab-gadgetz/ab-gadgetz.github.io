@@ -391,10 +391,11 @@
                     <option value="ALL">All Orders (Ordered vs Delivered)</option>
                   </select>
                   <select id="varianceTypeFilter" style="width:auto;padding:5px 9px;font-size:12px;">
-                    <option value="ALL">All Line Items</option>
+                    <option value="ALL">All Finalized Order Lines</option>
+                    <option value="NOT_IN_AB">Missing in AB Web Deliveries (Not Recorded)</option>
+                    <option value="AT_WAREHOUSE">At Warehouse · AB Web INITIAL (For Pick-Up)</option>
                     <option value="VARIANCES_ONLY">Variances Only (Short / Over / Price Diff)</option>
-                    <option value="PENDING_ONLY">Still Waiting Delivery</option>
-                    <option value="NOT_IN_AB">Received but NOT Yet in AB Web</option>
+                    <option value="PENDING_ONLY">Still Waiting Receipt / Delivery</option>
                   </select>
                 </div>
                 <div style="display:flex;gap:6px;flex-wrap:wrap;">
@@ -1558,7 +1559,7 @@
     <div class="calc-modal-sheet" style="max-width:740px;background:#faf8f2;color:#1b1913;border:1px solid #d5ceb8;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
         <div>
-          <h3 style="margin:0;color:#1b1913;font-size:17px;letter-spacing:0.4px;">AB-GADGETZ · REORDER PLAN</h3>
+          <h3 id="reorderPreviewTitle" style="margin:0;color:#1b1913;font-size:17px;letter-spacing:0.4px;">AB-GADGETZ · REORDER PLAN</h3>
           <div id="reorderPreviewPrepared" style="font-size:12px;color:#6b6351;margin-top:2px;"></div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -1603,9 +1604,11 @@
       <div id="reorderPreviewBody" style="max-height:55vh;overflow-y:auto;padding-right:4px;"></div>
 
       <div id="reorderPreviewFooter" style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
-        <button type="button" id="reorderRebuildPlanBtn" style="flex:2;min-width:210px;background:#b45309;color:#fff;border:1px solid #92400e;font-weight:700;">BUILD PLAN AGAIN</button>
+        <button type="button" id="reorderRebuildPlanBtn" style="flex:1.4;min-width:170px;background:#b45309;color:#fff;border:1px solid #92400e;font-weight:700;">BUILD PLAN AGAIN</button>
+        <button type="button" id="reorderSavePlanBtn" style="flex:1.2;min-width:140px;background:#1c212b;color:#fff;border:1px solid #2c3442;font-weight:700;">SAVE PLAN</button>
+        <button type="button" id="reorderFinalizeOrderBtn" class="hidden" style="flex:1.6;min-width:180px;background:#1d6f42;color:#fff;border:1px solid #165934;font-weight:700;">FINALIZE AS ORDERED</button>
         <button type="button" id="reorderResetExcludedBtn" class="hidden" style="padding:8px 12px;background:#fff;color:#6b6351;border:1px solid #d5ceb8;font-size:12px;font-weight:600;">RESET EXCLUDED</button>
-        <button type="button" id="reorderBackToEditBtn" style="flex:1;min-width:130px;background:#e5e7eb;color:#1b1913;border:1px solid #cbd5e1;">BACK TO EDIT</button>
+        <button type="button" id="reorderBackToEditBtn" style="flex:1;min-width:120px;background:#e5e7eb;color:#1b1913;border:1px solid #cbd5e1;">BACK TO EDIT</button>
       </div>
     </div>
   </div>
