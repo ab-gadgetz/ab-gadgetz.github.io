@@ -317,6 +317,23 @@
           </div>
         </div>
 
+        <!-- Saved Orders Made (Editable Approved Prices & Quantities) -->
+        <div class="sub-panel" style="padding:12px;margin-bottom:12px;">
+          <div id="savedOrdersToggle" style="display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <strong style="font-size:12px;letter-spacing:0.6px;color:var(--text);">ORDERS MADE &amp; SUPPLIER APPROVALS</strong>
+              <span id="savedOrdersCountBadge" class="badge badge-warn" style="font-size:10px;">0 saved</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span id="savedOrdersSummaryHdr" class="small muted">Save a plan to edit supplier-approved prices &amp; qty</span>
+              <span id="savedOrdersCaret" class="muted" style="font-weight:700;">+</span>
+            </div>
+          </div>
+          <div id="savedOrdersBody" class="hidden" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border-soft);">
+            <div id="savedOrdersList" style="display:flex;flex-direction:column;gap:8px;"></div>
+          </div>
+        </div>
+
         <div class="sub-panel" style="padding:12px;margin-bottom:12px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
             <strong style="font-size:12px;letter-spacing:0.6px;color:var(--muted);">ORDER FROM &amp; PLAN PRIORITY</strong>
@@ -358,7 +375,8 @@
               <input type="text" inputmode="decimal" id="restockBudgetInput" placeholder="Leave blank for no cap" />
             </div>
             <button type="button" id="buildRestockPlanBtn">BUILD PLAN</button>
-            <button type="button" id="previewRestockPlanBtn" class="secondary">PREVIEW / EXPORT</button>
+            <button type="button" id="previewRestockPlanBtn" class="secondary">PREVIEW / EDIT</button>
+            <button type="button" id="saveNewRestockOrderBtn" class="secondary" title="Save selected items as an order you can edit once the supplier approves prices and quantities">SAVE ORDER</button>
           </div>
         </div>
 
@@ -1410,17 +1428,17 @@
     </div>
   </div>
 
-  <!-- REORDER PLAN PREVIEW MODAL (MATCHES APPS SCRIPT) -->
+  <!-- REORDER PLAN & SUPPLIER-APPROVED ORDER EDITOR MODAL -->
   <div id="reorderPreviewModal" class="calc-modal hidden" role="dialog" aria-modal="true">
-    <div class="calc-modal-sheet" style="max-width:740px;background:#faf8f2;color:#1b1913;border:1px solid #d5ceb8;">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+    <div class="calc-modal-sheet" style="max-width:860px;background:#faf8f2;color:#1b1913;border:1px solid #d5ceb8;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
         <div>
-          <h3 style="margin:0;color:#1b1913;font-size:17px;letter-spacing:0.4px;">AB-GADGETZ · REORDER PLAN</h3>
+          <h3 id="reorderPreviewHeading" style="margin:0;color:#1b1913;font-size:17px;letter-spacing:0.4px;">AB-GADGETZ · REORDER PLAN</h3>
           <div id="reorderPreviewPrepared" style="font-size:12px;color:#6b6351;margin-top:2px;"></div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <label style="display:flex;align-items:center;gap:5px;margin:0;font-size:11px;font-weight:700;color:#1b1913;cursor:pointer;">
-            <input type="checkbox" id="reorderShowCostsChk" style="width:15px;height:15px;margin:0;accent-color:#8a6d1b;" />
+            <input type="checkbox" id="reorderShowCostsChk" checked style="width:15px;height:15px;margin:0;accent-color:#8a6d1b;" />
             SHOW COSTS
           </label>
           <button type="button" id="reorderPrintBtn" style="padding:6px 12px;font-size:11px;background:#fff;color:#1b1913;border:1px solid #ccc4ad;">PRINT</button>
@@ -1428,10 +1446,35 @@
         </div>
       </div>
 
-      <div id="reorderPreviewMetrics" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;"></div>
+      <!-- Editable Order Metadata (Title, Supplier Approval Status, Notes) -->
+      <div id="reorderOrderMetaBar" style="display:grid;grid-template-columns:1.5fr 1fr 1.4fr;gap:8px;padding:8px 10px;border-radius:8px;background:#f2ecd8;border:1px solid #d5ceb8;margin-bottom:10px;">
+        <div>
+          <div style="font-size:10px;font-weight:700;color:#4f493a;margin-bottom:2px;">ORDER NAME / PO LABEL</div>
+          <input type="text" id="reorderOrderTitleInp" placeholder="e.g. Nov 24 Restock — AB / A&K" style="width:100%;padding:5px 8px;font-size:12px;background:#fff;color:#1b1913;border:1px solid #ccc4ad;border-radius:6px;" />
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;color:#4f493a;margin-bottom:2px;">SUPPLIER APPROVAL STATUS</div>
+          <select id="reorderOrderStatusSel" style="width:100%;padding:5px 8px;font-size:12px;background:#fff;color:#1b1913;border:1px solid #ccc4ad;border-radius:6px;">
+            <option value="Draft">Draft</option>
+            <option value="Sent to Supplier" selected>Sent to Supplier</option>
+            <option value="Supplier Approved">Supplier Approved (Edited)</option>
+            <option value="Received">Received / Delivered</option>
+            <option value="Cancelled">Cancelled</option>
+          </select>
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;color:#4f493a;margin-bottom:2px;">SUPPLIER NOTES</div>
+          <input type="text" id="reorderOrderNotesInp" placeholder="Approved adjustments, ETA, remarks..." style="width:100%;padding:5px 8px;font-size:12px;background:#fff;color:#1b1913;border:1px solid #ccc4ad;border-radius:6px;" />
+        </div>
+      </div>
+
+      <div id="reorderPreviewMetrics" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;"></div>
 
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
-        <strong style="font-size:12px;letter-spacing:0.6px;color:#4f493a;">SELECTED PRODUCTS</strong>
+        <div>
+          <strong style="font-size:12px;letter-spacing:0.6px;color:#4f493a;">ORDER ITEMS — EDIT APPROVED PRICE (₱) &amp; QTY DIRECTLY</strong>
+          <div style="font-size:11px;color:#6b6351;">Uncheck unavailable items or adjust approved qty &amp; supplier price; Copy / PDF / Excel update automatically.</div>
+        </div>
         <div style="display:flex;gap:6px;align-items:center;">
           <button type="button" id="reorderCopyBtn" class="download-icon" title="Copy Reorder Request" aria-label="Copy Reorder Request" style="background:#1c212b;color:#fff;border-color:#2c3442;">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
@@ -1456,11 +1499,36 @@
         </div>
       </div>
 
-      <div id="reorderPreviewStatus" style="font-size:12px;font-weight:600;color:#1d6f42;margin-bottom:8px;"></div>
-      <div id="reorderPreviewBody" style="max-height:55vh;overflow-y:auto;padding-right:4px;"></div>
+      <!-- Quick Add Unit to Order (for supplier substitutions or extra approved models) -->
+      <div id="reorderAddLineBar" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:6px 8px;border-radius:6px;background:#fff;border:1px dashed #ccc4ad;margin-bottom:8px;">
+        <select id="reorderAddProdSel" style="flex:2;min-width:170px;padding:4px 7px;font-size:11.5px;background:#fff;color:#1b1913;border:1px solid #ccc4ad;border-radius:5px;"></select>
+        <select id="reorderAddBranchSel" style="width:auto;padding:4px 7px;font-size:11.5px;background:#fff;color:#1b1913;border:1px solid #ccc4ad;border-radius:5px;">
+          <option value="br-molave">Molave</option>
+          <option value="br-tambulig">Tambulig</option>
+          <option value="br-bonifacio">Bonifacio</option>
+        </select>
+        <select id="reorderAddSupplierSel" style="width:auto;padding:4px 7px;font-size:11.5px;background:#fff;color:#1b1913;border:1px solid #ccc4ad;border-radius:5px;">
+          <option value="AB Main Supplier">AB Main Supplier</option>
+          <option value="A&K">A&amp;K</option>
+          <option value="Online Purchase">Online Purchase</option>
+        </select>
+        <input type="number" id="reorderAddPriceInp" placeholder="Price ₱" min="0" step="0.01" style="width:82px;padding:4px 6px;font-size:11.5px;background:#fff;color:#1b1913;border:1px solid #ccc4ad;border-radius:5px;" />
+        <input type="number" id="reorderAddQtyInp" value="1" min="1" max="99" style="width:52px;padding:4px 6px;font-size:11.5px;text-align:center;background:#fff;color:#1b1913;border:1px solid #ccc4ad;border-radius:5px;" />
+        <button type="button" id="reorderAddLineBtn" style="padding:4px 10px;font-size:11px;min-height:0;background:#1c212b;color:#fff;border:1px solid #2c3442;">+ ADD UNIT</button>
+      </div>
 
-      <div style="display:flex;gap:10px;margin-top:14px;">
-        <button type="button" id="reorderBackToEditBtn" style="flex:1;background:#e5e7eb;color:#1b1913;border:1px solid #cbd5e1;">BACK TO EDIT</button>
+      <div id="reorderPreviewStatus" style="font-size:12px;font-weight:600;color:#1d6f42;margin-bottom:8px;"></div>
+      <div id="reorderPreviewBody" style="max-height:46vh;overflow-y:auto;padding-right:4px;"></div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding-top:10px;border-top:1px solid #d5ceb8;">
+        <label style="display:flex;align-items:center;gap:6px;margin:0;font-size:11.5px;font-weight:600;color:#4f493a;cursor:pointer;">
+          <input type="checkbox" id="reorderSyncSupplierCostsChk" checked style="width:15px;height:15px;margin:0;accent-color:#1d6f42;" />
+          Also update Product Supplier Costs from edited prices
+        </label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button type="button" id="reorderBackToEditBtn" style="padding:8px 14px;background:#e5e7eb;color:#1b1913;border:1px solid #cbd5e1;">BACK TO CARDS</button>
+          <button type="button" id="reorderSaveOrderBtn" style="padding:8px 18px;background:#1d6f42;color:#fff;border:1px solid #165934;font-weight:700;">SAVE ORDER</button>
+        </div>
       </div>
     </div>
   </div>

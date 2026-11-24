@@ -2540,16 +2540,275 @@ function renderRestockCards() {
   });
 }
 
-function getGroupedReorderPlan() {
-  const selected = (state.restockPlan || []).filter((r) => r.selected && r.qty > 0);
+function computeOrderSummaryMetrics(items) {
+  let requestedUnits = 0;
+  let approvedUnits = 0;
+  let requestedTotal = 0;
+  let approvedTotal = 0;
+  for (const it of items || []) {
+    const rq = Math.max(0, Number(it.requestedQty ?? it.qty) || 0);
+    const rc = Math.max(0, Number(it.requestedCost ?? it.unitCost) || 0);
+    const isApp = it.approved !== false && it.selected !== false;
+    const aq = isApp ? Math.max(0, Number(it.qty) || 0) : 0;
+    const ac = Math.max(0, Number(it.unitCost) || 0);
+    requestedUnits += rq;
+    requestedTotal += rq * rc;
+    approvedUnits += aq;
+    approvedTotal += aq * ac;
+  }
+  return {
+    requestedUnits,
+    approvedUnits,
+    requestedTotal: Number(requestedTotal.toFixed(2)),
+    approvedTotal: Number(approvedTotal.toFixed(2)),
+  };
+}
+
+function getLocalSavedOrders() {
+  try {
+    const raw = localStorage.getItem('ab_purchase_orders_v1');
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function setLocalSavedOrders(orders) {
+  try {
+    localStorage.setItem('ab_purchase_orders_v1', JSON.stringify(orders || []));
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+async function loadSavedPurchaseOrders() {
+  if (IS_STATIC_GH) {
+    state.savedOrders = getLocalSavedOrders().map((o) => ({ ...o, ...computeOrderSummaryMetrics(o.items) }));
+    return state.savedOrders;
+  }
+  try {
+    const res = await api('/api/purchase-orders');
+    state.savedOrders = Array.isArray(res?.orders) ? res.orders : [];
+  } catch {
+    state.savedOrders = getLocalSavedOrders();
+  }
+  return state.savedOrders;
+}
+
+function applyEditedPricesToLocalInventory(items) {
+  if (!state.inventory?.items || !Array.isArray(items)) return;
+  const localMap = IS_STATIC_GH ? getLocalSupplierCostsMap() : null;
+  for (const it of items) {
+    if (!it.productId || it.approved === false || !(Number(it.unitCost) > 0)) continue;
+    const prod = state.inventory.items.find((p) => p.id === it.productId);
+    if (!prod) continue;
+    const sup = String(it.supplier || '').toUpperCase();
+    const val = Number(it.unitCost);
+    if (sup.includes('A&K')) prod.cost_ak = val;
+    else if (sup.includes('ONLINE')) prod.cost_online = val;
+    else prod.cost_ab = val;
+    if (localMap) {
+      localMap[prod.id] = {
+        cost_ab: Number(prod.cost_ab) || 0,
+        cost_ak: Number(prod.cost_ak) || 0,
+        cost_online: Number(prod.cost_online) || 0,
+      };
+    }
+  }
+  if (localMap) {
+    try {
+      localStorage.setItem('ab_supplier_costs_v1', JSON.stringify(localMap));
+    } catch {}
+  }
+}
+
+function renderSavedOrdersPanel() {
+  const listEl = document.getElementById('savedOrdersList');
+  const badgeEl = document.getElementById('savedOrdersCountBadge');
+  const hdrEl = document.getElementById('savedOrdersSummaryHdr');
+  const orders = state.savedOrders || [];
+
+  if (badgeEl) {
+    badgeEl.textContent = `${orders.length} saved`;
+    badgeEl.className = `badge ${orders.length ? 'badge-ok' : 'badge-warn'}`;
+  }
+  if (hdrEl) {
+    if (!orders.length) {
+      hdrEl.textContent = 'Save a plan to edit supplier-approved prices & qty';
+    } else {
+      const activeCnt = orders.filter((o) => !['Received', 'Cancelled'].includes(o.status)).length;
+      const totApproved = orders
+        .filter((o) => o.status !== 'Cancelled')
+        .reduce((s, o) => s + (Number(o.approvedTotal) || 0), 0);
+      hdrEl.innerHTML = `${activeCnt} open • Total Approved: <strong style="color:var(--gold-bright);">${fmtCurrency(totApproved)}</strong>`;
+    }
+  }
+  if (!listEl) return;
+
+  if (!orders.length) {
+    listEl.innerHTML = '<div class="muted small" style="padding:6px 0;">No saved orders yet. Click <strong>BUILD PLAN</strong> or <strong>SAVE ORDER</strong> to save a reorder request, then edit approved prices &amp; quantities once the supplier confirms.</div>';
+    return;
+  }
+
+  const statusColor = (st) => {
+    if (st === 'Supplier Approved') return 'badge-ok';
+    if (st === 'Received') return 'badge-ok';
+    if (st === 'Cancelled') return 'badge-danger';
+    return 'badge-warn';
+  };
+
+  listEl.innerHTML = orders
+    .map((o) => {
+      const m = computeOrderSummaryMetrics(o.items);
+      const qtyDiff = m.approvedUnits - m.requestedUnits;
+      const costDiff = m.approvedTotal - m.requestedTotal;
+      const hasAdj = qtyDiff !== 0 || Math.abs(costDiff) >= 0.01;
+      const diffText = hasAdj
+        ? `<span style="color:${costDiff <= 0 ? 'var(--green)' : '#f59e0b'};font-weight:700;">(${qtyDiff >= 0 ? '+' : ''}${qtyDiff} pcs • ${costDiff >= 0 ? '+' : ''}${fmtCurrency(costDiff)})</span>`
+        : '<span class="muted">matches requested</span>';
+      const dtLabel = o.updatedAt ? new Date(o.updatedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+      return `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.03);">
+          <div style="min-width:220px;flex:1;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <strong style="color:var(--gold-bright);font-size:13px;">${o.id}</strong>
+              <strong style="font-size:13px;">${o.title}</strong>
+              <span class="badge ${statusColor(o.status)}" style="font-size:10px;">${o.status}</span>
+            </div>
+            <div class="small muted" style="margin-top:3px;">
+              Requested: <strong>${fmtNum(m.requestedUnits)} pcs</strong> (${fmtCurrency(m.requestedTotal)}) →
+              Approved: <strong style="color:var(--text);">${fmtNum(m.approvedUnits)} pcs</strong> (<strong style="color:var(--green);">${fmtCurrency(m.approvedTotal)}</strong>)
+              ${diffText}
+              ${dtLabel ? ` • Updated ${dtLabel}` : ''}
+            </div>
+            ${o.notes ? `<div class="small" style="color:var(--gold-bright);margin-top:2px;">Note: ${o.notes}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button type="button" class="saved-po-edit-btn" data-poid="${o.id}" style="padding:5px 10px;font-size:11px;min-height:0;">EDIT PRICES &amp; QTY</button>
+            <button type="button" class="secondary saved-po-copy-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">COPY</button>
+            <button type="button" class="secondary saved-po-pdf-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">PDF</button>
+            <button type="button" class="secondary saved-po-del-btn" data-poid="${o.id}" style="padding:5px 8px;font-size:11px;min-height:0;color:var(--danger);">✕</button>
+          </div>
+        </div>`;
+    })
+    .join('');
+
+  listEl.querySelectorAll('.saved-po-edit-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const ord = (state.savedOrders || []).find((o) => o.id === btn.dataset.poid);
+      if (!ord) return;
+      openSavedOrderEditor(ord);
+    });
+  });
+
+  listEl.querySelectorAll('.saved-po-copy-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const ord = (state.savedOrders || []).find((o) => o.id === btn.dataset.poid);
+      if (!ord) return;
+      const text = buildReorderCopyText(ord);
+      const ok = await copyTextToClipboard(text);
+      btn.textContent = ok ? 'COPIED ✓' : 'ERR';
+      setTimeout(() => { btn.textContent = 'COPY'; }, 1400);
+    });
+  });
+
+  listEl.querySelectorAll('.saved-po-pdf-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const ord = (state.savedOrders || []).find((o) => o.id === btn.dataset.poid);
+      if (!ord) return;
+      downloadReorderPlanPdf(ord);
+    });
+  });
+
+  listEl.querySelectorAll('.saved-po-del-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const poId = btn.dataset.poid;
+      if (!confirm(`Delete saved order ${poId}?`)) return;
+      if (IS_STATIC_GH) {
+        const next = getLocalSavedOrders().filter((o) => o.id !== poId);
+        setLocalSavedOrders(next);
+        state.savedOrders = next;
+      } else {
+        await api(`/api/purchase-orders/${encodeURIComponent(poId)}`, { method: 'DELETE' });
+        await loadSavedPurchaseOrders();
+      }
+      if (state.activeSavedOrder?.id === poId) state.activeSavedOrder = null;
+      renderSavedOrdersPanel();
+    });
+  });
+}
+
+function openSavedOrderEditor(order) {
+  state.activeSavedOrder = JSON.parse(JSON.stringify(order));
+  const titleInp = document.getElementById('reorderOrderTitleInp');
+  const statusSel = document.getElementById('reorderOrderStatusSel');
+  const notesInp = document.getElementById('reorderOrderNotesInp');
+  const showCostsChk = document.getElementById('reorderShowCostsChk');
+  if (titleInp) titleInp.value = state.activeSavedOrder.title || '';
+  if (statusSel) statusSel.value = state.activeSavedOrder.status || 'Supplier Approved';
+  if (notesInp) notesInp.value = state.activeSavedOrder.notes || '';
+  if (showCostsChk) showCostsChk.checked = true;
+  populateReorderAddProductSelect();
+  renderReorderPreviewModal();
+  document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
+}
+
+function populateReorderAddProductSelect() {
+  const sel = document.getElementById('reorderAddProdSel');
+  if (!sel || !state.inventory?.items) return;
+  const active = state.inventory.items
+    .filter((i) => (i.lifecycle_status || 'Active') === 'Active' && !isNonOrderablePromoOrRepo(i))
+    .sort((a, b) => formatSwapModelName({ brand: a.brand || '', model: a.model || a.name }).localeCompare(formatSwapModelName({ brand: b.brand || '', model: b.model || b.name })));
+  sel.innerHTML =
+    '<option value="">+ Add another unit to this order...</option>' +
+    active
+      .map((i) => {
+        const nm = formatSwapModelName({ brand: i.brand || '', model: i.model || i.name });
+        return `<option value="${i.id}">${nm} (SRP ${fmtCurrency(i.base_price)})</option>`;
+      })
+      .join('');
+}
+
+function getActiveOrderSource(overrideOrder = null) {
+  if (overrideOrder && Array.isArray(overrideOrder.items)) {
+    return {
+      isSaved: true,
+      order: overrideOrder,
+      allRows: (overrideOrder.items || []).map((r, idx) => ({ ...r, _editIdx: idx })),
+    };
+  }
+  if (state.activeSavedOrder) {
+    return {
+      isSaved: true,
+      order: state.activeSavedOrder,
+      allRows: (state.activeSavedOrder.items || []).map((r, idx) => ({ ...r, _editIdx: idx })),
+    };
+  }
+  return {
+    isSaved: false,
+    order: null,
+    allRows: (state.restockPlan || [])
+      .map((r, idx) => ({ ...r, _editIdx: idx }))
+      .filter((r) => r.selected || r._modalTouched),
+  };
+}
+
+function getGroupedReorderPlan(overrideOrder = null, includeUnapproved = false) {
+  const src = getActiveOrderSource(overrideOrder);
+  const rows = includeUnapproved
+    ? src.allRows
+    : src.allRows.filter((r) => (src.isSaved ? r.approved !== false : r.selected !== false) && Number(r.qty) > 0);
+
   const bySupplier = new Map();
   for (const sup of SUPPLIER_ORDER) bySupplier.set(sup, new Map());
 
-  for (const r of selected) {
-    if (!bySupplier.has(r.supplier)) bySupplier.set(r.supplier, new Map());
-    const branchMap = bySupplier.get(r.supplier);
-    if (!branchMap.has(r.branchName)) branchMap.set(r.branchName, []);
-    branchMap.get(r.branchName).push(r);
+  for (const r of rows) {
+    const supName = r.supplier || 'AB Main Supplier';
+    if (!bySupplier.has(supName)) bySupplier.set(supName, new Map());
+    const branchMap = bySupplier.get(supName);
+    const brName = r.branchName || 'Molave';
+    if (!branchMap.has(brName)) branchMap.set(brName, []);
+    branchMap.get(brName).push(r);
   }
 
   const ordered = [];
@@ -2566,19 +2825,22 @@ function getGroupedReorderPlan() {
     }
     ordered.push({ supplier, branches: branchesOut });
   }
-  return { selected, grouped: ordered };
+  return { selected: rows, grouped: ordered, isSaved: src.isSaved, order: src.order };
 }
 
-function buildReorderCopyText() {
-  const { grouped } = getGroupedReorderPlan();
+function buildReorderCopyText(overrideOrder = null) {
+  const { grouped, isSaved, order } = getGroupedReorderPlan(overrideOrder, false);
   if (!grouped.length) return '';
-  const parts = ['Reorder request'];
+  const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked);
+  const header = isSaved && order ? `${order.id} — ${order.title} (${order.status})` : 'Reorder request';
+  const parts = [header];
   for (const supGroup of grouped) {
     parts.push(supGroup.supplier);
     for (const bGroup of supGroup.branches) {
       const lines = [bGroup.branchName];
       for (const r of bGroup.rows) {
-        lines.push(`${r.displayModel} — ${r.qty} ${r.qty === 1 ? 'pc' : 'pcs'}`);
+        const costPart = showCosts && Number(r.unitCost) > 0 ? ` @ ${fmtCurrency(r.unitCost)}` : '';
+        lines.push(`${r.displayModel} — ${r.qty} ${r.qty === 1 ? 'pc' : 'pcs'}${costPart}`);
       }
       parts.push(lines.join('\n'));
     }
@@ -2590,11 +2852,35 @@ function renderReorderPreviewModal() {
   const modal = document.getElementById('reorderPreviewModal');
   if (!modal) return;
   const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked);
-  const { selected, grouped } = getGroupedReorderPlan();
+  const { isSaved, order, grouped } = getGroupedReorderPlan(null, true);
+  const approvedOnly = getGroupedReorderPlan(null, false).selected;
+
+  const headingEl = document.getElementById('reorderPreviewHeading');
+  const saveBtn = document.getElementById('reorderSaveOrderBtn');
+  const backBtn = document.getElementById('reorderBackToEditBtn');
+  const titleInp = document.getElementById('reorderOrderTitleInp');
+  const statusSel = document.getElementById('reorderOrderStatusSel');
+  const notesInp = document.getElementById('reorderOrderNotesInp');
+
+  if (isSaved && order) {
+    if (headingEl) headingEl.textContent = `AB-GADGETZ · ${order.id} (${order.status})`;
+    if (saveBtn) saveBtn.textContent = 'SAVE APPROVED CHANGES';
+    if (backBtn) backBtn.textContent = 'CLOSE EDITOR';
+  } else {
+    if (headingEl) headingEl.textContent = 'AB-GADGETZ · REORDER PLAN';
+    if (saveBtn) saveBtn.textContent = 'SAVE AS ORDER MADE';
+    if (backBtn) backBtn.textContent = 'BACK TO CARDS';
+    if (titleInp && !titleInp.value.trim()) {
+      titleInp.value = `Restock Order • ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+    }
+    if (statusSel && !statusSel.dataset.touched) statusSel.value = 'Sent to Supplier';
+    if (notesInp && !notesInp.dataset.touched) notesInp.value = '';
+  }
 
   const prepEl = document.getElementById('reorderPreviewPrepared');
   if (prepEl) {
-    prepEl.textContent = `Prepared ${new Date().toLocaleString('en-US', {
+    const dtStr = isSaved && order?.updatedAt ? new Date(order.updatedAt) : new Date();
+    prepEl.textContent = `${isSaved ? 'Last Updated' : 'Prepared'} ${dtStr.toLocaleString('en-US', {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
@@ -2603,14 +2889,19 @@ function renderReorderPreviewModal() {
     })}`;
   }
 
-  const totalUnits = selected.reduce((s, r) => s + r.qty, 0);
-  const totalCost = selected.reduce((s, r) => s + r.qty * r.unitCost, 0);
+  const allEditableRows = isSaved && order ? order.items : (state.restockPlan || []).filter((r) => r.selected || r._modalTouched);
+  const metrics = computeOrderSummaryMetrics(allEditableRows);
+  const totalUnits = approvedOnly.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+  const totalCost = approvedOnly.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.unitCost) || 0), 0);
+  const qtyVariance = totalUnits - metrics.requestedUnits;
+  const costVariance = totalCost - metrics.requestedTotal;
+
   const branchTotals = new Map(BRANCH_ORDER.map((b) => [b, { qty: 0, cost: 0 }]));
-  for (const r of selected) {
+  for (const r of approvedOnly) {
     if (!branchTotals.has(r.branchName)) branchTotals.set(r.branchName, { qty: 0, cost: 0 });
     const bt = branchTotals.get(r.branchName);
-    bt.qty += r.qty;
-    bt.cost += r.qty * r.unitCost;
+    bt.qty += Number(r.qty) || 0;
+    bt.cost += (Number(r.qty) || 0) * (Number(r.unitCost) || 0);
   }
 
   const metricsEl = document.getElementById('reorderPreviewMetrics');
@@ -2622,16 +2913,22 @@ function renderReorderPreviewModal() {
           `<span style="display:inline-block;padding:4px 8px;border-radius:6px;background:#fff;border:1px solid #d5ceb8;font-size:12px;"><strong>${b}:</strong> ${v.qty} pcs${showCosts ? ` (${fmtCurrency(v.cost)})` : ''}</span>`
       )
       .join(' ');
+    const varBadge =
+      isSaved && (qtyVariance !== 0 || Math.abs(costVariance) >= 0.01)
+        ? `<div style="font-size:10.5px;color:${costVariance <= 0 ? '#137333' : '#b45309'};font-weight:700;">vs Req: ${qtyVariance >= 0 ? '+' : ''}${qtyVariance} pcs / ${costVariance >= 0 ? '+' : ''}${fmtCurrency(costVariance)}</div>`
+        : '';
     metricsEl.innerHTML = `
       <div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:130px;">
-        <div style="font-size:10px;font-weight:700;color:#6b6351;">ORDER UNITS</div>
+        <div style="font-size:10px;font-weight:700;color:#6b6351;">${isSaved ? 'APPROVED UNITS' : 'ORDER UNITS'}</div>
         <div style="font-size:18px;font-weight:800;color:#1b1913;">${fmtNum(totalUnits)}</div>
+        ${isSaved ? `<div style="font-size:10px;color:#6b6351;">Requested: ${fmtNum(metrics.requestedUnits)} pcs</div>` : ''}
       </div>
       ${
         showCosts
-          ? `<div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:150px;">
-              <div style="font-size:10px;font-weight:700;color:#6b6351;">EST. TOTAL COST</div>
+          ? `<div style="padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #d5ceb8;min-width:165px;">
+              <div style="font-size:10px;font-weight:700;color:#6b6351;">${isSaved ? 'APPROVED TOTAL' : 'EST. TOTAL COST'}</div>
               <div style="font-size:18px;font-weight:800;color:#1d6f42;">${fmtCurrency(totalCost)}</div>
+              ${varBadge}
             </div>`
           : ''
       }
@@ -2645,7 +2942,7 @@ function renderReorderPreviewModal() {
   const bodyEl = document.getElementById('reorderPreviewBody');
   if (bodyEl) {
     if (!grouped.length) {
-      bodyEl.innerHTML = '<div style="padding:16px;text-align:center;color:#6b6351;">No products selected in this reorder plan.</div>';
+      bodyEl.innerHTML = '<div style="padding:16px;text-align:center;color:#6b6351;">No products in this order yet. Use "+ ADD UNIT" above or select items in Restock cards.</div>';
     } else {
       bodyEl.innerHTML = grouped
         .map(
@@ -2661,21 +2958,56 @@ function renderReorderPreviewModal() {
                 <div style="font-weight:700;font-size:12px;color:#1b1913;margin-bottom:4px;">${b.branchName}</div>
                 ${b.rows
                   .map((r) => {
-                    const nameLabel = r.brand && !r.model.toLowerCase().startsWith(r.brand.toLowerCase())
+                    const isApp = isSaved ? r.approved !== false : r.selected !== false;
+                    const nameLabel = r.brand && !String(r.model || '').toLowerCase().startsWith(String(r.brand || '').toLowerCase())
                       ? `${r.brand} · ${r.model}`
-                      : r.model;
+                      : r.model || r.displayModel;
                     const metaTags = [];
                     if (r.tierKey === 'LOW_END') metaTags.push('<span style="background:#e6f4ea;color:#137333;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700;">Low-End</span>');
                     if (r.avail === 0) metaTags.push('<span style="background:#fce8e6;color:#c5221f;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700;">0 stock</span>');
-                    if (r.branchDemand90 > 0) metaTags.push(`<span style="color:#6b6351;font-size:10.5px;">${r.branchDemand90} sold/90d</span>`);
-                    else if (r.storewideDemand90 > 0) metaTags.push(`<span style="color:#6b6351;font-size:10.5px;">${r.storewideDemand90} chain/90d</span>`);
+                    if (r.branchDemand90 > 0) metaTags.push(`<span style="color:#6b6351;font-size:10px;">${r.branchDemand90} sold/90d</span>`);
+
+                    const reqQty = Number(r.requestedQty ?? r.qty) || 0;
+                    const reqCost = Number(r.requestedCost ?? r.unitCost) || 0;
+                    const curQty = Number(r.qty) || 0;
+                    const curCost = Number(r.unitCost) || 0;
+                    const diffTags = [];
+                    if (isSaved && curQty !== reqQty) {
+                      diffTags.push(`<span style="color:#b45309;font-size:10px;font-weight:700;">Req ${reqQty}→${isApp ? curQty : 0}</span>`);
+                    }
+                    if (isSaved && Math.abs(curCost - reqCost) >= 0.01) {
+                      const d = curCost - reqCost;
+                      diffTags.push(`<span style="color:${d < 0 ? '#137333' : '#b45309'};font-size:10px;font-weight:700;">${d < 0 ? '' : '+'}${fmtCurrency(d)}/pc</span>`);
+                    }
+                    const lineSub = isApp ? curQty * curCost : 0;
                     return `
-                    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid #e6e0ce;font-size:12.5px;">
-                      <span style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"><span>${nameLabel}</span>${metaTags.join('')}</span>
-                      <span style="display:flex;align-items:center;gap:12px;white-space:nowrap;">
-                        ${showCosts ? `<span style="color:#4f493a;font-size:11.5px;">${fmtCurrency(r.unitCost)}${r.isEstimatedCost ? ' (est)' : ''} × ${r.qty} = <strong>${fmtCurrency(r.unitCost * r.qty)}</strong></span>` : ''}
-                        <strong style="color:#b45309;">${r.qty} ${r.qty === 1 ? 'pc' : 'pcs'}</strong>
-                      </span>
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #e6e0ce;font-size:12px;${isApp ? '' : 'opacity:0.48;'}">
+                      <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer;flex:1;min-width:170px;flex-wrap:wrap;">
+                        <input type="checkbox" class="po-edit-chk" data-eidx="${r._editIdx}" ${isApp ? 'checked' : ''} style="width:15px;height:15px;margin:0;accent-color:#1d6f42;flex-shrink:0;" title="Uncheck if supplier did not approve this item" />
+                        <span style="${isApp ? '' : 'text-decoration:line-through;'}font-weight:600;">${nameLabel}</span>
+                        ${metaTags.join('')}
+                        ${diffTags.join('')}
+                      </label>
+                      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+                        ${
+                          showCosts
+                            ? `<div style="display:flex;align-items:center;gap:3px;">
+                                 <span style="font-size:11px;color:#6b6351;">₱</span>
+                                 <input type="number" class="po-edit-price" data-eidx="${r._editIdx}" value="${curCost}" min="0" step="0.01" style="width:80px;padding:3px 5px;font-size:11.5px;text-align:right;background:#fff;color:#1b1913;border:1px solid #ccc4ad;border-radius:4px;" title="Edit approved supplier unit price" />
+                               </div>`
+                            : ''
+                        }
+                        <div style="display:flex;align-items:center;gap:3px;">
+                          <span style="font-size:11px;color:#6b6351;">×</span>
+                          <input type="number" class="po-edit-qty" data-eidx="${r._editIdx}" value="${curQty}" min="0" max="999" style="width:52px;padding:3px 4px;font-size:11.5px;text-align:center;font-weight:700;color:#b45309;background:#fff;border:1px solid #ccc4ad;border-radius:4px;" title="Edit approved quantity" />
+                          <span style="font-size:10.5px;color:#6b6351;">pcs</span>
+                        </div>
+                        ${
+                          showCosts
+                            ? `<strong style="min-width:80px;text-align:right;color:#1d6f42;font-size:12px;">${fmtCurrency(lineSub)}</strong>`
+                            : ''
+                        }
+                      </div>
                     </div>`;
                   })
                   .join('')}
@@ -2685,24 +3017,209 @@ function renderReorderPreviewModal() {
           </div>`
         )
         .join('');
+
+      // Attach live inline edit handlers for Price, Qty, and Approval checkbox
+      bodyEl.querySelectorAll('.po-edit-chk').forEach((chk) => {
+        chk.addEventListener('change', () => {
+          const idx = Number(chk.dataset.eidx);
+          if (state.activeSavedOrder?.items?.[idx]) {
+            state.activeSavedOrder.items[idx].approved = chk.checked;
+          } else if (state.restockPlan?.[idx]) {
+            state.restockPlan[idx].selected = chk.checked;
+            state.restockPlan[idx]._modalTouched = true;
+            renderRestockCards();
+          }
+          renderReorderPreviewModal();
+        });
+      });
+
+      bodyEl.querySelectorAll('.po-edit-price').forEach((inp) => {
+        inp.addEventListener('change', () => {
+          const idx = Number(inp.dataset.eidx);
+          const val = Math.max(0, Number(inp.value) || 0);
+          if (state.activeSavedOrder?.items?.[idx]) {
+            state.activeSavedOrder.items[idx].unitCost = val;
+            state.activeSavedOrder.items[idx].isEstimatedCost = false;
+          } else if (state.restockPlan?.[idx]) {
+            state.restockPlan[idx].unitCost = val;
+            state.restockPlan[idx].isEstimatedCost = false;
+            state.restockPlan[idx]._modalTouched = true;
+            renderRestockCards();
+          }
+          renderReorderPreviewModal();
+        });
+      });
+
+      bodyEl.querySelectorAll('.po-edit-qty').forEach((inp) => {
+        inp.addEventListener('change', () => {
+          const idx = Number(inp.dataset.eidx);
+          const val = Math.max(0, parseInt(inp.value, 10) || 0);
+          if (state.activeSavedOrder?.items?.[idx]) {
+            state.activeSavedOrder.items[idx].qty = val;
+            state.activeSavedOrder.items[idx].approved = val > 0;
+          } else if (state.restockPlan?.[idx]) {
+            state.restockPlan[idx].qty = val;
+            state.restockPlan[idx].selected = val > 0;
+            state.restockPlan[idx]._modalTouched = true;
+            renderRestockCards();
+          }
+          renderReorderPreviewModal();
+        });
+      });
     }
   }
-  const stEl = document.getElementById('reorderPreviewStatus');
-  if (stEl) stEl.textContent = '';
 }
 
-function downloadReorderPlanPdf() {
+async function saveCurrentOrderFromModal() {
+  const stEl = document.getElementById('reorderPreviewStatus');
+  const title = (document.getElementById('reorderOrderTitleInp')?.value || '').trim() || `Restock Order • ${todayStr}`;
+  const status = document.getElementById('reorderOrderStatusSel')?.value || 'Sent to Supplier';
+  const notes = (document.getElementById('reorderOrderNotesInp')?.value || '').trim();
+  const syncSupplierCosts = Boolean(document.getElementById('reorderSyncSupplierCostsChk')?.checked);
+  const mode = document.querySelector('input[name="restockSupplierMode"]:checked')?.value || 'LOWEST';
+
+  if (state.activeSavedOrder) {
+    // Update existing saved order
+    const po = state.activeSavedOrder;
+    po.title = title;
+    po.status = status;
+    po.notes = notes;
+    if (IS_STATIC_GH) {
+      const now = new Date().toISOString();
+      po.updatedAt = now;
+      const all = getLocalSavedOrders();
+      const idx = all.findIndex((o) => o.id === po.id);
+      const savedObj = { ...po, ...computeOrderSummaryMetrics(po.items) };
+      if (idx >= 0) all[idx] = savedObj;
+      else all.unshift(savedObj);
+      setLocalSavedOrders(all);
+      state.savedOrders = all;
+      state.activeSavedOrder = JSON.parse(JSON.stringify(savedObj));
+    } else {
+      const res = await api(`/api/purchase-orders/${encodeURIComponent(po.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ title, status, notes, items: po.items, syncSupplierCosts }),
+      });
+      await loadSavedPurchaseOrders();
+      if (res?.order) state.activeSavedOrder = JSON.parse(JSON.stringify(res.order));
+    }
+    if (syncSupplierCosts) {
+      applyEditedPricesToLocalInventory(po.items);
+      renderRestockCards();
+      renderInventory();
+    }
+    renderSavedOrdersPanel();
+    renderReorderPreviewModal();
+    if (stEl) {
+      stEl.style.color = '#1d6f42';
+      stEl.textContent = `Saved approved prices & quantities for ${po.id}${syncSupplierCosts ? ' (product supplier costs updated)' : ''}.`;
+    }
+    return;
+  }
+
+  // Create brand-new saved order from current draft plan
+  const draftSelected = (state.restockPlan || []).filter((r) => r.selected && Number(r.qty) > 0);
+  if (!draftSelected.length) {
+    if (stEl) {
+      stEl.style.color = '#b91c1c';
+      stEl.textContent = 'Select at least one product before saving an order.';
+    }
+    return;
+  }
+  const itemsPayload = draftSelected.map((r) => ({
+    key: r.key,
+    productId: r.productId,
+    brand: r.brand,
+    model: r.model,
+    displayModel: r.displayModel,
+    sku: r.sku,
+    branchId: r.branchId,
+    branchName: r.branchName,
+    supplier: r.supplier,
+    tierKey: r.tierKey,
+    tierLabel: r.tierLabel,
+    avail: r.avail,
+    branchDemand90: r.branchDemand90,
+    storewideDemand90: r.storewideDemand90,
+    requestedQty: Number(r.qty) || 0,
+    qty: Number(r.qty) || 0,
+    requestedCost: Number(r.unitCost) || 0,
+    unitCost: Number(r.unitCost) || 0,
+    approved: true,
+  }));
+
+  let createdOrder = null;
+  if (IS_STATIC_GH) {
+    const now = new Date().toISOString();
+    const dayTag = now.slice(0, 10).replace(/-/g, '');
+    const all = getLocalSavedOrders();
+    const todayCnt = all.filter((o) => String(o.id || '').startsWith(`PO-${dayTag}-`)).length;
+    const id = `PO-${dayTag}-${String(todayCnt + 1).padStart(2, '0')}`;
+    createdOrder = {
+      id,
+      title,
+      status,
+      supplierFilter: mode,
+      notes,
+      items: itemsPayload,
+      ...computeOrderSummaryMetrics(itemsPayload),
+      createdAt: now,
+      updatedAt: now,
+    };
+    all.unshift(createdOrder);
+    setLocalSavedOrders(all);
+    state.savedOrders = all;
+  } else {
+    const res = await api('/api/purchase-orders', {
+      method: 'POST',
+      body: JSON.stringify({ title, status, supplierFilter: mode, notes, items: itemsPayload }),
+    });
+    createdOrder = res?.order || null;
+    await loadSavedPurchaseOrders();
+  }
+
+  if (syncSupplierCosts) {
+    applyEditedPricesToLocalInventory(itemsPayload);
+    if (!IS_STATIC_GH) {
+      // Also persist any edited prices in draft to products table
+      await api(`/api/purchase-orders/${encodeURIComponent(createdOrder.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ items: itemsPayload, syncSupplierCosts: true }),
+      }).catch(() => {});
+    }
+    renderRestockCards();
+    renderInventory();
+  }
+
+  if (createdOrder) {
+    state.activeSavedOrder = JSON.parse(JSON.stringify(createdOrder));
+  }
+  // Auto-open Saved Orders panel so the user immediately sees their saved order
+  const body = document.getElementById('savedOrdersBody');
+  const caret = document.getElementById('savedOrdersCaret');
+  if (body) body.classList.remove('hidden');
+  if (caret) caret.textContent = '−';
+
+  renderSavedOrdersPanel();
+  renderReorderPreviewModal();
+  if (stEl) {
+    stEl.style.color = '#1d6f42';
+    stEl.textContent = `Order ${createdOrder?.id || ''} saved! You can now edit approved supplier prices & quantities anytime.`;
+  }
+}
+
+function downloadReorderPlanPdf(overrideOrder = null) {
   const jspdfNs = window.jspdf;
   if (!jspdfNs || typeof jspdfNs.jsPDF !== 'function') {
     alert('PDF generator library is still loading. Please try again.');
     return;
   }
-  const { selected, grouped } = getGroupedReorderPlan();
+  const { selected, grouped, isSaved, order } = getGroupedReorderPlan(overrideOrder, false);
   if (!selected.length) {
-    alert('No products selected to download.');
+    alert('No approved products selected to download.');
     return;
   }
-  const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked);
+  const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked) || Boolean(overrideOrder);
   const doc = new jspdfNs.jsPDF({ orientation: 'portrait', unit: 'in', format: [8.5, 13], compress: true });
   const pageWidth = doc.internal.pageSize.getWidth();
   const margin = 24 / 72;
@@ -2717,21 +3234,22 @@ function downloadReorderPlanPdf() {
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
   doc.setTextColor(27, 25, 19);
-  doc.text('AB-GADGETZ · REORDER PLAN', pageWidth / 2, 30 / 72, { align: 'center' });
+  const pdfTitle = isSaved && order ? `AB-GADGETZ · ${order.id} (${order.status.toUpperCase()})` : 'AB-GADGETZ · REORDER PLAN';
+  doc.text(pdfTitle, pageWidth / 2, 30 / 72, { align: 'center' });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.5);
   doc.setTextColor(79, 73, 58);
-  const totalUnits = selected.reduce((s, r) => s + r.qty, 0);
-  const totalCost = selected.reduce((s, r) => s + r.qty * r.unitCost, 0);
+  const totalUnits = selected.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+  const totalCost = selected.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.unitCost) || 0), 0);
   doc.text(
-    `Prepared ${nowLabel} · ${totalUnits} pcs${showCosts ? ` · Est. Total PHP ${fmtNum(Math.round(totalCost))}` : ''}`,
+    `${isSaved && order?.title ? `${order.title} · ` : ''}Prepared ${nowLabel} · ${totalUnits} pcs${showCosts ? ` · Total PHP ${fmtNum(Math.round(totalCost))}` : ''}`,
     pageWidth / 2,
     43 / 72,
     { align: 'center' }
   );
 
   const head = showCosts
-    ? [['Branch', 'Brand / Model', 'Qty', 'Unit Cost', 'Subtotal']]
+    ? [['Branch', 'Brand / Model', 'Qty', 'Unit Price', 'Subtotal']]
     : [['Branch', 'Brand / Model', 'Qty']];
   const colsCount = showCosts ? 5 : 3;
   const body = [];
@@ -2759,6 +3277,14 @@ function downloadReorderPlanPdf() {
       }
     }
   }
+  if (showCosts) {
+    body.push([
+      { content: 'TOTAL APPROVED ORDER', colSpan: 2, styles: { fontStyle: 'bold', fillColor: [245, 240, 220] } },
+      { content: `${totalUnits} pcs`, styles: { fontStyle: 'bold', halign: 'center', fillColor: [245, 240, 220] } },
+      { content: '', styles: { fillColor: [245, 240, 220] } },
+      { content: `PHP ${fmtNum(Math.round(totalCost))}`, styles: { fontStyle: 'bold', halign: 'right', fillColor: [245, 240, 220] } },
+    ]);
+  }
 
   doc.autoTable({
     startY: 56 / 72,
@@ -2780,32 +3306,33 @@ function downloadReorderPlanPdf() {
     headStyles: { fillColor: [235, 226, 190], textColor: [30, 30, 30], fontStyle: 'bold' },
   });
 
-  doc.save(`AB_Gadgetz_Reorder_Plan_${todayStr}.pdf`);
+  const fileTag = isSaved && order ? order.id : `Reorder_Plan_${todayStr}`;
+  doc.save(`AB_Gadgetz_${fileTag}.pdf`);
 }
 
-async function downloadReorderPlanExcel() {
+async function downloadReorderPlanExcel(overrideOrder = null) {
   if (!window.ExcelJS) {
     alert('Excel library is still loading. Please try again in a second.');
     return;
   }
-  const { selected, grouped } = getGroupedReorderPlan();
+  const { selected, grouped, isSaved, order } = getGroupedReorderPlan(overrideOrder, false);
   if (!selected.length) {
-    alert('No products selected to export.');
+    alert('No approved products selected to export.');
     return;
   }
-  const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked);
+  const showCosts = Boolean(document.getElementById('reorderShowCostsChk')?.checked) || Boolean(overrideOrder);
   const wb = new window.ExcelJS.Workbook();
-  const ws = wb.addWorksheet('Reorder Plan');
+  const ws = wb.addWorksheet('Purchase Order');
 
   ws.mergeCells(1, 1, 1, showCosts ? 5 : 3);
   const titleCell = ws.getCell(1, 1);
-  titleCell.value = `AB-GADGETZ · REORDER PLAN (${todayStr})`;
+  titleCell.value = isSaved && order ? `AB-GADGETZ · ${order.id} — ${order.title} (${order.status})` : `AB-GADGETZ · REORDER PLAN (${todayStr})`;
   titleCell.font = { bold: true, size: 13 };
   titleCell.alignment = { horizontal: 'center' };
 
   const headers = showCosts
-    ? ['Branch', 'Brand / Model', 'Qty', 'Unit Cost', 'Subtotal']
-    : ['Branch', 'Brand / Model', 'Qty'];
+    ? ['Branch', 'Brand / Model', 'Approved Qty', 'Approved Price', 'Subtotal']
+    : ['Branch', 'Brand / Model', 'Approved Qty'];
   const headerRow = ws.addRow(headers);
   headerRow.eachCell((c) => {
     c.font = { bold: true, size: 10 };
@@ -2813,6 +3340,8 @@ async function downloadReorderPlanExcel() {
     c.border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
   });
 
+  let totQty = 0;
+  let totCost = 0;
   for (const sup of grouped) {
     const supRow = ws.addRow([sup.supplier]);
     ws.mergeCells(supRow.number, 1, supRow.number, showCosts ? 5 : 3);
@@ -2820,30 +3349,41 @@ async function downloadReorderPlanExcel() {
     supRow.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F0DC' } };
     for (const b of sup.branches) {
       for (const r of b.rows) {
-        const vals = showCosts
-          ? [b.branchName, r.displayModel, r.qty, r.unitCost, r.unitCost * r.qty]
-          : [b.branchName, r.displayModel, r.qty];
+        const q = Number(r.qty) || 0;
+        const c = Number(r.unitCost) || 0;
+        totQty += q;
+        totCost += q * c;
+        const vals = showCosts ? [b.branchName, r.displayModel, q, c, q * c] : [b.branchName, r.displayModel, q];
         const row = ws.addRow(vals);
         if (showCosts) {
-          row.getCell(4).numFmt = '"₱"#,##0';
-          row.getCell(5).numFmt = '"₱"#,##0';
+          row.getCell(4).numFmt = '"₱"#,##0.00';
+          row.getCell(5).numFmt = '"₱"#,##0.00';
         }
-        row.eachCell((c) => {
-          c.border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+        row.eachCell((cell) => {
+          cell.border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
         });
       }
     }
   }
 
+  const totRow = ws.addRow(showCosts ? ['TOTAL', '', totQty, '', totCost] : ['TOTAL', '', totQty]);
+  totRow.eachCell((cell) => {
+    cell.font = { bold: true, size: 10 };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEBE2BE' } };
+    cell.border = { top: { style: 'medium' }, bottom: { style: 'medium' }, left: { style: 'thin' }, right: { style: 'thin' } };
+  });
+  if (showCosts) totRow.getCell(5).numFmt = '"₱"#,##0.00';
+
   ws.columns = showCosts
-    ? [{ width: 16 }, { width: 38 }, { width: 10 }, { width: 14 }, { width: 16 }]
-    : [{ width: 16 }, { width: 42 }, { width: 12 }];
+    ? [{ width: 16 }, { width: 38 }, { width: 13 }, { width: 15 }, { width: 16 }]
+    : [{ width: 16 }, { width: 42 }, { width: 14 }];
 
   const buf = await wb.xlsx.writeBuffer();
   const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `AB_Gadgetz_Reorder_Plan_${todayStr}.xlsx`;
+  const fileTag = isSaved && order ? order.id : `Reorder_Plan_${todayStr}`;
+  a.download = `AB_Gadgetz_${fileTag}.xlsx`;
   a.click();
 }
 
@@ -2853,12 +3393,13 @@ async function loadPlanning() {
       api('/api/planning'),
       api('/api/budget'),
       state.planningActivity ? Promise.resolve(state.planningActivity) : api('/api/activity?start=2024-01-01&end=2099-12-31').catch(() => null),
+      loadSavedPurchaseOrders(),
     ]);
     state.planning = planning;
     state.budget = budget;
     if (act) state.planningActivity = act;
   } catch {
-    // static GitHub Pages bundle fallback
+    await loadSavedPurchaseOrders();
   }
   renderPlanning();
 }
@@ -3125,9 +3666,18 @@ function renderOrderFundsPanel() {
 
 function renderPlanning() {
   renderOrderFundsPanel();
+  renderSavedOrdersPanel();
   buildRestockDraftPlan();
   renderRestockCards();
 }
+
+document.getElementById('savedOrdersToggle')?.addEventListener('click', () => {
+  const body = document.getElementById('savedOrdersBody');
+  const caret = document.getElementById('savedOrdersCaret');
+  if (!body) return;
+  const hidden = body.classList.toggle('hidden');
+  if (caret) caret.textContent = hidden ? '+' : '−';
+});
 
 document.getElementById('orderFundsToggle')?.addEventListener('click', () => {
   const body = document.getElementById('orderFundsBody');
@@ -3171,16 +3721,100 @@ document.getElementById('addDeductionBtn')?.addEventListener('click', () => {
 });
 
 document.getElementById('buildRestockPlanBtn')?.addEventListener('click', () => {
+  state.activeSavedOrder = null;
+  const tInp = document.getElementById('reorderOrderTitleInp');
+  if (tInp) tInp.value = '';
   buildRestockDraftPlan();
   renderRestockCards();
+  populateReorderAddProductSelect();
   renderReorderPreviewModal();
+  const stEl = document.getElementById('reorderPreviewStatus');
+  if (stEl) stEl.textContent = '';
   document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
 });
 
 document.getElementById('previewRestockPlanBtn')?.addEventListener('click', () => {
+  state.activeSavedOrder = null;
   if (!state.restockPlan) buildRestockDraftPlan();
+  populateReorderAddProductSelect();
   renderReorderPreviewModal();
+  const stEl = document.getElementById('reorderPreviewStatus');
+  if (stEl) stEl.textContent = '';
   document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
+});
+
+document.getElementById('saveNewRestockOrderBtn')?.addEventListener('click', async () => {
+  state.activeSavedOrder = null;
+  if (!state.restockPlan) buildRestockDraftPlan();
+  const tInp = document.getElementById('reorderOrderTitleInp');
+  if (tInp) {
+    tInp.value = `Restock Order • ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  }
+  populateReorderAddProductSelect();
+  document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
+  await saveCurrentOrderFromModal();
+});
+
+document.getElementById('reorderSaveOrderBtn')?.addEventListener('click', saveCurrentOrderFromModal);
+
+document.getElementById('reorderAddProdSel')?.addEventListener('change', (e) => {
+  const pid = e.target.value;
+  const priceInp = document.getElementById('reorderAddPriceInp');
+  const supSel = document.getElementById('reorderAddSupplierSel');
+  if (!pid || !state.inventory?.items) return;
+  const item = state.inventory.items.find((i) => i.id === pid);
+  if (!item) return;
+  const sup = resolveSupplierForProduct(item, 'LOWEST');
+  const price = Number(sup?.unitCost) > 0 ? sup.unitCost : Math.round((Number(item.base_price) || 0) * 0.85);
+  if (priceInp) priceInp.value = price > 0 ? price : '';
+  if (supSel && sup?.supplier) supSel.value = sup.supplier;
+});
+
+document.getElementById('reorderAddLineBtn')?.addEventListener('click', () => {
+  const pid = document.getElementById('reorderAddProdSel')?.value;
+  const branchId = document.getElementById('reorderAddBranchSel')?.value || 'br-molave';
+  const supplier = document.getElementById('reorderAddSupplierSel')?.value || 'AB Main Supplier';
+  const unitCost = Math.max(0, Number(document.getElementById('reorderAddPriceInp')?.value) || 0);
+  const qty = Math.max(1, parseInt(document.getElementById('reorderAddQtyInp')?.value, 10) || 1);
+  if (!pid || !state.inventory?.items) return;
+  const item = state.inventory.items.find((i) => i.id === pid);
+  if (!item) return;
+  const branchName = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' }[branchId] || branchId;
+  const tier = getCellphonePriceTier(item);
+  const displayModel = formatSwapModelName({ brand: item.brand || '', model: item.model || item.name });
+  const newRow = {
+    key: `${item.id}::${branchId}`,
+    productId: item.id,
+    brand: item.brand || '',
+    model: item.model || item.name,
+    displayModel,
+    sku: item.website_codes || item.sku || '',
+    branchId,
+    branchName,
+    supplier,
+    tierKey: tier.key,
+    tierLabel: tier.label,
+    avail: Number(item.byBranch?.[branchId]?.qtyAvailable) || 0,
+    branchDemand90: 0,
+    storewideDemand90: 0,
+    requestedQty: qty,
+    qty,
+    requestedCost: unitCost,
+    unitCost,
+    approved: true,
+    selected: true,
+    _modalTouched: true,
+  };
+  if (state.activeSavedOrder) {
+    state.activeSavedOrder.items.push(newRow);
+  } else {
+    if (!state.restockPlan) state.restockPlan = [];
+    state.restockPlan.push(newRow);
+    renderRestockCards();
+  }
+  const sel = document.getElementById('reorderAddProdSel');
+  if (sel) sel.value = '';
+  renderReorderPreviewModal();
 });
 
 document.getElementById('restockPriorityMode')?.addEventListener('change', () => {
@@ -3229,10 +3863,10 @@ document.getElementById('reorderBackToEditBtn')?.addEventListener('click', () =>
   document.getElementById('reorderPreviewModal')?.classList.add('hidden');
 });
 document.getElementById('reorderPrintBtn')?.addEventListener('click', () => window.print());
-document.getElementById('reorderPdfBtn')?.addEventListener('click', downloadReorderPlanPdf);
-document.getElementById('reorderExcelBtn')?.addEventListener('click', downloadReorderPlanExcel);
+document.getElementById('reorderPdfBtn')?.addEventListener('click', () => downloadReorderPlanPdf(null));
+document.getElementById('reorderExcelBtn')?.addEventListener('click', () => downloadReorderPlanExcel(null));
 document.getElementById('reorderCopyBtn')?.addEventListener('click', async () => {
-  const text = buildReorderCopyText();
+  const text = buildReorderCopyText(null);
   const stEl = document.getElementById('reorderPreviewStatus');
   if (!text) {
     if (stEl) {
