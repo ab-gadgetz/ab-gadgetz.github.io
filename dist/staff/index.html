@@ -11,7 +11,7 @@
   <link rel="icon" href="../ab-logo-square.png" type="image/png" />
   <link rel="apple-touch-icon" href="../ab-logo-square.png" />
   <title>Staff Portal — AB Gadgetz</title>
-  <link rel="stylesheet" href="../styles.css?v=1795525858306" />
+  <link rel="stylesheet" href="../styles.css?v=1795525966363" />
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
@@ -77,7 +77,7 @@
           <span id="syncStatusText">Connecting...</span>
         </div>
         <button class="secondary" id="syncNowBtn">Sync Now</button>
-        <button class="secondary publish-github-btn" style="border-color:var(--gold);color:var(--gold-bright);">🚀 Publish Catalogs</button>
+        <button class="secondary publish-github-btn" style="border-color:var(--gold);color:var(--gold-bright);" title="Upload your PC edits (stocks, prices, photos, PINs, saved orders) to your live online website &amp; phone portal">☁️ Update Online Website</button>
         <button class="secondary" id="toggleSyncBtn">Pause</button>
         <button class="secondary" id="logoutBtn">LOG OUT</button>
       </div>
@@ -1378,7 +1378,7 @@
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
           <p class="muted small" id="catalogBranchMeta" style="margin:0;"></p>
           <div class="admin-only-el" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-            <button type="button" class="publish-github-btn" style="padding:5px 10px;border-radius:7px;font-size:11px;">🚀 Publish to Live Catalogs</button>
+            <button type="button" class="publish-github-btn" style="padding:5px 10px;border-radius:7px;font-size:11px;" title="Upload new photos &amp; catalog edits to your online branch catalogs">☁️ Save Photos to Online Website</button>
             <a href="https://ab-gadgetz.github.io/molave/" target="_blank" class="secondary" style="padding:4px 9px;border-radius:7px;font-size:11px;text-decoration:none;border:1px solid var(--border-soft);color:var(--gold-bright);">Molave Live ↗</a>
             <a href="https://ab-gadgetz.github.io/tambulig/" target="_blank" class="secondary" style="padding:4px 9px;border-radius:7px;font-size:11px;text-decoration:none;border:1px solid var(--border-soft);color:var(--gold-bright);">Tambulig Live ↗</a>
             <a href="https://ab-gadgetz.github.io/bonifacio/" target="_blank" class="secondary" style="padding:4px 9px;border-radius:7px;font-size:11px;text-decoration:none;border:1px solid var(--border-soft);color:var(--gold-bright);">Bonifacio Live ↗</a>
@@ -1504,7 +1504,7 @@
 
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
           <button type="button" id="saveStaffPinsBtn">SAVE STAFF PINS</button>
-          <button type="button" class="secondary publish-github-btn" style="border-color:var(--gold);color:var(--gold-bright);">🚀 Publish PINs to Online Staff Portal</button>
+          <button type="button" class="secondary publish-github-btn" style="border-color:var(--gold);color:var(--gold-bright);" title="Send updated Staff PINs to your online Staff Portal (/staff/)">☁️ Sync PINs to Online Staff Portal</button>
         </div>
         <div id="staffPinsMsg" class="status-msg" style="margin-top:10px;"></div>
       </div>
@@ -1623,7 +1623,7 @@
           <input type="url" id="photoUrlInput" placeholder="https://..." />
         </div>
         <button type="button" id="addPhotoBtn">+ ADD PHOTO</button>
-        <button type="button" class="publish-github-btn secondary" style="border-color:var(--gold);color:var(--gold-bright);">🚀 Publish</button>
+        <button type="button" class="publish-github-btn secondary" style="border-color:var(--gold);color:var(--gold-bright);" title="Upload your new product photos to your online website">☁️ Save Photos Online</button>
       </div>
 
       <div id="photoPreviewGrid" style="display:flex;gap:10px;flex-wrap:wrap;"></div>
@@ -1737,6 +1737,6 @@
     </div>
   </div>
 
-  <script src="../app.js?v=1795525858306"></script>
+  <script src="../app.js?v=1795525966363"></script>
 </body>
 </html>

@@ -420,7 +420,7 @@ async function staticGhApi(url, opts = {}) {
     }
   }
   if (method !== 'GET') {
-    throw new Error('Make edits in your Local Admin Portal (http://localhost:3456), then click 🚀 Publish Catalogs.');
+    throw new Error('Make edits in your Local Admin Portal (http://localhost:3456), then click ☁️ Update Online Website.');
   }
 
   const bundle = await getGhBundle();
@@ -7467,15 +7467,15 @@ document.querySelectorAll('.publish-github-btn').forEach((btn) => {
     }
     const origText = btn.textContent;
     btn.disabled = true;
-    btn.textContent = 'Publishing...';
+    btn.textContent = 'Updating...';
     const catMsg = document.getElementById('publishCatalogMsg');
     const photoMsg = document.getElementById('photoMsg');
     try {
-      const publishStaffOnly = btn.parentElement?.querySelector('#saveStaffPinsBtn') || btn.textContent.includes('Publish PINs');
+      const publishStaffOnly = btn.parentElement?.querySelector('#saveStaffPinsBtn') || origText.includes('PINs');
       const res = await api(publishStaffOnly ? '/api/staff-pins/publish' : '/api/catalog/publish-github', { method: 'POST', body: '{}' });
       if (catMsg) catMsg.textContent = res.message;
       if (photoMsg) photoMsg.textContent = res.message;
-      btn.textContent = '✓ Published!';
+      btn.textContent = '✓ Updated!';
       setTimeout(() => { btn.textContent = origText; }, 3000);
     } catch (err) {
       const errText = `Publish failed: ${err.message}`;
@@ -10972,7 +10972,7 @@ document.getElementById('saveStaffPinsBtn')?.addEventListener('click', async () 
 
   try {
     await api('/api/staff-pins', { method: 'PUT', body: JSON.stringify({ pins }) });
-    if (msg) msg.textContent = 'Staff PINs saved locally! Click "🚀 Publish PINs to Online Staff Portal" to sync to https://ab-gadgetz.github.io/staff/.';
+    if (msg) msg.textContent = 'Staff PINs saved locally! Click "☁️ Sync PINs to Online Staff Portal" to sync to https://ab-gadgetz.github.io/staff/.';
   } catch (err) {
     if (msg) msg.textContent = err.message;
   }
