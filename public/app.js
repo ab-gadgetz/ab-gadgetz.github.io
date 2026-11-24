@@ -2913,6 +2913,52 @@ function setLocalSavedOrders(orders) {
   } catch {
     // ignore storage quota errors
   }
+  schedulePhoneOrdersPush();
+}
+
+// Phone (GitHub Pages) -> PC: push phone-created orders to public/phone-orders.json so the PC portal imports them
+let phonePushTimer = null;
+function schedulePhoneOrdersPush() {
+  if (!IS_STATIC_GH) return;
+  clearTimeout(phonePushTimer);
+  phonePushTimer = setTimeout(() => { pushPhoneOrdersToGh().catch(() => {}); }, 1500);
+}
+
+async function pushPhoneOrdersToGh() {
+  const token = localStorage.getItem('bs_gh_pub_token');
+  if (!token) return false;
+  const phoneOrders = getLocalSavedOrders().filter((o) => String(o.id || '').startsWith('PO-PH-'));
+  const payload = JSON.stringify({ updatedAt: new Date().toISOString(), orders: phoneOrders }, null, 1);
+  const repo = 'ab-gadgetz/ab-gadgetz.github.io';
+  const apiUrl = `https://api.github.com/repos/${repo}/contents/public/phone-orders.json`;
+  const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
+  let sha;
+  const getRes = await fetch(apiUrl, { headers });
+  if (getRes.ok) sha = (await getRes.json()).sha;
+  const putRes = await fetch(apiUrl, {
+    method: 'PUT',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message: 'Sync phone saved orders to PC portal',
+      content: btoa(unescape(encodeURIComponent(payload))),
+      ...(sha ? { sha } : {}),
+    }),
+  });
+  return putRes.ok;
+}
+
+async function importPhoneOrdersIntoPc() {
+  if (IS_STATIC_GH) return 0;
+  try {
+    const r = await fetch(`https://raw.githubusercontent.com/ab-gadgetz/ab-gadgetz.github.io/main/public/phone-orders.json?v=${Date.now()}`, { cache: 'no-store' });
+    if (!r.ok) return 0;
+    const j = await r.json();
+    if (!Array.isArray(j?.orders) || !j.orders.length) return 0;
+    const res = await api('/api/purchase-orders/import-phone', { method: 'POST', body: JSON.stringify({ orders: j.orders }) });
+    return Number(res?.changed) || 0;
+  } catch {
+    return 0;
+  }
 }
 
 function getDeletedLocalPoIds() {
@@ -2991,6 +3037,7 @@ async function loadSavedPurchaseOrders() {
     return state.savedOrders;
   }
   try {
+    await importPhoneOrdersIntoPc();
     const res = await api('/api/purchase-orders');
     state.savedOrders = Array.isArray(res?.orders) ? res.orders : [];
   } catch {
@@ -4525,9 +4572,33 @@ async function createSavedOrderFromDraft(opts = {}) {
     openInPreview = false,
   } = opts || {};
   if (!state.restockPlan) buildRestockDraftPlan();
-  const draftSelected = (state.restockPlan || []).filter(
+  let draftSelected = (state.restockPlan || []).filter(
     (r) => r.selected && Number(r.qty) > 0 && (!excludeUnchecked || !state.previewUncheckedKeys?.has(r.key))
   );
+  // Enforce the Net Order Budget cap at save time so a plan can never exceed it (e.g. ₱200,000)
+  const budgetCap = parseMoneyInput(document.getElementById('restockBudgetInput')?.value);
+  let trimmedNote = '';
+  if (budgetCap > 0) {
+    let spent = 0;
+    const kept = [];
+    let dropped = 0;
+    for (const r of draftSelected) {
+      const unit = Number(r.unitCost) || 0;
+      const minQ = r.tierKey === 'LOW_END' ? 2 : 1;
+      let q = Number(r.qty) || 0;
+      if (unit > 0) {
+        const afford = Math.floor((budgetCap - spent) / unit);
+        if (afford < minQ) { dropped++; continue; }
+        q = Math.min(q, afford);
+      }
+      kept.push({ ...r, qty: q });
+      spent += q * unit;
+    }
+    if (kept.length !== draftSelected.length || kept.some((r, i) => r.qty !== draftSelected[i]?.qty)) {
+      trimmedNote = ` Trimmed to your ${fmtCurrency(budgetCap)} budget (${fmtCurrency(spent)} total${dropped ? `, ${dropped} line(s) left out` : ''}).`;
+    }
+    draftSelected = kept;
+  }
   if (!draftSelected.length) {
     alert('Select at least one product before saving.');
     return null;
@@ -4572,7 +4643,8 @@ async function createSavedOrderFromDraft(opts = {}) {
     const dayTag = now.slice(0, 10).replace(/-/g, '');
     const all = getLocalSavedOrders();
     const todayCnt = all.filter((o) => String(o.id || '').startsWith(`PO-${dayTag}-`)).length;
-    const id = `PO-${dayTag}-${String(todayCnt + 1).padStart(2, '0')}`;
+    const phCnt = all.filter((o) => String(o.id || '').startsWith(`PO-PH-${dayTag}-`)).length;
+    const id = `PO-PH-${dayTag}-${String(phCnt + 1).padStart(2, '0')}`;
     createdOrder = {
       id,
       title,
@@ -4607,7 +4679,7 @@ async function createSavedOrderFromDraft(opts = {}) {
     if (openInPreview) {
       state.previewOrderOverride = createdOrder;
       renderReorderPreviewModal(
-        `Saved plan ${createdOrder.id} (${createdOrder.status}) ✓ — Tick SHOW COSTS to adjust supplier prices, or click FINALIZE AS ORDERED when ready.`
+        `Saved plan ${createdOrder.id} (${createdOrder.status}) ✓${trimmedNote} — Tick SHOW COSTS to adjust prices, or FINALIZE AS ORDERED when ready.${IS_STATIC_GH && !localStorage.getItem('bs_gh_pub_token') ? ' (Add your GitHub token in Staff PINs tab once so phone plans also appear on your PC.)' : ''}`
       );
       document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
     } else {
@@ -5344,10 +5416,43 @@ function updateOrderFundsSummaryUI(syncToInput = true) {
     `;
   }
   const budgetInp = document.getElementById('restockBudgetInput');
-  if (budgetInp && syncToInput) {
+  // Never wipe a budget the owner typed manually (e.g. ₱200,000) with the auto Net Order Budget (often ₱0)
+  if (budgetInp && syncToInput && !state.budgetManual) {
     budgetInp.value = formatMoneyInput(Math.max(0, t.netOrderBudget));
   }
 }
+
+// Persist manual budget cap so background sync / re-render can never silently remove it
+(function initBudgetPersistence() {
+  const inp = document.getElementById('restockBudgetInput');
+  if (!inp) return;
+  try {
+    const saved = Number(localStorage.getItem('ab_restock_budget_manual_v1')) || 0;
+    if (saved > 0) {
+      state.budgetManual = true;
+      inp.value = formatMoneyInput(saved);
+    }
+  } catch {}
+  inp.addEventListener('input', () => {
+    const v = parseMoneyInput(inp.value);
+    state.budgetManual = v > 0;
+    try {
+      if (v > 0) localStorage.setItem('ab_restock_budget_manual_v1', String(v));
+      else localStorage.removeItem('ab_restock_budget_manual_v1');
+    } catch {}
+  });
+  // Editing the Order Funds panel intentionally goes back to auto Net Order Budget
+  document.addEventListener('input', (e) => {
+    const t = e.target;
+    if (!t || t === inp) return;
+    const id = String(t.id || '');
+    const cls = String(t.className || '');
+    if (/^fund(Metrobank|Maribank|Gcash)$/.test(id) || /fund-(undep|cc|ded)-amt/.test(cls)) {
+      state.budgetManual = false;
+      try { localStorage.removeItem('ab_restock_budget_manual_v1'); } catch {}
+    }
+  }, true);
+})();
 
 function renderOrderFundsPanel() {
   const f = getOrderFundsState();
@@ -10794,6 +10899,14 @@ async function publishStaffPinsViaGhApi(token, jsonText) {
     }
   }
 }
+
+document.getElementById('ghPublishTokenInput')?.addEventListener('change', (e) => {
+  const v = String(e.target.value || '').trim();
+  if (v) {
+    localStorage.setItem('bs_gh_pub_token', v);
+    if (IS_STATIC_GH) pushPhoneOrdersToGh().catch(() => {});
+  }
+});
 
 document.getElementById('saveStaffPinsBtn')?.addEventListener('click', async () => {
   const msg = document.getElementById('staffPinsMsg');
