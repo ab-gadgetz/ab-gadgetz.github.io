@@ -274,16 +274,16 @@
       </div>
 
       <!-- Tool Panel: Restock / Supplier Reorder -->
-      <div id="tool-restock" class="sub-panel hidden">
-        <div class="sub-panel" style="padding:12px;margin-bottom:12px;">
-          <div id="orderFundsToggle" style="display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer;">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <div id="tool-restock" class="sub-panel restock-shell hidden">
+        <div class="sub-panel restock-section">
+          <div id="orderFundsToggle" class="restock-section-head">
+            <div class="restock-section-title">
               <strong style="font-size:12px;letter-spacing:0.6px;color:var(--text);">ORDER FUNDS &amp; NET BUDGET</strong>
               <span id="orderFundsMissingBadge" class="badge badge-danger hidden" style="font-size:10px;">1 due date missing</span>
             </div>
-            <div style="display:flex;align-items:center;gap:8px;">
+            <div class="restock-section-meta">
               <strong id="orderFundsNetHeader" style="color:var(--gold-bright);font-size:13px;">Net ₱0.00</strong>
-              <span id="orderFundsCaret" class="muted" style="font-weight:700;">+</span>
+              <span id="orderFundsCaret" class="restock-caret">+</span>
             </div>
           </div>
 
@@ -319,29 +319,29 @@
         </div>
 
         <!-- Saved Orders Made, Pending Deliveries & Real-Time Variance Report -->
-        <div class="sub-panel" style="padding:12px;margin-bottom:12px;">
-          <div id="savedOrdersToggle" style="display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer;">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <div class="sub-panel restock-section">
+          <div id="savedOrdersToggle" class="restock-section-head">
+            <div class="restock-section-title">
               <strong style="font-size:12px;letter-spacing:0.6px;color:var(--text);">PENDING ORDERS, DELIVERIES &amp; VARIANCE REPORT</strong>
               <span id="savedOrdersCountBadge" class="badge badge-warn" style="font-size:10px;">0 saved</span>
               <span id="pendingUnitsBadge" class="badge badge-ok hidden" style="font-size:10px;">0 pcs waiting delivery</span>
             </div>
-            <div style="display:flex;align-items:center;gap:8px;">
+            <div class="restock-section-meta">
               <span id="savedOrdersSummaryHdr" class="small muted">Track pending orders, physical receipts &amp; AB Web deliveries</span>
-              <span id="savedOrdersCaret" class="muted" style="font-weight:700;">−</span>
+              <span id="savedOrdersCaret" class="restock-caret">−</span>
             </div>
           </div>
           <div id="savedOrdersBody" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border-soft);">
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-              <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                <button type="button" class="po-subview-btn active" data-poview="orders" style="padding:5px 10px;font-size:11.5px;min-height:0;">ORDERS &amp; PENDING</button>
-                <button type="button" class="secondary po-subview-btn" data-poview="variance" style="padding:5px 10px;font-size:11.5px;min-height:0;">VARIANCE REPORT</button>
-                <button type="button" class="secondary po-subview-btn" data-poview="deliveries" style="padding:5px 10px;font-size:11.5px;min-height:0;">AB WEB DELIVERIES (LIVE)</button>
+            <div class="restock-po-toolbar">
+              <div class="restock-tabs-row">
+                <button type="button" class="po-subview-btn active" data-poview="orders">ORDERS &amp; PENDING</button>
+                <button type="button" class="secondary po-subview-btn" data-poview="variance">VARIANCE REPORT</button>
+                <button type="button" class="secondary po-subview-btn" data-poview="deliveries">AB WEB DELIVERIES (LIVE)</button>
               </div>
-              <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                <button type="button" id="logNewPendingOrderBtn" style="padding:5px 10px;font-size:11.5px;min-height:0;">+ LOG PENDING ORDER</button>
-                <button type="button" id="pasteOrderBtn" class="secondary" style="padding:5px 10px;font-size:11.5px;min-height:0;">PASTE EXCEL / TEXT</button>
-                <button type="button" id="syncAbDeliveriesBtn" class="secondary" style="padding:5px 10px;font-size:11.5px;min-height:0;">SYNC &amp; MATCH AB WEB</button>
+              <div class="restock-actions-row">
+                <button type="button" id="logNewPendingOrderBtn">+ LOG PENDING ORDER</button>
+                <button type="button" id="pasteOrderBtn" class="secondary">PASTE EXCEL / TEXT</button>
+                <button type="button" id="syncAbDeliveriesBtn" class="secondary">SYNC &amp; MATCH AB WEB</button>
               </div>
             </div>
 
@@ -456,77 +456,83 @@
           </div>
         </div>
 
-        <div class="sub-panel" style="padding:12px;margin-bottom:12px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
-            <strong style="font-size:12px;letter-spacing:0.6px;color:var(--muted);">ORDER FROM &amp; PLAN PRIORITY</strong>
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-              <select id="restockPriorityMode" style="width:auto;padding:5px 10px;font-size:12px;" title="How BUILD PLAN ranks and allocates your Net Order Budget">
+        <div class="sub-panel restock-builder-card">
+          <div class="restock-builder-head">
+            <strong style="font-size:12px;letter-spacing:0.6px;color:var(--gold-bright);">ORDER FROM &amp; PLAN PRIORITY</strong>
+            <div class="restock-builder-selects">
+              <select id="restockPriorityMode" title="How BUILD PLAN ranks and allocates your Net Order Budget">
                 <option value="LOW_END_DEMAND">Priority: Low-End Cellphones + Store Demand</option>
                 <option value="DEMAND_FIRST">Priority: Highest Store Demand First</option>
                 <option value="SAVINGS_FIRST">Priority: Biggest Supplier Savings First</option>
               </select>
-              <select id="restockTypeFilter" style="width:auto;padding:5px 10px;font-size:12px;">
+              <select id="restockTypeFilter">
                 <option value="Cellphones">Cellphones</option>
                 <option value="Accessories">Accessories</option>
                 <option value="ALL">All Products</option>
               </select>
             </div>
           </div>
-          <div class="grid-2" style="gap:8px;margin-bottom:6px;" id="restockSupplierRadios">
-            <label style="display:flex;align-items:center;gap:8px;margin:0;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.03);cursor:pointer;font-size:13px;">
-              <input type="radio" name="restockSupplierMode" value="LOWEST" checked style="width:16px;height:16px;margin:0;accent-color:var(--gold);" />
+          <div class="restock-supplier-grid" id="restockSupplierRadios">
+            <label class="restock-supplier-pill">
+              <input type="radio" name="restockSupplierMode" value="LOWEST" checked />
               <span>Lowest available price per model</span>
             </label>
-            <label style="display:flex;align-items:center;gap:8px;margin:0;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.03);cursor:pointer;font-size:13px;">
-              <input type="radio" name="restockSupplierMode" value="AB" style="width:16px;height:16px;margin:0;accent-color:var(--gold);" />
+            <label class="restock-supplier-pill">
+              <input type="radio" name="restockSupplierMode" value="AB" />
               <span>AB Main Supplier only</span>
             </label>
-            <label style="display:flex;align-items:center;gap:8px;margin:0;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.03);cursor:pointer;font-size:13px;">
-              <input type="radio" name="restockSupplierMode" value="AK" style="width:16px;height:16px;margin:0;accent-color:var(--gold);" />
+            <label class="restock-supplier-pill">
+              <input type="radio" name="restockSupplierMode" value="AK" />
               <span>A&amp;K only</span>
             </label>
-            <label style="display:flex;align-items:center;gap:8px;margin:0;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.03);cursor:pointer;font-size:13px;">
-              <input type="radio" name="restockSupplierMode" value="ONLINE" style="width:16px;height:16px;margin:0;accent-color:var(--gold);" />
+            <label class="restock-supplier-pill">
+              <input type="radio" name="restockSupplierMode" value="ONLINE" />
               <span>Online Purchase only</span>
             </label>
           </div>
-          <p class="muted small" style="margin:4px 0 10px;">When a specific supplier is selected, models without that supplier's cost are excluded.</p>
-          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
-            <div style="flex:1;min-width:200px;">
+          <p class="muted small" style="margin:6px 0 10px;">When a specific supplier is selected, models without that supplier's cost are excluded.</p>
+          <div class="restock-budget-bar">
+            <div class="restock-budget-field">
               <label for="restockBudgetInput">NET ORDER BUDGET (₱)</label>
               <input type="text" inputmode="decimal" id="restockBudgetInput" placeholder="Leave blank for no cap" />
             </div>
-            <button type="button" id="buildRestockPlanBtn">BUILD PLAN</button>
-            <button type="button" id="previewRestockPlanBtn" class="secondary">PREVIEW / EXPORT</button>
-            <button type="button" id="saveNewRestockOrderBtn" class="secondary" title="Save selected items as an order on the main screen to edit supplier-approved prices and quantities">SAVE ORDER</button>
+            <div class="restock-budget-btns">
+              <button type="button" id="buildRestockPlanBtn">BUILD PLAN</button>
+              <button type="button" id="previewRestockPlanBtn" class="secondary">PREVIEW / EXPORT</button>
+              <button type="button" id="saveNewRestockOrderBtn" class="secondary" title="Save selected items as an order on the main screen to edit supplier-approved prices and quantities">SAVE ORDER</button>
+            </div>
           </div>
         </div>
 
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
-          <div id="restockDraftSummary" class="muted small"></div>
-          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-            <input type="search" id="restockSearchInput" placeholder="Search model..." style="width:150px;padding:5px 9px;font-size:12px;" />
-            <select id="restockBrandFilter" style="width:auto;padding:5px 9px;font-size:12px;">
-              <option value="ALL">All Brands</option>
-            </select>
-            <select id="restockShowFilter" style="width:auto;padding:5px 9px;font-size:12px;">
-              <option value="SELECTED">Selected / Budgeted Only</option>
-              <option value="ALL">All Low-Stock</option>
-              <option value="ZERO">Out of Stock (0) Only</option>
-              <option value="PENDING_COVERED">Has Pending Order Waiting Delivery</option>
-            </select>
-            <label style="display:flex;align-items:center;gap:5px;margin:0;font-size:12px;cursor:pointer;" title="Subtract pending orders waiting for delivery from Restock quantities">
-              <input type="checkbox" id="restockDeductPendingChk" checked style="width:15px;height:15px;margin:0;accent-color:var(--gold);" />
-              <span>Consider Pending Orders</span>
-            </label>
-            <label style="display:flex;align-items:center;gap:5px;margin:0;font-size:12px;cursor:pointer;" title="Auto-hide old web-synced models with 0 stock and 0 sales/reorders">
-              <input type="checkbox" id="restockExcludeObsoleteChk" checked style="width:15px;height:15px;margin:0;accent-color:var(--gold);" />
-              <span>Hide Obsolete / Non-Moving</span>
-            </label>
-            <label style="display:flex;align-items:center;gap:5px;margin:0;font-size:12px;cursor:pointer;">
-              <input type="checkbox" id="reorderSelectAllChk" style="width:15px;height:15px;margin:0;accent-color:var(--gold);" />
-              <span>Select All Visible</span>
-            </label>
+        <div class="restock-toolbar-wrap">
+          <div id="restockDraftSummary" class="restock-summary-strip small"></div>
+          <div class="restock-filter-toolbar">
+            <div class="restock-filter-inputs">
+              <input type="search" id="restockSearchInput" placeholder="Search model..." />
+              <select id="restockBrandFilter">
+                <option value="ALL">All Brands</option>
+              </select>
+              <select id="restockShowFilter">
+                <option value="SELECTED">Selected / Budgeted Only</option>
+                <option value="ALL">All Low-Stock</option>
+                <option value="ZERO">Out of Stock (0) Only</option>
+                <option value="PENDING_COVERED">Has Pending Order Waiting Delivery</option>
+              </select>
+            </div>
+            <div class="restock-checks-row">
+              <label class="restock-check-chip" title="Subtract pending orders waiting for delivery from Restock quantities">
+                <input type="checkbox" id="restockDeductPendingChk" checked />
+                <span>Consider Pending Orders</span>
+              </label>
+              <label class="restock-check-chip" title="Auto-hide old web-synced models with 0 stock and 0 sales/reorders">
+                <input type="checkbox" id="restockExcludeObsoleteChk" checked />
+                <span>Hide Obsolete / Non-Moving</span>
+              </label>
+              <label class="restock-check-chip">
+                <input type="checkbox" id="reorderSelectAllChk" />
+                <span>Select All Visible</span>
+              </label>
+            </div>
           </div>
         </div>
         <div id="restockObsoleteBanner" class="sub-panel hidden" style="padding:8px 12px;margin-bottom:8px;font-size:12px;border-left:3px solid #f59e0b;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;"></div>

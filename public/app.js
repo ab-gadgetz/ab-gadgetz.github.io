@@ -2711,17 +2711,17 @@ function renderRestockCards() {
                   ? `<span class="muted" style="font-size:10px;">• ${fmtNum(r.branchAllSold)} hist</span>`
                   : '';
             return `
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px 0;border-top:1px solid rgba(255,255,255,0.06);font-size:12px;">
-              <label style="display:flex;align-items:center;gap:5px;margin:0;cursor:pointer;flex-wrap:wrap;">
-                <input type="checkbox" class="reorder-row-chk" data-idx="${r._idx}" ${r.selected ? 'checked' : ''} style="width:14px;height:14px;margin:0;accent-color:var(--gold);" />
+            <div class="restock-branch-row">
+              <label class="restock-branch-label">
+                <input type="checkbox" class="reorder-row-chk" data-idx="${r._idx}" ${r.selected ? 'checked' : ''} style="width:16px;height:16px;margin:0;accent-color:var(--gold);flex-shrink:0;" />
                 <span>${r.branchName}</span>
                 <span class="muted small">(${fmtNum(r.avail)}/${fmtNum(r.reorderPoint)})</span>
                 ${zeroTag}
                 ${pendTag}
                 ${brDemTag}
               </label>
-              <div style="display:flex;align-items:center;gap:6px;">
-                <input type="number" class="reorder-qty-inp" data-idx="${r._idx}" value="${r.qty}" min="0" max="99" style="width:52px;padding:2px 5px;font-size:12px;text-align:center;" />
+              <div class="restock-branch-qty">
+                <input type="number" class="reorder-qty-inp" data-idx="${r._idx}" value="${r.qty}" min="0" max="99" />
                 <span class="small muted" style="min-width:22px;">pcs</span>
               </div>
             </div>`;
@@ -2752,7 +2752,7 @@ function renderRestockCards() {
               ? `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;background:rgba(255,255,255,0.06);color:var(--muted);">Hist: ${fmtNum(m.storewideAllSold)} sold</span>`
               : '';
         return `
-          <div class="model-card" style="padding:10px;display:flex;flex-direction:column;gap:8px;">
+          <div class="model-card restock-model-card">
             <div style="display:flex;gap:10px;align-items:center;">
               ${thumbHtml}
               <div style="min-width:0;flex:1;">
@@ -2762,7 +2762,7 @@ function renderRestockCards() {
                 <div class="small" style="margin-top:2px;">Active Cost: <strong>${m.unitCost > 0 ? fmtCurrency(m.unitCost) : '—'}</strong> ${diffBadge}</div>
               </div>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:4px;align-items:end;padding-top:4px;border-top:1px solid rgba(255,255,255,0.06);">
+            <div class="restock-cost-grid">
               <div>
                 <div style="font-size:9.5px;color:var(--muted);">AB ₱</div>
                 <input type="number" class="restock-cost-ab" data-pid="${m.productId}" value="${cAb}" min="0" step="0.01" placeholder="0" style="width:100%;padding:3px 5px;font-size:11px;" />
@@ -2793,7 +2793,7 @@ function renderRestockCards() {
           </div>
           <span class="muted small">${isOpen ? '▲ Hide' : '▼ Show'}</span>
         </div>
-        ${isOpen ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:10px;">${modelsHtml}</div>` : ''}
+        ${isOpen ? `<div class="restock-models-grid">${modelsHtml}</div>` : ''}
       </div>
     `);
   }
@@ -3375,8 +3375,8 @@ function renderSavedOrdersPanel() {
               : '';
       const dtLabel = String(o.createdAt || o.updatedAt || '').slice(0, 10);
       return `
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.03);">
-          <div style="min-width:240px;flex:1;">
+        <div class="po-order-card">
+          <div class="po-order-info">
             <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
               <strong style="color:var(--gold-bright);font-size:13px;">${o.id}</strong>
               <strong style="font-size:13px;">${o.title}</strong>
@@ -3385,19 +3385,19 @@ function renderSavedOrdersPanel() {
               ${warehouseTag}
               ${abMissTag}
             </div>
-            <div class="small muted" style="margin-top:3px;">
+            <div class="small muted" style="margin-top:4px;line-height:1.4;">
               Order Date: <strong>${dtLabel}</strong> • Approved: <strong style="color:var(--text);">${fmtNum(m.approvedUnits)} pcs</strong> (<strong style="color:var(--gold-bright);">${fmtCurrency(m.approvedTotal)}</strong>)
               ${diffText}
               ${delivPart}
             </div>
-            ${o.notes ? `<div class="small muted" style="margin-top:2px;">Note: ${o.notes}</div>` : ''}
+            ${o.notes ? `<div class="small muted" style="margin-top:3px;">Note: ${o.notes}</div>` : ''}
           </div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            <button type="button" class="saved-po-edit-btn" data-poid="${o.id}" style="padding:5px 10px;font-size:11px;min-height:0;">${o.status === 'Draft' ? 'EDIT / FINALIZE' : 'EDIT / RECORD DELIVERY'}</button>
-            <button type="button" class="secondary saved-po-preview-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">${o.status === 'Draft' ? 'PREVIEW / FINALIZE' : 'PREVIEW'}</button>
-            <button type="button" class="secondary saved-po-copy-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">COPY</button>
-            <button type="button" class="secondary saved-po-pdf-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">PDF</button>
-            <button type="button" class="secondary saved-po-del-btn" data-poid="${o.id}" style="padding:5px 8px;font-size:11px;min-height:0;color:var(--danger);">✕</button>
+          <div class="po-order-actions">
+            <button type="button" class="saved-po-edit-btn" data-poid="${o.id}">${o.status === 'Draft' ? 'EDIT / FINALIZE' : 'EDIT / RECORD DELIVERY'}</button>
+            <button type="button" class="secondary saved-po-preview-btn" data-poid="${o.id}">${o.status === 'Draft' ? 'PREVIEW / FINALIZE' : 'PREVIEW'}</button>
+            <button type="button" class="secondary saved-po-copy-btn" data-poid="${o.id}">COPY</button>
+            <button type="button" class="secondary saved-po-pdf-btn" data-poid="${o.id}">PDF</button>
+            <button type="button" class="secondary saved-po-del-btn" data-poid="${o.id}" style="color:var(--danger);">✕</button>
           </div>
         </div>`;
     })
@@ -10654,7 +10654,7 @@ function applyRolePermissions() {
 
   // Toggle admin-only & cashier-only elements
   document.querySelectorAll('.admin-only-el, .publish-github-btn').forEach((el) => {
-    el.classList.toggle('hidden', !isAdmin || (IS_STATIC_GH && el.classList.contains('publish-github-btn')));
+    el.classList.toggle('hidden', !isAdmin);
   });
   document.querySelectorAll('.cashier-only-el').forEach((el) => {
     el.classList.toggle('hidden', role !== 'CASHIER');

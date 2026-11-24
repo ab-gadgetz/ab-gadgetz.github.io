@@ -1468,3 +1468,417 @@ body.role-cashier input[type="date"] {
     width: 100%;
   }
 }
+
+/* Restock Inventory Tool — Presentable & Easy Mobile + PC Layout */
+.restock-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.restock-section {
+  padding: 14px !important;
+  margin-bottom: 0 !important;
+  border-radius: 12px;
+}
+.restock-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.restock-section-title,
+.restock-section-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.restock-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-weight: 800;
+  font-size: 13px;
+}
+.restock-po-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.restock-tabs-row,
+.restock-actions-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.restock-tabs-row button,
+.restock-actions-row button {
+  padding: 7px 11px;
+  font-size: 11.5px;
+  min-height: 34px;
+}
+.po-order-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.po-order-info {
+  min-width: 240px;
+  flex: 1;
+}
+.po-order-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.po-order-actions button {
+  padding: 6px 10px;
+  font-size: 11px;
+  min-height: 32px;
+}
+.restock-builder-card {
+  padding: 14px !important;
+  margin-bottom: 0 !important;
+  border-radius: 12px;
+  border: 1px solid rgba(231, 197, 95, 0.25);
+}
+.restock-builder-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.restock-builder-selects {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.restock-builder-selects select {
+  width: auto;
+  padding: 6px 10px;
+  font-size: 12px;
+  min-height: 36px;
+}
+.restock-supplier-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.restock-supplier-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  font-size: 12.5px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.restock-supplier-pill:has(input:checked) {
+  border-color: var(--gold);
+  background: rgba(231, 197, 95, 0.11);
+  color: var(--gold-bright);
+  font-weight: 700;
+}
+.restock-supplier-pill input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--gold);
+  flex-shrink: 0;
+}
+.restock-budget-bar {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.restock-budget-field {
+  flex: 1;
+  min-width: 210px;
+}
+.restock-budget-btns {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.restock-budget-btns button {
+  min-height: 38px;
+  padding: 8px 14px;
+  font-size: 12.5px;
+}
+.restock-toolbar-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.restock-summary-strip {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(231, 197, 95, 0.25);
+  background: rgba(231, 197, 95, 0.06);
+  line-height: 1.5;
+}
+.restock-filter-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.restock-filter-inputs {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  flex: 1;
+}
+.restock-filter-inputs input[type="search"] {
+  width: 190px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  min-height: 36px;
+}
+.restock-filter-inputs select {
+  width: auto;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  min-height: 36px;
+}
+.restock-checks-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.restock-check-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 12px;
+  cursor: pointer;
+}
+.restock-check-chip input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--gold);
+}
+#reorderCardGrid.brand-grid {
+  grid-template-columns: 1fr !important;
+  gap: 12px;
+}
+.restock-models-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.restock-model-card {
+  padding: 12px !important;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-radius: 10px;
+}
+.restock-cost-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr auto;
+  gap: 6px;
+  align-items: end;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.restock-branch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 12.5px;
+}
+.restock-branch-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  cursor: pointer;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+.restock-branch-qty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.restock-branch-qty input {
+  width: 56px;
+  padding: 4px 6px;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  min-height: 32px;
+}
+
+@media (max-width: 900px) {
+  .restock-supplier-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .restock-section,
+  .restock-builder-card {
+    padding: 12px !important;
+  }
+  .restock-section-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  .restock-section-meta {
+    justify-content: space-between;
+  }
+  .restock-tabs-row,
+  .restock-actions-row {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .restock-tabs-row button,
+  .restock-actions-row button {
+    padding: 8px 6px;
+    font-size: 10.5px;
+    text-align: center;
+    line-height: 1.2;
+    min-height: 38px;
+  }
+  .po-order-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px;
+  }
+  .po-order-info {
+    min-width: 0;
+  }
+  .po-order-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .po-order-actions .saved-po-edit-btn {
+    grid-column: 1 / -1;
+    min-height: 38px;
+    font-size: 12px;
+  }
+  .po-order-actions button {
+    min-height: 36px;
+  }
+  .restock-builder-selects {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .restock-builder-selects select {
+    width: 100%;
+    min-height: 38px;
+  }
+  .restock-supplier-grid {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .restock-supplier-pill {
+    padding: 10px 12px;
+    min-height: 42px;
+  }
+  .restock-budget-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .restock-budget-field {
+    min-width: 0;
+  }
+  .restock-budget-btns {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .restock-budget-btns button {
+    padding: 9px 6px;
+    font-size: 11px;
+    min-height: 42px;
+  }
+  .restock-filter-inputs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    width: 100%;
+  }
+  .restock-filter-inputs input[type="search"] {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-height: 38px;
+  }
+  .restock-filter-inputs select {
+    width: 100%;
+    min-height: 38px;
+  }
+  .restock-checks-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    width: 100%;
+  }
+  .restock-check-chip {
+    padding: 8px 10px;
+    min-height: 36px;
+    font-size: 11.5px;
+  }
+  .restock-models-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .restock-branch-row {
+    padding: 8px 0;
+  }
+  .restock-branch-qty input {
+    width: 60px;
+    min-height: 36px;
+    font-size: 14px;
+  }
+}
