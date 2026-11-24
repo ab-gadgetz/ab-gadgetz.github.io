@@ -1837,62 +1837,179 @@ function resolveSupplierForProduct(item, mode = 'LOWEST') {
   return { supplier: 'AB Main Supplier', unitCost: 0 };
 }
 
-function buildMovementStatsMap() {
-  const stats = new Map();
-  const addStat = (key, field) => {
-    if (!key) return;
-    const k = String(key).trim().toLowerCase();
-    if (!stats.has(k)) stats.set(k, { sold: 0, restocked: 0, totalMovements: 0 });
-    const s = stats.get(k);
-    s[field]++;
-    s.totalMovements++;
+function normRestockUnitName(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/\bplus\b/g, '+')
+    .replace(/\bgalaxy\b/g, '')
+    .replace(/gb\b/g, '')
+    .replace(/\b4g\b/g, '')
+    .replace(/[^a-z0-9+]/g, '');
+}
+
+function isNonOrderablePromoOrRepo(item) {
+  const txt = `${item?.name || ''} ${item?.model || ''} ${item?.sku || ''}`.toUpperCase();
+  const price = Number(item?.base_price) || 0;
+  if (/\(REPO\)|\bREPO\b/.test(txt)) return true;
+  if (/\bFREE\b|FREEBIE|FREE\s*BAG|BUNDLE/.test(txt) && price <= 500) return true;
+  if (price > 0 && price <= 50 && (item?.product_type || 'Cellphones') === 'Cellphones') return true;
+  return false;
+}
+
+function getCellphonePriceTier(item) {
+  const pType = item?.product_type || 'Cellphones';
+  const srp = Number(item?.base_price) || 0;
+  if (pType !== 'Cellphones') {
+    return { key: 'ACCESSORY', rank: 2, label: 'Accessory', color: 'var(--muted)' };
+  }
+  if (srp > 0 && srp <= 10000) {
+    return { key: 'LOW_END', rank: 1, label: 'Low-End', color: 'var(--green)' };
+  }
+  if (srp > 10000 && srp <= 16000) {
+    return { key: 'MID_RANGE', rank: 2, label: 'Mid-Range', color: '#60a5fa' };
+  }
+  return { key: 'HIGH_END', rank: 3, label: 'High-End', color: 'var(--muted)' };
+}
+
+function buildRestockDemandIndex() {
+  const byProdBranch = new Map();
+  const byProd = new Map();
+
+  // 1. Prefer authoritative server-computed 30d/90d/all-time demand (Cash + deduplicated Installments)
+  const srvPB = state.planning?.demandByProductBranch;
+  const srvP = state.planning?.demandByProduct;
+  if (srvPB && Object.keys(srvPB).length > 0) {
+    for (const [k, v] of Object.entries(srvPB)) {
+      byProdBranch.set(k, {
+        sold30: Number(v.sold30) || 0,
+        sold90: Number(v.sold90) || 0,
+        allSold: Number(v.allSold) || 0,
+        restocked: Number(v.restocked) || 0,
+      });
+    }
+    if (srvP) {
+      for (const [pid, v] of Object.entries(srvP)) {
+        byProd.set(pid, {
+          sold30: Number(v.sold30) || 0,
+          sold90: Number(v.sold90) || 0,
+          allSold: Number(v.allSold) || 0,
+          restocked: Number(v.restocked) || 0,
+        });
+      }
+    }
+    return { byProdBranch, byProd };
+  }
+
+  // 2. Fallback / Static GitHub Pages mode: compute exact same 30d/90d demand from activity + installments
+  const items = state.inventory?.items || [];
+  const prodByNorm = new Map();
+  for (const p of items) {
+    const keys = [normRestockUnitName(p.name), normRestockUnitName(`${p.brand || ''} ${p.model || ''}`)].filter(Boolean);
+    for (const k of keys) {
+      const ex = prodByNorm.get(k);
+      if (!ex || ((ex.lifecycle_status || 'Active') !== 'Active' && (p.lifecycle_status || 'Active') === 'Active')) {
+        prodByNorm.set(k, p);
+      }
+    }
+  }
+
+  const nowMs = Date.now();
+  const since30 = new Date(nowMs - 30 * 86400000).toISOString().slice(0, 10);
+  const since90 = new Date(nowMs - 90 * 86400000).toISOString().slice(0, 10);
+
+  const rawPB = new Map();
+  const ensurePB = (pid, bid) => {
+    const k = `${pid}::${bid}`;
+    if (!rawPB.has(k)) {
+      rawPB.set(k, { cash30: 0, instMv30: 0, instPt30: 0, cash90: 0, instMv90: 0, instPt90: 0, allSold: 0, restocked: 0 });
+    }
+    return rawPB.get(k);
   };
+
   const act = state.planningActivity || state.activityData;
-  if (act) {
-    for (const s of act.sales || []) {
-      addStat(s.product_id, 'sold');
-      addStat(s.sku, 'sold');
-      addStat(s.product_name, 'sold');
-    }
-    for (const m of act.movements || []) {
-      const actType = String(m.action || m.type || '').toUpperCase();
-      const field = actType.includes('SOLD') || actType.includes('OUT') ? 'sold' : 'restocked';
-      addStat(m.product_id, field);
-      addStat(m.sku, field);
-      addStat(m.product_name, field);
-    }
-  }
-  return stats;
-}
-
-function getProductMovementSummary(item, statsMap) {
-  const keys = [item.id, item.sku, item.website_codes, item.name, item.model]
-    .filter(Boolean)
-    .map((k) => String(k).trim().toLowerCase());
-  let sold = 0;
-  let restocked = 0;
-  let totalMovements = 0;
-  for (const k of keys) {
-    const s = statsMap.get(k);
-    if (s) {
-      sold = Math.max(sold, s.sold);
-      restocked = Math.max(restocked, s.restocked);
-      totalMovements = Math.max(totalMovements, s.totalMovements);
+  const mvList = act?.allMovements || act?.movements || [];
+  for (const m of mvList) {
+    const mt = String(m.movement_type || m.action || m.type || '').toUpperCase();
+    if (mt.includes('TRANSFER') || mt.includes('FREE')) continue;
+    if (!m.product_id || !m.branch_id) continue;
+    const d = ensurePB(m.product_id, m.branch_id);
+    const dt = String(m.recorded_at || '').slice(0, 10);
+    const dq = Number(m.delta_qty) || 0;
+    const q = Math.abs(dq);
+    if (dq < 0) {
+      d.allSold += q;
+      const isInst = mt.includes('INSTALLMENT');
+      if (dt >= since90) {
+        if (isInst) d.instMv90 += q;
+        else d.cash90 += q;
+      }
+      if (dt >= since30) {
+        if (isInst) d.instMv30 += q;
+        else d.cash30 += q;
+      }
+    } else if (dq > 0 && (mt.includes('DELIVERY') || mt.includes('STOCK'))) {
+      d.restocked += q;
     }
   }
-  return { sold, restocked, totalMovements };
+
+  const instList = act?.allInstallments || act?.installmentSales || state.salesData?.receivables?.installments || state.receivables?.installments || [];
+  for (const ir of instList) {
+    const dt = String(ir.sale_date || '').slice(0, 10);
+    if (dt < since90) continue;
+    const p = prodByNorm.get(normRestockUnitName(ir.unit));
+    if (!p || !ir.branch_id) continue;
+    const d = ensurePB(p.id, ir.branch_id);
+    d.instPt90 += 1;
+    if (dt >= since30) d.instPt30 += 1;
+    d.allSold = Math.max(d.allSold, d.cash90 + Math.max(d.instMv90, d.instPt90));
+  }
+
+  for (const [k, d] of rawPB.entries()) {
+    const [pid] = k.split('::');
+    const sold30 = d.cash30 + Math.max(d.instMv30, d.instPt30);
+    const sold90 = d.cash90 + Math.max(d.instMv90, d.instPt90);
+    const allSold = Math.max(d.allSold, sold90);
+    byProdBranch.set(k, { sold30, sold90, allSold, restocked: d.restocked });
+    if (!byProd.has(pid)) byProd.set(pid, { sold30: 0, sold90: 0, allSold: 0, restocked: 0 });
+    const agg = byProd.get(pid);
+    agg.sold30 += sold30;
+    agg.sold90 += sold90;
+    agg.allSold += allSold;
+    agg.restocked += d.restocked;
+  }
+
+  return { byProdBranch, byProd };
 }
 
-function isObsoleteOrNonMoving(item, branches, statsMap) {
+function buildMovementStatsMap() {
+  return buildRestockDemandIndex();
+}
+
+function getProductMovementSummary(item, demandIdx) {
+  const agg = demandIdx?.byProd?.get(item.id);
+  if (agg) {
+    return {
+      sold: agg.allSold || 0,
+      sold90: agg.sold90 || 0,
+      sold30: agg.sold30 || 0,
+      restocked: agg.restocked || 0,
+      totalMovements: (agg.allSold || 0) + (agg.restocked || 0),
+    };
+  }
+  return { sold: 0, sold90: 0, sold30: 0, restocked: 0, totalMovements: 0 };
+}
+
+function isObsoleteOrNonMoving(item, branches, demandIdx) {
   let totalAvail = 0;
-  for (const b of branches) totalAvail += Number(item.byBranch[b.id]?.qtyAvailable) || 0;
+  for (const b of branches) totalAvail += Number(item.byBranch?.[b.id]?.qtyAvailable) || 0;
   const hasSupplierCost = Number(item.cost_ab) > 0 || Number(item.cost_ak) > 0 || Number(item.cost_online) > 0;
-  const mv = getProductMovementSummary(item, statsMap);
+  const mv = getProductMovementSummary(item, demandIdx);
 
-  if (totalAvail === 0 && mv.sold === 0 && mv.restocked === 0 && !hasSupplierCost) {
+  // Never classify any unit with sales (cash or installment) as Obsolete/Dead!
+  if (totalAvail === 0 && mv.sold === 0 && mv.sold90 === 0 && mv.restocked === 0 && !hasSupplierCost) {
     return { status: 'DEAD_OBSOLETE', label: 'Obsolete / Dead (0 stock, 0 sales, 0 reorders)', totalAvail, mv };
   }
-  if (totalAvail > 0 && mv.sold === 0 && mv.restocked === 0 && !hasSupplierCost) {
+  if (totalAvail > 0 && mv.sold === 0 && mv.sold90 === 0 && mv.restocked === 0 && !hasSupplierCost) {
     return { status: 'NON_MOVING', label: `Non-Moving (${totalAvail} unsold on hand, 0 sales/reorders)`, totalAvail, mv };
   }
   return { status: 'ACTIVE_MOVING', label: 'Active / Moving', totalAvail, mv };
@@ -1977,6 +2094,7 @@ function renderObsoleteAuditUI(obsoleteList) {
 function buildRestockDraftPlan() {
   if (!state.inventory) return [];
   const mode = document.querySelector('input[name="restockSupplierMode"]:checked')?.value || 'LOWEST';
+  const priorityMode = document.getElementById('restockPriorityMode')?.value || 'LOW_END_DEMAND';
   const typeFilter = document.getElementById('restockTypeFilter')?.value || 'Cellphones';
   const budgetVal = parseMoneyInput(document.getElementById('restockBudgetInput')?.value);
   const globalBranchId = document.getElementById('globalBranch')?.value || '';
@@ -1984,7 +2102,7 @@ function buildRestockDraftPlan() {
 
   const { branches, items } = state.inventory;
   const targetBranches = globalBranchId ? branches.filter((b) => b.id === globalBranchId) : branches;
-  const statsMap = buildMovementStatsMap();
+  const demandIdx = buildRestockDemandIndex();
 
   const candidates = [];
   const obsoleteList = [];
@@ -1992,8 +2110,10 @@ function buildRestockDraftPlan() {
     if ((item.lifecycle_status || 'Active') !== 'Active') continue;
     const pType = item.product_type || 'Cellphones';
     if (typeFilter !== 'ALL' && pType !== typeFilter) continue;
+    // Never suggest repo units or freebie/promo bundles for supplier restock
+    if (isNonOrderablePromoOrRepo(item)) continue;
 
-    const health = isObsoleteOrNonMoving(item, branches, statsMap);
+    const health = isObsoleteOrNonMoving(item, branches, demandIdx);
     if (health.status !== 'ACTIVE_MOVING') {
       obsoleteList.push({
         id: item.id,
@@ -2008,18 +2128,56 @@ function buildRestockDraftPlan() {
     if (!sup) continue;
 
     const price = Number(item.base_price) || 0;
-    for (const b of targetBranches) {
-      const cell = item.byBranch[b.id];
-      if (!cell) continue;
-      const avail = Number(cell.qtyAvailable) || 0;
-      const defaultRp = price < 10000 ? (b.id === 'br-molave' ? 2 : 1) : price <= 20000 ? 2 : 1;
-      const reorderPoint = Number(cell.reorderPoint) || defaultRp;
-      if (avail > reorderPoint) continue;
+    const tier = getCellphonePriceTier(item);
+    const prodDemand = demandIdx.byProd.get(item.id) || { sold30: 0, sold90: 0, allSold: 0, restocked: 0 };
+    const storewideDemand90 = prodDemand.sold90 || 0;
+    const storewideDemand30 = prodDemand.sold30 || 0;
+    const storewideAllSold = prodDemand.allSold || 0;
 
-      const targetQty = b.id === 'br-molave' ? Math.max(reorderPoint + 2, 3) : Math.max(reorderPoint + 1, 2);
+    // Resolve effective unit cost: if missing (0) or wildly above SRP from a FIFO glitch, estimate 85% SRP in LOWEST mode so 0-stock demand items are NEVER dropped
+    const websiteCost = Number(item.cost_price) || 0;
+    const hasManualSupCost = Number(item.cost_ab) > 0 || Number(item.cost_ak) > 0 || Number(item.cost_online) > 0;
+    let unitCost = Number(sup.unitCost) || 0;
+    let isEstimatedCost = false;
+    if (mode === 'LOWEST' && price > 0 && (unitCost <= 0 || (!hasManualSupCost && unitCost > price * 1.05))) {
+      unitCost = Math.round(price * 0.85);
+      isEstimatedCost = true;
+    }
+    const savingsVsWebsite = !isEstimatedCost && websiteCost > 0 && websiteCost <= price * 1.05 && unitCost > 0 ? websiteCost - unitCost : 0;
+
+    for (const b of targetBranches) {
+      const cell = item.byBranch?.[b.id];
+      const avail = cell ? Math.max(0, Number(cell.qtyAvailable) || 0) : 0;
+      const brDemand = demandIdx.byProdBranch.get(`${item.id}::${b.id}`) || { sold30: 0, sold90: 0, allSold: 0 };
+      const branchDemand90 = brDemand.sold90 || 0;
+      const branchDemand30 = brDemand.sold30 || 0;
+      const branchAllSold = brDemand.allSold || 0;
+      const branchMonthlyDemand = branchDemand90 / 3;
+
+      // Dynamic Reorder Point & Target Stock driven by actual per-store demand + price tier
+      const defaultRp = tier.key === 'LOW_END' ? (b.id === 'br-molave' ? 2 : 1) : tier.key === 'MID_RANGE' ? (b.id === 'br-molave' ? 2 : 1) : 1;
+      const demandRp = branchMonthlyDemand > 0 ? Math.ceil(branchMonthlyDemand * 0.4) : 0;
+      const reorderPoint = Math.max(Number(cell?.reorderPoint) || defaultRp, demandRp);
+
+      // Always allow 0-stock units through; skip well-stocked branches above reorder point
+      if (avail > 0 && avail > reorderPoint) continue;
+
+      const baseFloor =
+        tier.key === 'LOW_END'
+          ? b.id === 'br-molave'
+            ? 3
+            : 2
+          : tier.key === 'MID_RANGE'
+            ? b.id === 'br-molave'
+              ? 2
+              : 1
+            : 1;
+      // Cover ~3.5 weeks of store demand (capped at 10 pcs/branch so one SKU doesn't absorb entire budget)
+      const demandTarget = branchMonthlyDemand > 0 ? Math.min(10, Math.ceil(branchMonthlyDemand * 0.85)) : 0;
+      const targetQty = branchDemand90 > 0
+        ? Math.max(baseFloor, demandTarget, reorderPoint + (avail === 0 ? 1 : 0))
+        : Math.max(baseFloor, avail === 0 ? baseFloor : reorderPoint + 1);
       const suggestedQty = Math.max(1, targetQty - avail);
-      const websiteCost = Number(item.cost_price) || 0;
-      const savingsVsWebsite = websiteCost > 0 && sup.unitCost > 0 ? websiteCost - sup.unitCost : 0;
 
       candidates.push({
         key: `${item.id}::${b.id}`,
@@ -2032,23 +2190,65 @@ function buildRestockDraftPlan() {
         branchId: b.id,
         branchName: b.name,
         supplier: sup.supplier,
-        unitCost: sup.unitCost,
+        unitCost,
+        isEstimatedCost,
+        srp: price,
+        tierKey: tier.key,
+        tierRank: tier.rank,
+        tierLabel: tier.label,
+        tierColor: tier.color,
         websiteCost,
         savingsVsWebsite,
         avail,
         reorderPoint,
+        branchDemand30,
+        branchDemand90,
+        branchAllSold,
+        storewideDemand30,
+        storewideDemand90,
+        storewideAllSold,
         qty: suggestedQty,
         selected: true,
       });
     }
   }
 
-  // Prioritize priced 0-stock first, then supplier savings vs website cost, then lowest avail, then lowest unit cost
+  // Sort by selected priority strategy
   candidates.sort((a, b) => {
-    const ap = a.unitCost > 0 ? 0 : 1;
-    const bp = b.unitCost > 0 ? 0 : 1;
-    if (ap !== bp) return ap - bp;
-    if ((a.avail === 0) !== (b.avail === 0)) return a.avail === 0 ? -1 : 1;
+    const aHasDemand = a.branchDemand90 > 0 || a.storewideDemand90 > 0 || a.storewideAllSold > 0 ? 1 : 0;
+    const bHasDemand = b.branchDemand90 > 0 || b.storewideDemand90 > 0 || b.storewideAllSold > 0 ? 1 : 0;
+    const aZero = a.avail === 0 ? 1 : 0;
+    const bZero = b.avail === 0 ? 1 : 0;
+
+    if (priorityMode === 'SAVINGS_FIRST') {
+      const ap = a.unitCost > 0 ? 0 : 1;
+      const bp = b.unitCost > 0 ? 0 : 1;
+      if (ap !== bp) return ap - bp;
+      if (aZero !== bZero) return bZero - aZero;
+      if (a.savingsVsWebsite !== b.savingsVsWebsite) return b.savingsVsWebsite - a.savingsVsWebsite;
+      if (a.branchDemand90 !== b.branchDemand90) return b.branchDemand90 - a.branchDemand90;
+      if (a.tierRank !== b.tierRank) return a.tierRank - b.tierRank;
+      return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel);
+    }
+
+    if (priorityMode === 'DEMAND_FIRST') {
+      if (aHasDemand !== bHasDemand) return bHasDemand - aHasDemand;
+      if (aZero !== bZero) return bZero - aZero;
+      if (a.branchDemand90 !== b.branchDemand90) return b.branchDemand90 - a.branchDemand90;
+      if (a.storewideDemand90 !== b.storewideDemand90) return b.storewideDemand90 - a.storewideDemand90;
+      if (a.tierRank !== b.tierRank) return a.tierRank - b.tierRank;
+      if (a.avail !== b.avail) return a.avail - b.avail;
+      return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel);
+    }
+
+    // DEFAULT: LOW_END_DEMAND — Prioritize Active-Demand Low-End Cellphones (SRP <= ₱10k), Out-of-Stock first, then Store Demand
+    if (aHasDemand !== bHasDemand) return bHasDemand - aHasDemand;
+    if (a.tierRank !== b.tierRank) return a.tierRank - b.tierRank;
+    if (aZero !== bZero) return bZero - aZero;
+    if (a.branchDemand90 !== b.branchDemand90) return b.branchDemand90 - a.branchDemand90;
+    if (a.storewideDemand90 !== b.storewideDemand90) return b.storewideDemand90 - a.storewideDemand90;
+    if (a.branchAllSold !== b.branchAllSold) return b.branchAllSold - a.branchAllSold;
+    if (a.storewideAllSold !== b.storewideAllSold) return b.storewideAllSold - a.storewideAllSold;
     if (a.savingsVsWebsite !== b.savingsVsWebsite) return b.savingsVsWebsite - a.savingsVsWebsite;
     if (a.avail !== b.avail) return a.avail - b.avail;
     return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel);
@@ -2121,8 +2321,17 @@ function renderRestockCards() {
   const selected = plan.filter((r) => r.selected && r.qty > 0);
   const totalUnits = selected.reduce((s, r) => s + r.qty, 0);
   const totalCost = selected.reduce((s, r) => s + r.qty * r.unitCost, 0);
+  const lowEndUnits = selected.filter((r) => r.tierKey === 'LOW_END').reduce((s, r) => s + r.qty, 0);
+  const midUnits = selected.filter((r) => r.tierKey === 'MID_RANGE').reduce((s, r) => s + r.qty, 0);
+  const highUnits = selected.filter((r) => r.tierKey === 'HIGH_END').reduce((s, r) => s + r.qty, 0);
+  const zeroLines = selected.filter((r) => r.avail === 0).length;
+  const totalZeroLines = plan.filter((r) => r.avail === 0).length;
   if (sumEl) {
-    sumEl.innerHTML = `Selected <strong>${fmtNum(selected.length)}</strong> line(s) • <strong>${fmtNum(totalUnits)} pcs</strong> • Est. Total: <strong style="color:var(--gold-bright);">${fmtCurrency(totalCost)}</strong>`;
+    const tierNote =
+      lowEndUnits + midUnits + highUnits > 0
+        ? ` • <span style="color:var(--green);">Low-End: <strong>${fmtNum(lowEndUnits)}</strong></span>${midUnits ? ` • Mid: <strong>${fmtNum(midUnits)}</strong>` : ''}${highUnits ? ` • High: <strong>${fmtNum(highUnits)}</strong>` : ''}`
+        : '';
+    sumEl.innerHTML = `Selected <strong>${fmtNum(selected.length)}</strong> line(s) (<strong>${fmtNum(zeroLines)}/${fmtNum(totalZeroLines)}</strong> out-of-stock) • <strong>${fmtNum(totalUnits)} pcs</strong>${tierNote} • Est. Total: <strong style="color:var(--gold-bright);">${fmtCurrency(totalCost)}</strong>`;
   }
 
   const visible = getFilteredRestockRows();
@@ -2133,7 +2342,7 @@ function renderRestockCards() {
 
   if (!state.restockOpenBrands) state.restockOpenBrands = new Set();
 
-  // Group by Brand -> Model
+  // Group by Brand -> Model (preserves priority sort order!)
   const byBrand = new Map();
   for (const r of visible) {
     const bName = r.brand || 'Other';
@@ -2147,6 +2356,13 @@ function renderRestockCards() {
         imageUrl: r.imageUrl,
         supplier: r.supplier,
         unitCost: r.unitCost,
+        isEstimatedCost: r.isEstimatedCost,
+        srp: r.srp,
+        tierKey: r.tierKey,
+        tierLabel: r.tierLabel,
+        tierColor: r.tierColor,
+        storewideDemand90: r.storewideDemand90,
+        storewideAllSold: r.storewideAllSold,
         rows: [],
       });
     }
@@ -2160,6 +2376,7 @@ function renderRestockCards() {
     const models = [...modelMap.values()];
     const brandRows = models.flatMap((m) => m.rows);
     const brandSelectedUnits = brandRows.filter((r) => r.selected).reduce((s, r) => s + r.qty, 0);
+    const brandZeroCount = brandRows.filter((r) => r.avail === 0).length;
     const brandAllSelected = brandRows.length > 0 && brandRows.every((r) => r.selected);
     const isOpen = searchActive || byBrand.size <= 3 || state.restockOpenBrands.has(bName);
     const accent = typeof getBrandMeta === 'function' ? getBrandMeta(bName).color : 'var(--gold)';
@@ -2170,39 +2387,58 @@ function renderRestockCards() {
           ? `<img src="${m.imageUrl}" alt="${m.displayModel}" style="width:48px;height:48px;object-fit:contain;border-radius:8px;background:#fff;flex-shrink:0;padding:2px;" loading="lazy" />`
           : `<div style="width:48px;height:48px;border-radius:8px;background:rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">📱</div>`;
         const branchRowsHtml = m.rows
-          .map(
-            (r) => `
+          .map((r) => {
+            const zeroTag = r.avail === 0 ? `<span style="color:#ef4444;font-weight:700;font-size:10px;margin-left:2px;">OUT</span>` : '';
+            const brDemTag =
+              r.branchDemand90 > 0
+                ? `<span style="color:var(--gold-bright);font-size:10.5px;">• ${fmtNum(r.branchDemand90)} sold/90d</span>`
+                : r.branchAllSold > 0
+                  ? `<span class="muted" style="font-size:10px;">• ${fmtNum(r.branchAllSold)} hist</span>`
+                  : '';
+            return `
             <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px 0;border-top:1px solid rgba(255,255,255,0.06);font-size:12px;">
-              <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer;">
+              <label style="display:flex;align-items:center;gap:5px;margin:0;cursor:pointer;flex-wrap:wrap;">
                 <input type="checkbox" class="reorder-row-chk" data-idx="${r._idx}" ${r.selected ? 'checked' : ''} style="width:14px;height:14px;margin:0;accent-color:var(--gold);" />
                 <span>${r.branchName}</span>
                 <span class="muted small">(${fmtNum(r.avail)}/${fmtNum(r.reorderPoint)})</span>
+                ${zeroTag}
+                ${brDemTag}
               </label>
               <div style="display:flex;align-items:center;gap:6px;">
                 <input type="number" class="reorder-qty-inp" data-idx="${r._idx}" value="${r.qty}" min="1" max="99" style="width:52px;padding:2px 5px;font-size:12px;text-align:center;" />
                 <span class="small muted" style="min-width:22px;">pcs</span>
               </div>
-            </div>`
-          )
+            </div>`;
+          })
           .join('');
         const prodObj = state.inventory?.items?.find((i) => i.id === m.productId) || {};
         const cAb = Number(prodObj.cost_ab) > 0 ? prodObj.cost_ab : '';
         const cAk = Number(prodObj.cost_ak) > 0 ? prodObj.cost_ak : '';
         const cOn = Number(prodObj.cost_online) > 0 ? prodObj.cost_online : '';
         const webCost = Number(prodObj.cost_price) || 0;
-        const diffWeb = webCost > 0 && m.unitCost > 0 ? webCost - m.unitCost : 0;
-        const diffBadge = diffWeb > 0
-          ? `<span style="color:var(--green);font-size:10.5px;font-weight:700;">• Saves ${fmtCurrency(diffWeb)} vs Web</span>`
-          : diffWeb < 0
-            ? `<span style="color:#f59e0b;font-size:10.5px;font-weight:700;">• +${fmtCurrency(Math.abs(diffWeb))} vs Web</span>`
-            : '';
+        const diffWeb = !m.isEstimatedCost && webCost > 0 && m.unitCost > 0 ? webCost - m.unitCost : 0;
+        const diffBadge = m.isEstimatedCost
+          ? `<span style="color:#f59e0b;font-size:10.5px;font-weight:700;">• Est. 85% SRP (enter cost)</span>`
+          : diffWeb > 0
+            ? `<span style="color:var(--green);font-size:10.5px;font-weight:700;">• Saves ${fmtCurrency(diffWeb)} vs Web</span>`
+            : diffWeb < 0
+              ? `<span style="color:#f59e0b;font-size:10.5px;font-weight:700;">• +${fmtCurrency(Math.abs(diffWeb))} vs Web</span>`
+              : '';
+        const tierPill = `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;background:rgba(255,255,255,0.08);color:${m.tierColor};">${m.tierLabel}${m.srp > 0 ? ` • ${fmtCurrency(m.srp)}` : ''}</span>`;
+        const demandPill =
+          m.storewideDemand90 > 0
+            ? `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;background:rgba(231,197,95,0.14);color:var(--gold-bright);">Demand: ${fmtNum(m.storewideDemand90)} / 90d</span>`
+            : m.storewideAllSold > 0
+              ? `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;background:rgba(255,255,255,0.06);color:var(--muted);">Hist: ${fmtNum(m.storewideAllSold)} sold</span>`
+              : '';
         return `
           <div class="model-card" style="padding:10px;display:flex;flex-direction:column;gap:8px;">
             <div style="display:flex;gap:10px;align-items:center;">
               ${thumbHtml}
               <div style="min-width:0;flex:1;">
                 <div style="font-weight:700;font-size:13px;line-height:1.25;">${m.displayModel}</div>
-                <div class="small muted">${m.sku} • <span style="color:var(--gold-bright);">${m.supplier}</span></div>
+                <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:3px;">${tierPill}${demandPill}</div>
+                <div class="small muted" style="margin-top:2px;">${m.sku} • <span style="color:var(--gold-bright);">${m.supplier}</span></div>
                 <div class="small" style="margin-top:2px;">Active Cost: <strong>${m.unitCost > 0 ? fmtCurrency(m.unitCost) : '—'}</strong> ${diffBadge}</div>
               </div>
             </div>
@@ -2230,10 +2466,10 @@ function renderRestockCards() {
     cardsHtml.push(`
       <div class="brand-card ${isOpen ? 'open' : ''}" style="border-top:3px solid ${accent};grid-column:1 / -1;">
         <div class="brand-card-head restock-brand-toggle" data-brand="${bName}" style="cursor:pointer;">
-          <div style="display:flex;align-items:center;gap:10px;">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
             <input type="checkbox" class="restock-brand-chk" data-brand="${bName}" ${brandAllSelected ? 'checked' : ''} style="width:16px;height:16px;accent-color:var(--gold);" />
             <strong style="color:${accent};font-size:15px;">${bName}</strong>
-            <span class="muted small">${models.length} model(s) • ${brandSelectedUnits} pcs selected</span>
+            <span class="muted small">${models.length} model(s) • ${brandSelectedUnits} pcs selected${brandZeroCount ? ` • <span style="color:#ef4444;font-weight:700;">${brandZeroCount} out-of-stock</span>` : ''}</span>
           </div>
           <span class="muted small">${isOpen ? '▲ Hide' : '▼ Show'}</span>
         </div>
@@ -2428,11 +2664,16 @@ function renderReorderPreviewModal() {
                     const nameLabel = r.brand && !r.model.toLowerCase().startsWith(r.brand.toLowerCase())
                       ? `${r.brand} · ${r.model}`
                       : r.model;
+                    const metaTags = [];
+                    if (r.tierKey === 'LOW_END') metaTags.push('<span style="background:#e6f4ea;color:#137333;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700;">Low-End</span>');
+                    if (r.avail === 0) metaTags.push('<span style="background:#fce8e6;color:#c5221f;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700;">0 stock</span>');
+                    if (r.branchDemand90 > 0) metaTags.push(`<span style="color:#6b6351;font-size:10.5px;">${r.branchDemand90} sold/90d</span>`);
+                    else if (r.storewideDemand90 > 0) metaTags.push(`<span style="color:#6b6351;font-size:10.5px;">${r.storewideDemand90} chain/90d</span>`);
                     return `
                     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid #e6e0ce;font-size:12.5px;">
-                      <span>${nameLabel}</span>
+                      <span style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"><span>${nameLabel}</span>${metaTags.join('')}</span>
                       <span style="display:flex;align-items:center;gap:12px;white-space:nowrap;">
-                        ${showCosts ? `<span style="color:#4f493a;font-size:11.5px;">${fmtCurrency(r.unitCost)} × ${r.qty} = <strong>${fmtCurrency(r.unitCost * r.qty)}</strong></span>` : ''}
+                        ${showCosts ? `<span style="color:#4f493a;font-size:11.5px;">${fmtCurrency(r.unitCost)}${r.isEstimatedCost ? ' (est)' : ''} × ${r.qty} = <strong>${fmtCurrency(r.unitCost * r.qty)}</strong></span>` : ''}
                         <strong style="color:#b45309;">${r.qty} ${r.qty === 1 ? 'pc' : 'pcs'}</strong>
                       </span>
                     </div>`;
@@ -2940,6 +3181,11 @@ document.getElementById('previewRestockPlanBtn')?.addEventListener('click', () =
   if (!state.restockPlan) buildRestockDraftPlan();
   renderReorderPreviewModal();
   document.getElementById('reorderPreviewModal')?.classList.remove('hidden');
+});
+
+document.getElementById('restockPriorityMode')?.addEventListener('change', () => {
+  buildRestockDraftPlan();
+  renderRestockCards();
 });
 
 document.getElementById('restockTypeFilter')?.addEventListener('change', () => {

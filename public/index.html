@@ -319,12 +319,19 @@
 
         <div class="sub-panel" style="padding:12px;margin-bottom:12px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
-            <strong style="font-size:12px;letter-spacing:0.6px;color:var(--muted);">ORDER FROM</strong>
-            <select id="restockTypeFilter" style="width:auto;padding:5px 10px;font-size:12px;">
-              <option value="Cellphones">Cellphones</option>
-              <option value="Accessories">Accessories</option>
-              <option value="ALL">All Products</option>
-            </select>
+            <strong style="font-size:12px;letter-spacing:0.6px;color:var(--muted);">ORDER FROM &amp; PLAN PRIORITY</strong>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <select id="restockPriorityMode" style="width:auto;padding:5px 10px;font-size:12px;" title="How BUILD PLAN ranks and allocates your Net Order Budget">
+                <option value="LOW_END_DEMAND">Priority: Low-End Cellphones + Store Demand</option>
+                <option value="DEMAND_FIRST">Priority: Highest Store Demand First</option>
+                <option value="SAVINGS_FIRST">Priority: Biggest Supplier Savings First</option>
+              </select>
+              <select id="restockTypeFilter" style="width:auto;padding:5px 10px;font-size:12px;">
+                <option value="Cellphones">Cellphones</option>
+                <option value="Accessories">Accessories</option>
+                <option value="ALL">All Products</option>
+              </select>
+            </div>
           </div>
           <div class="grid-2" style="gap:8px;margin-bottom:6px;" id="restockSupplierRadios">
             <label style="display:flex;align-items:center;gap:8px;margin:0;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.03);cursor:pointer;font-size:13px;">
