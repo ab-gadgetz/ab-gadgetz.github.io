@@ -10264,7 +10264,7 @@ function generateInventoryPdfForType(productType, reportDateStr, movementsList =
       body: bodyRows,
       theme: 'grid',
       showHead: 'everyPage',
-      pageBreak: isAccessories ? 'auto' : 'avoid',
+      pageBreak: 'auto',
       rowPageBreak: 'avoid',
       didDrawPage: drawHeader,
       styles: {
