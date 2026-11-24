@@ -893,6 +893,39 @@ async function main() {
         updatedAt: o.updated_at || o.updatedAt || '',
       };
     }),
+    abSupplierCatalog: (() => {
+      const itemMap = new Map(inventoryItems.map((it) => [it.id, it]));
+      const rawEntries = Array.isArray(seedSnapshot.ab_supplier_catalog) ? seedSnapshot.ab_supplier_catalog : [];
+      const entries = rawEntries.map((r) => {
+        const matchedProd = r.matched_product_id ? itemMap.get(r.matched_product_id) : null;
+        const totalAvail = matchedProd
+          ? BRANCHES.reduce((s, b) => s + (matchedProd.byBranch?.[b.id]?.qtyAvailable || 0), 0)
+          : 0;
+        return {
+          id: r.id,
+          brand: r.brand,
+          category: r.category,
+          modelName: r.model_name,
+          dpCost: Number(r.dp_cost) || 0,
+          colorsNotes: r.colors_notes || '',
+          matchedProductId: r.matched_product_id || '',
+          stockDate: r.stock_date || '',
+          isAvailable: Boolean(r.is_available),
+          updatedAt: r.updated_at || '',
+          productName: matchedProd?.name || '',
+          productSku: matchedProd?.sku || '',
+          basePrice: Number(matchedProd?.base_price) || 0,
+          costPrice: Number(matchedProd?.cost_price) || 0,
+          costAb: matchedProd?.cost_ab ?? null,
+          costAk: matchedProd?.cost_ak ?? null,
+          costOnline: matchedProd?.cost_online ?? null,
+          lifecycleStatus: matchedProd?.lifecycle_status || '',
+          totalAvail,
+        };
+      });
+      const stockDate = entries.reduce((mx, e) => (e.stockDate && e.stockDate > mx ? e.stockDate : mx), '');
+      return { stockDate, entries };
+    })(),
     syncedAt: syncedAtIso,
     liveSynced,
     liveSyncNote,

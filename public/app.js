@@ -16,6 +16,8 @@ const state = {
   catalogBranchId: 'ALL',
   catalogData: null,
   expandedCatalogBrands: new Set(),
+  abSupplierCatalog: null,
+  activeCcView: 'compare',
   userRole: 'ADMIN',
   userBranchId: '',
 };
@@ -152,7 +154,12 @@ document.querySelectorAll('.inv-tool-btn').forEach((btn) => {
     setInvToolsMenuOpen(false);
     if (state.activeInvTool === 'restock' && !state.planning) loadPlanning();
     if (state.activeInvTool === 'stockswap') renderStockSwapTool();
-    if (state.activeInvTool === 'costcompare') renderCostCompareTool();
+    if (state.activeInvTool === 'costcompare') {
+      renderCostCompareTool();
+      loadSupplierCatalog().then(() => {
+        if (state.activeInvTool === 'costcompare') renderCostCompareTool();
+      });
+    }
   });
 });
 
@@ -601,6 +608,94 @@ async function staticGhApi(url, opts = {}) {
       installments: instRows,
     };
   }
+  if (pathname === '/api/supplier-catalog') {
+    const baseEntries = Array.isArray(bundle.abSupplierCatalog?.entries) ? bundle.abSupplierCatalog.entries : [];
+    const localSaved = (() => {
+      try {
+        return JSON.parse(localStorage.getItem('ab_supplier_catalog_v1') || 'null');
+      } catch {
+        return null;
+      }
+    })();
+    const mergedMap = new Map();
+    for (const e of baseEntries) mergedMap.set(String(e.modelName || '').toUpperCase(), { ...e });
+    for (const e of (localSaved?.entries || [])) mergedMap.set(String(e.modelName || '').toUpperCase(), { ...e });
+    const invItems = state.inventory?.items || bundle.inventory?.items || [];
+    const prodMap = new Map(invItems.map((it) => [it.id, it]));
+    const localCosts = getLocalSupplierCostsMap();
+    const entries = Array.from(mergedMap.values()).map((e) => {
+      const p = e.matchedProductId ? prodMap.get(e.matchedProductId) : null;
+      const ov = e.matchedProductId ? localCosts[e.matchedProductId] : null;
+      const totalAvail = p
+        ? (bundle.inventory?.branches || []).reduce((s, b) => s + (Number(p.byBranch?.[b.id]?.qtyAvailable) || 0), 0)
+        : 0;
+      return {
+        ...e,
+        productName: p?.name || e.productName || '',
+        productSku: p?.sku || e.productSku || '',
+        basePrice: p ? Number(p.base_price) || 0 : Number(e.basePrice) || 0,
+        costPrice: p ? Number(p.cost_price) || 0 : Number(e.costPrice) || 0,
+        costAb: ov?.cost_ab ?? p?.cost_ab ?? e.costAb ?? null,
+        costAk: ov?.cost_ak ?? p?.cost_ak ?? e.costAk ?? null,
+        costOnline: ov?.cost_online ?? p?.cost_online ?? e.costOnline ?? null,
+        lifecycleStatus: p?.lifecycle_status || e.lifecycleStatus || '',
+        totalAvail,
+      };
+    });
+    const stockDate = entries.reduce((mx, e) => (e.stockDate && e.stockDate > mx ? e.stockDate : mx), localSaved?.stockDate || bundle.abSupplierCatalog?.stockDate || '');
+    return { stockDate, entries };
+  }
+  if (pathname === '/api/supplier-catalog/import' && opts.method === 'POST') {
+    const body = JSON.parse(opts.body || '{}');
+    const parsed = parseAbSupplierStockTextClient(body.rawText || '');
+    const allProds = state.inventory?.items || bundle.inventory?.items || [];
+    if (body.dryRun) {
+      const entries = parsed.map((e) => {
+        const m = matchSupplierEntryToProductsClient(e, allProds);
+        return {
+          ...e,
+          matched: m.map((p) => ({
+            productId: p.id,
+            name: p.name,
+            basePrice: Number(p.base_price) || 0,
+            prevAb: p.cost_ab !== null && p.cost_ab !== undefined ? Number(p.cost_ab) : null,
+            nextAb: e.dpCost,
+            lifecycleStatus: p.lifecycle_status,
+          })),
+        };
+      });
+      return { ok: true, dryRun: true, entries };
+    }
+    if (!parsed.length) throw new Error('No DP prices found in pasted text');
+    const prevCatalog = await staticGhApi('/api/supplier-catalog');
+    const mergedMap = new Map((prevCatalog.entries || []).map((e) => [String(e.modelName || '').toUpperCase(), { ...e }]));
+    const updatedIds = new Set();
+    const diffs = [];
+    for (const entry of parsed) {
+      const m = matchSupplierEntryToProductsClient(entry, allProds);
+      const effectiveDate = body.stockDate || entry.stockDate || '2026-11-23';
+      mergedMap.set(entry.modelName.toUpperCase(), {
+        brand: entry.brand,
+        category: entry.category,
+        modelName: entry.modelName,
+        dpCost: entry.dpCost,
+        colorsNotes: entry.colorsNotes || '',
+        matchedProductId: m[0]?.id || '',
+        stockDate: effectiveDate,
+        isAvailable: true,
+      });
+      for (const p of m) {
+        const prevAb = p.cost_ab !== null && p.cost_ab !== undefined ? Number(p.cost_ab) : null;
+        await saveProductSupplierCosts(p.id, { costAb: entry.dpCost });
+        updatedIds.add(p.id);
+        diffs.push({ productId: p.id, productName: p.name, prevAb, nextAb: entry.dpCost, changed: prevAb !== entry.dpCost });
+      }
+    }
+    const nextList = Array.from(mergedMap.values());
+    const nextStockDate = nextList.reduce((mx, e) => (e.stockDate && e.stockDate > mx ? e.stockDate : mx), '');
+    localStorage.setItem('ab_supplier_catalog_v1', JSON.stringify({ stockDate: nextStockDate, entries: nextList }));
+    return { ok: true, importedCount: parsed.length, updatedProductsCount: updatedIds.size, diffs };
+  }
   return {};
 }
 
@@ -692,6 +787,7 @@ async function loadInventory() {
   populateSelects();
   renderInventory();
   renderHealth();
+  loadSupplierCatalog().catch(() => {});
 }
 
 function populateSelects() {
@@ -2536,6 +2632,10 @@ function renderRestockCards() {
               ? `<span style="color:#f59e0b;font-size:10.5px;font-weight:700;">• +${fmtCurrency(Math.abs(diffWeb))} vs Web</span>`
               : '';
         const tierPill = `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;background:rgba(255,255,255,0.08);color:${m.tierColor};">${m.tierLabel}${m.srp > 0 ? ` • ${fmtCurrency(m.srp)}` : ''}</span>`;
+        const supEntry = state.abSupplierCatalog?.byProductId?.get(m.productId);
+        const abStockPill = supEntry
+          ? `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;background:rgba(16,185,129,0.14);color:#34d399;" title="${String(supEntry.colorsNotes || 'Available on AB Supplier Stock List').replace(/"/g, '&quot;')}">AB Stock: ${supEntry.stockDate || 'Nov 23'}</span>`
+          : '';
         const demandPill =
           m.storewideDemand90 > 0
             ? `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;background:rgba(231,197,95,0.14);color:var(--gold-bright);">Demand: ${fmtNum(m.storewideDemand90)} / 90d</span>`
@@ -2548,7 +2648,7 @@ function renderRestockCards() {
               ${thumbHtml}
               <div style="min-width:0;flex:1;">
                 <div style="font-weight:700;font-size:13px;line-height:1.25;">${m.displayModel}</div>
-                <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:3px;">${tierPill}${demandPill}</div>
+                <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:3px;">${tierPill}${demandPill}${abStockPill}</div>
                 <div class="small muted" style="margin-top:2px;">${m.sku} • <span style="color:var(--gold-bright);">${m.supplier}</span></div>
                 <div class="small" style="margin-top:2px;">Active Cost: <strong>${m.unitCost > 0 ? fmtCurrency(m.unitCost) : '—'}</strong> ${diffBadge}</div>
               </div>
@@ -4946,6 +5046,7 @@ async function loadPlanning() {
       state.planningActivity ? Promise.resolve(state.planningActivity) : api('/api/activity?start=2024-01-01&end=2099-12-31').catch(() => null),
       loadSavedPurchaseOrders(),
       loadAbDeliveries(),
+      loadSupplierCatalog(),
     ]);
     state.planning = planning;
     state.budget = budget;
@@ -5518,6 +5619,14 @@ document.getElementById('reorderCopyBtn')?.addEventListener('click', async () =>
 
 function renderCostCompareTool() {
   if (!state.inventory) return;
+  const abCatCount = state.abSupplierCatalog?.entries?.length || 0;
+  const abBadge = document.getElementById('abSupplierCatalogBadge');
+  if (abBadge) {
+    abBadge.textContent = abCatCount > 0 ? `(${abCatCount} • ${state.abSupplierCatalog?.stockDate || 'Nov 23'})` : '';
+  }
+  if (state.activeCcView === 'supplierCatalog') {
+    renderAbSupplierCatalogView();
+  }
   const search = (document.getElementById('costCompareSearch')?.value || '').trim().toLowerCase();
   const typeFilter = document.getElementById('costCompareType')?.value || 'Cellphones';
   const stockFilter = document.getElementById('costCompareStockFilter')?.value || 'IN_STOCK';
@@ -5753,6 +5862,361 @@ document.getElementById('costCompareSort')?.addEventListener('change', renderCos
 document.getElementById('applyCostPriorityRestockBtn')?.addEventListener('click', () => {
   const restockBtn = document.querySelector('.inv-tool-btn[data-tool="restock"]');
   if (restockBtn) restockBtn.click();
+});
+
+const escAbHtml = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+function parseAbSupplierStockTextClient(rawText, defaultDate = '2026-11-23') {
+  const extractDate = (txt, fallback) => {
+    const m = String(txt || '').match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})\s*,\s*(20\d{2})\b/i);
+    if (m) {
+      const mm = { january: '01', february: '02', march: '03', april: '04', may: '05', june: '06', july: '07', august: '08', september: '09', october: '10', november: '11', december: '12' }[m[1].toLowerCase()];
+      if (mm) return `${m[3]}-${mm}-${String(parseInt(m[2], 10)).padStart(2, '0')}`;
+    }
+    const iso = String(txt || '').match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+    return iso ? iso[1] : fallback;
+  };
+  const cleanL = (l) => String(l || '')
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\uFE0F]/gu, ' ')
+    .replace(/[✅🛑⛄📢🧑🎄🌈⚠️❗🤳⌚🥳*]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const cleanTitle = (l) => String(l || '')
+    .replace(/\(\s*(?:NEW MODEL|LIMITED|NEW PRICE)\s*\)/gi, ' ')
+    .replace(/\b(?:NEW PRICE|NEW MODEL)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const lines = String(rawText || '').replace(/\r/g, '').split('\n');
+  const defaultStockDate = extractDate(rawText, defaultDate);
+  let currentBrand = 'INFINIX';
+  let currentCategory = 'Smartphones';
+  let sectionDate = defaultStockDate;
+  let pendingModel = '';
+  let pendingNotes = [];
+  let lastParsed = null;
+  const results = [];
+
+  for (const rawLine of lines) {
+    const trimmedRaw = rawLine.trim();
+    if (!trimmedRaw || /^_{4,}$/.test(trimmedRaw)) { pendingModel = ''; pendingNotes = []; continue; }
+    const line = cleanL(trimmedRaw);
+    if (!line) continue;
+    const up = line.toUpperCase();
+    if (/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}\s*,\s*20\d{2}\b/i.test(line)) {
+      sectionDate = extractDate(line, defaultStockDate);
+    }
+    if (/POCO STOCK UPDATE|POCO SMARTPHONES/i.test(up)) { currentBrand = 'POCO'; currentCategory = 'Smartphones'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/OPPO STOCKS|OPPO SMARTPHONES/i.test(up)) { currentBrand = 'OPPO'; currentCategory = 'Smartphones'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/OPPO AIOT/i.test(up)) { currentBrand = 'OPPO'; currentCategory = 'AIOT & Accessories'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/INFINIX SMARTPHONES|INFINIX MOBILE/i.test(up)) { currentBrand = 'INFINIX'; currentCategory = 'Smartphones'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/TABLETS\s*&\s*LAPTOPS/i.test(up)) { currentBrand = 'INFINIX'; currentCategory = 'Tablets & Laptops'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/INFINIX SMART TV/i.test(up)) { currentBrand = 'INFINIX'; currentCategory = 'Smart TV'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/AIOT\s*&\s*ACCESSORIES/i.test(up)) { currentBrand = 'INFINIX'; currentCategory = 'AIOT & Accessories'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (up === 'ANKER') { currentBrand = 'ANKER'; currentCategory = 'Anker'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/TECNO STOCK|TECNO SMARTPHONES/i.test(up)) { currentBrand = 'TECNO'; currentCategory = 'Smartphones'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/ITEL STOCK|ITEL SMARTPHONES/i.test(up)) { currentBrand = 'ITEL'; currentCategory = 'Smartphones'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/REALME STOCK|REALME SMARTPHONES/i.test(up)) { currentBrand = 'REALME'; currentCategory = 'Smartphones'; pendingModel = ''; pendingNotes = []; lastParsed = null; continue; }
+    if (/^(check out our|thank you|happy selling|good day|available .* stocks|sharing our|blissful|anna liza|br,|(poco|oppo|infinix|tecno|realme|itel)\s*\|\s*tecnix)/i.test(line)) {
+      pendingModel = ''; pendingNotes = []; continue;
+    }
+    if (trimmedRaw.startsWith('⚠️') && lastParsed && !/\bDP\b/i.test(line)) {
+      lastParsed.colorsNotes = lastParsed.colorsNotes ? `${lastParsed.colorsNotes} | ${line}` : line;
+      continue;
+    }
+    const beforeSrp = line.split(/\b(?:NEW\s+)?SRP\b/i)[0];
+    const dpMatch = beforeSrp.match(/\b(?:NEW\s+)?DP\s*[:\-–]\s*([0-9][0-9,\s]*(?:\.[0-9]+)?)/i);
+    if (dpMatch) {
+      const dpCost = Math.round(Number(dpMatch[1].replace(/[,\s]+/g, '')) * 100) / 100;
+      const rawModel = pendingModel || line.split(/\b(?:NEW\s+)?DP\s*[:\-–]/i)[0].trim();
+      if (Number.isFinite(dpCost) && dpCost > 0 && rawModel) {
+        let modelName = rawModel.replace(/^[-•–*]+\s*/, '').trim();
+        const mu = modelName.toUpperCase();
+        if (currentBrand === 'OPPO' && !mu.startsWith('OPPO ')) modelName = `OPPO ${modelName}`;
+        else if (currentBrand === 'POCO' && !mu.startsWith('POCO ')) modelName = `POCO ${modelName}`;
+        else if (currentBrand === 'ANKER' && !mu.startsWith('ANKER ') && !mu.startsWith('SOUNDCORE ')) modelName = `ANKER ${modelName}`;
+        else if (currentBrand === 'INFINIX' && currentCategory === 'Smartphones' && !mu.startsWith('INFINIX ')) modelName = `INFINIX ${modelName}`;
+        if (/WATCH\s+S\b/i.test(modelName) && pendingNotes.length) {
+          modelName = `${modelName} - ${pendingNotes[0].replace(/\s*\(LIMITED\)\s*/gi, '').trim()}`;
+        }
+        const entry = { brand: currentBrand, category: currentCategory, modelName, dpCost, colorsNotes: pendingNotes.join(' | '), stockDate: sectionDate || defaultStockDate };
+        results.push(entry);
+        lastParsed = entry;
+      }
+      pendingModel = ''; pendingNotes = [];
+      continue;
+    }
+    if (/^\b(?:NEW\s+)?SRP\s*[:\-–]/i.test(line)) continue;
+    if (!pendingModel || /^[✅🛑⛄*]/.test(trimmedRaw)) {
+      pendingModel = cleanTitle(line);
+      pendingNotes = [];
+      lastParsed = null;
+    } else {
+      pendingNotes.push(line);
+    }
+  }
+  const dedup = new Map();
+  for (const r of results) dedup.set(r.modelName.toUpperCase(), r);
+  return Array.from(dedup.values());
+}
+
+function matchSupplierEntryToProductsClient(entry, products) {
+  const validProducts = (products || []).filter((p) => !/\bREPO\b|\bREPAIRED\b|\bLDU\b|FREEBIE|FREE BUNDLE|\bFREE\b|\bDEMO\b/.test(`${p.name || ''} ${p.model || ''}`.toUpperCase()));
+  const normK = (s) => String(s || '').toLowerCase().replace(/\(repo\)|\(repaired.*?\)|\(ldu\)|\(limited\)|\(new model\)/gi, ' ').replace(/\bbt\b/gi, 'bluetooth').replace(/(\d+)\s*gb\b/gi, '$1').replace(/(\d+)\s*[+/]\s*(\d+)/g, ' $1_$2 ').replace(/[^a-z0-9_]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const compK = (s) => normK(s).replace(/[_ ]+/g, '');
+  const aliases = {
+    pocom8s5g8256: ['prd-poco-85'], pocom8s5g8gb256gb: ['prd-poco-85'],
+    infinixgt50pro12256: ['prd-infinix-021'], infinixgt50pro12256gb: ['prd-infinix-021'],
+    xpad20pro8256: ['prd-infinix-098', 'prd-xpad-098'], xpad20pro8256gb: ['prd-infinix-098', 'prd-xpad-098'],
+    infinixxpad20pro8256: ['prd-infinix-098', 'prd-xpad-098'], xpad30ebtkeyboard: ['prd-xpad-099'],
+    xwatchh4xw4l: ['prd-infinix-058'], smartwatchh5proxw5p: ['prd-infinix-032'],
+    xwatchn5pro: ['prd-infinix-031'], gtwatch5pro: ['prd-watch-019'],
+  };
+  const cEntry = compK(entry.modelName);
+  if (aliases[cEntry]) {
+    const m = validProducts.filter((p) => aliases[cEntry].includes(p.id));
+    if (m.length) return m;
+  }
+  const tk = normK(entry.modelName);
+  const ramRom = tk.match(/\b\d+_\d+\b/g) || [];
+  const brandU = String(entry.brand || '').toUpperCase();
+  const brandPool = validProducts.filter((p) => {
+    const tu = `${p.brand || ''} ${p.model || ''} ${p.name || ''}`.toUpperCase();
+    if (brandU === 'POCO') return tu.includes('POCO');
+    if (brandU === 'OPPO') return tu.includes('OPPO');
+    if (brandU === 'ANKER') return tu.includes('ANKER') || tu.includes('SOUNDCORE');
+    if (brandU === 'INFINIX') return tu.includes('INFINIX') || tu.includes('XPAD') || tu.includes('XBOOK') || tu.includes('GTBOOK') || tu.includes('XWATCH') || tu.includes('XBUDS');
+    return !brandU || tu.includes(brandU);
+  });
+  const exact = brandPool.filter((p) => compK(`${p.brand || ''} ${p.model || ''}`) === cEntry || compK(p.name) === cEntry);
+  if (exact.length) return exact;
+  const words = tk.split(' ').filter((w) => w && !/^\d+_\d+$/.test(w) && !['poco', 'oppo', 'infinix', 'anker', 'tecno', 'realme', 'itel', '5g', '4g', 'bt', 'limited'].includes(w));
+  if (!words.length) return [];
+  return brandPool.filter((p) => {
+    const pk = normK(`${p.brand || ''} ${p.model || ''} ${p.name || ''}`);
+    const pw = new Set(pk.split(' '));
+    const pr = pk.match(/\b\d+_\d+$|\b\d+_\d+\b/g) || [];
+    if (ramRom.length) { for (const rr of ramRom) if (!pr.includes(rr)) return false; } else if (pr.length) return false;
+    if (/KEYBOARD|CASE|PENCIL/i.test(entry.modelName)) {
+      const extra = pk.split(' ').filter((w) => w && !['infinix', 'oppo', 'poco', 'tecno', 'bt', 'bluetooth', 'keyboard', 'case'].includes(w) && !words.includes(w));
+      if (extra.some((w) => /\d/.test(w))) return false;
+    }
+    return words.every((w) => pw.has(w));
+  });
+}
+
+async function loadSupplierCatalog() {
+  try {
+    const res = await api('/api/supplier-catalog');
+    const byProductId = new Map();
+    for (const e of (res.entries || [])) {
+      if (e.matchedProductId) byProductId.set(e.matchedProductId, e);
+    }
+    state.abSupplierCatalog = { stockDate: res.stockDate || '', entries: res.entries || [], byProductId };
+    const abBadge = document.getElementById('abSupplierCatalogBadge');
+    if (abBadge) {
+      abBadge.textContent = state.abSupplierCatalog.entries.length > 0
+        ? `(${state.abSupplierCatalog.entries.length} • ${state.abSupplierCatalog.stockDate || 'Nov 23'})`
+        : '';
+    }
+    if (state.activeCcView === 'supplierCatalog') renderAbSupplierCatalogView();
+  } catch {}
+}
+
+function renderAbSupplierCatalogView() {
+  const catalog = state.abSupplierCatalog || { stockDate: '', entries: [] };
+  const entries = catalog.entries || [];
+  const search = (document.getElementById('abCatSearch')?.value || '').trim().toLowerCase();
+  const brandFilter = document.getElementById('abCatBrandFilter')?.value || 'ALL';
+  const matchFilter = document.getElementById('abCatMatchFilter')?.value || 'ALL';
+
+  const brandSel = document.getElementById('abCatBrandFilter');
+  if (brandSel && entries.length) {
+    const existingOpts = new Set(Array.from(brandSel.options).map((o) => o.value));
+    for (const b of [...new Set(entries.map((e) => e.brand).filter(Boolean))]) {
+      if (!existingOpts.has(b)) {
+        const opt = document.createElement('option');
+        opt.value = b;
+        opt.textContent = b;
+        brandSel.appendChild(opt);
+      }
+    }
+  }
+
+  const invMap = new Map((state.inventory?.items || []).map((i) => [i.id, i]));
+  const branches = state.inventory?.branches || [];
+  const enriched = entries.map((e) => {
+    const prod = e.matchedProductId ? invMap.get(e.matchedProductId) : null;
+    const basePrice = prod ? Number(prod.base_price) || 0 : Number(e.basePrice) || 0;
+    const cashPrice = basePrice > 0 ? Math.round(basePrice * 0.95) : 0;
+    const dp = Number(e.dpCost) || 0;
+    const marginPhp = basePrice > 0 && dp > 0 ? basePrice - dp : null;
+    const marginPct = basePrice > 0 && dp > 0 ? ((basePrice - dp) / basePrice) * 100 : null;
+    const lifecycleStatus = prod ? (prod.lifecycle_status || 'Active') : (e.lifecycleStatus || '');
+    const totalAvail = prod
+      ? branches.reduce((s, b) => s + (Number(prod.byBranch?.[b.id]?.qtyAvailable) || 0), 0)
+      : Number(e.totalAvail) || 0;
+    return { ...e, basePrice, cashPrice, dp, marginPhp, marginPct, lifecycleStatus, totalAvail };
+  });
+
+  const matchedCount = enriched.filter((e) => e.matchedProductId).length;
+  const unmatchedCount = enriched.length - matchedCount;
+  const activeMatchedCount = enriched.filter((e) => e.matchedProductId && e.lifecycleStatus === 'Active').length;
+  const sumGrid = document.getElementById('abSupplierCatalogSummaryGrid');
+  if (sumGrid) {
+    sumGrid.innerHTML = `
+      <div class="summary-box">AB SUPPLIER ITEMS (${escAbHtml(catalog.stockDate || 'Nov 23')})<strong>${fmtNum(enriched.length)}</strong></div>
+      <div class="summary-box">SYNCED TO AB WEB PRODUCTS<strong style="color:var(--green);">${fmtNum(matchedCount)} (${fmtNum(activeMatchedCount)} Active)</strong></div>
+      <div class="summary-box">SUPPLIER ITEMS NOT ON AB WEB<strong style="color:var(--gold-bright);">${fmtNum(unmatchedCount)}</strong></div>
+      <div class="summary-box">SELLING PRICE SOURCE<strong>AB Web Current Prices (SRP Ignored)</strong></div>
+    `;
+  }
+
+  const filtered = enriched.filter((e) => {
+    if (brandFilter !== 'ALL' && e.brand !== brandFilter) return false;
+    if (matchFilter === 'MATCHED' && !e.matchedProductId) return false;
+    if (matchFilter === 'UNMATCHED' && e.matchedProductId) return false;
+    if (search) {
+      const hay = `${e.brand} ${e.category} ${e.modelName} ${e.colorsNotes} ${e.productName} ${e.productSku}`.toLowerCase();
+      if (!hay.includes(search)) return false;
+    }
+    return true;
+  });
+
+  const tbody = document.querySelector('#abSupplierCatalogTable tbody');
+  if (!tbody) return;
+  tbody.innerHTML = filtered.length
+    ? filtered
+        .map((e) => {
+          const sellHtml = e.basePrice > 0
+            ? `<strong>${fmtCurrency(e.basePrice)}</strong><div class="small muted">Cash (-5%): ${fmtCurrency(e.cashPrice)}</div>`
+            : e.matchedProductId
+              ? '<span class="muted small">AB Web ₱0</span>'
+              : '<span class="muted small">Not on AB Web (SRP ignored)</span>';
+          const marginColor = e.marginPct === null ? 'var(--muted)' : e.marginPct >= 10 ? 'var(--green)' : e.marginPct >= 5 ? 'var(--gold-bright)' : '#f87171';
+          const marginHtml = e.marginPct !== null
+            ? `<strong style="color:${marginColor};">${e.marginPct.toFixed(1)}%</strong><div class="small" style="color:${marginColor};">${e.marginPhp >= 0 ? '+' : ''}${fmtCurrency(e.marginPhp)}</div>`
+            : '<span class="muted">—</span>';
+          const statusHtml = e.matchedProductId
+            ? e.lifecycleStatus === 'Active'
+              ? `<span class="badge badge-ok">On AB Web • Active</span><div class="small muted">${escAbHtml(e.productName)} (${fmtNum(e.totalAvail)} avail)</div>`
+              : `<span class="badge badge-warn">Phaseout on AB Web</span><div class="small muted">${escAbHtml(e.productName)}</div>${e.basePrice >= e.dp ? `<button type="button" class="secondary ab-cat-reactivate-btn" data-pid="${escAbHtml(e.matchedProductId)}" style="margin-top:4px;padding:2px 8px;font-size:10.5px;min-height:0;">Reactivate</button>` : '<div class="small" style="color:#f59e0b;">Note: AB Web price below new DP</div>'}`
+            : '<span class="badge" style="background:rgba(255,255,255,0.08);color:var(--muted);">Supplier Available Only</span>';
+
+          return `
+            <tr>
+              <td><strong>${escAbHtml(e.brand)}</strong><div class="small muted">${escAbHtml(e.category)}</div></td>
+              <td><strong>${escAbHtml(e.modelName)}</strong>${e.colorsNotes ? `<div class="small" style="color:#34d399;margin-top:2px;">${escAbHtml(e.colorsNotes)}</div>` : ''}</td>
+              <td><strong style="color:var(--gold-bright);">${fmtCurrency(e.dp)}</strong><div class="small muted">Updated ${escAbHtml(e.stockDate || '2026-11-23')}</div></td>
+              <td>${sellHtml}</td>
+              <td>${marginHtml}</td>
+              <td>${statusHtml}</td>
+            </tr>
+          `;
+        })
+        .join('')
+    : '<tr><td colspan="6" class="muted">No AB supplier items match the current filter.</td></tr>';
+
+  tbody.querySelectorAll('.ab-cat-reactivate-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const pid = btn.dataset.pid;
+      const prod = state.inventory?.items?.find((i) => i.id === pid);
+      if (prod) prod.lifecycle_status = 'Active';
+      if (!IS_STATIC_GH) {
+        try {
+          await api('/api/products/lifecycle', { method: 'PATCH', body: JSON.stringify({ productIds: [pid], status: 'Active' }) });
+        } catch (err) {
+          alert(err.message);
+        }
+      }
+      renderAbSupplierCatalogView();
+      renderCostCompareTool();
+      if (state.restockPlan) { buildRestockDraftPlan(); renderRestockCards(); }
+    });
+  });
+}
+
+document.querySelectorAll('.cc-subview-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    state.activeCcView = btn.dataset.ccview || 'compare';
+    document.querySelectorAll('.cc-subview-btn').forEach((b) => {
+      const active = b.dataset.ccview === state.activeCcView;
+      b.classList.toggle('active', active);
+      b.classList.toggle('secondary', !active);
+    });
+    document.getElementById('ccView-compare')?.classList.toggle('hidden', state.activeCcView !== 'compare');
+    document.getElementById('ccView-supplierCatalog')?.classList.toggle('hidden', state.activeCcView !== 'supplierCatalog');
+    if (state.activeCcView === 'supplierCatalog') renderAbSupplierCatalogView();
+  });
+});
+
+document.getElementById('abCatSearch')?.addEventListener('input', renderAbSupplierCatalogView);
+document.getElementById('abCatBrandFilter')?.addEventListener('change', renderAbSupplierCatalogView);
+document.getElementById('abCatMatchFilter')?.addEventListener('change', renderAbSupplierCatalogView);
+
+document.getElementById('openAbSupplierPasteBtn')?.addEventListener('click', () => {
+  document.getElementById('abSupplierPasteBox')?.classList.toggle('hidden');
+});
+document.getElementById('closeAbSupplierPasteBtn')?.addEventListener('click', () => {
+  document.getElementById('abSupplierPasteBox')?.classList.add('hidden');
+});
+
+document.getElementById('previewAbSupplierPasteBtn')?.addEventListener('click', async () => {
+  const rawText = document.getElementById('abSupplierPasteText')?.value || '';
+  const statusEl = document.getElementById('abSupplierPasteStatus');
+  const prevEl = document.getElementById('abSupplierPastePreview');
+  if (!rawText.trim()) {
+    if (statusEl) statusEl.textContent = 'Paste AB supplier text first.';
+    return;
+  }
+  try {
+    const res = await api('/api/supplier-catalog/import', {
+      method: 'POST',
+      body: JSON.stringify({ rawText, dryRun: true }),
+    });
+    const matchedEntries = (res.entries || []).filter((e) => (e.matched || []).length > 0);
+    if (statusEl) {
+      statusEl.textContent = `Parsed ${res.entries?.length || 0} supplier items • ${matchedEntries.length} match existing AB Web products (selling prices preserved).`;
+    }
+    if (prevEl) {
+      prevEl.classList.remove('hidden');
+      prevEl.innerHTML = matchedEntries.length
+        ? matchedEntries.map((e) => e.matched.map((m) => `<div><strong>${escAbHtml(m.name)}</strong>: Old AB ${m.prevAb ? fmtCurrency(m.prevAb) : '—'} → <strong style="color:var(--gold-bright);">${fmtCurrency(m.nextAb)}</strong> <span class="muted">(AB Web Selling: ${fmtCurrency(m.basePrice)})</span></div>`).join('')).join('')
+        : '<div class="muted">No existing AB Web product matches yet; all parsed items will still save into AB Supplier Stock & DP Catalog.</div>';
+    }
+  } catch (err) {
+    if (statusEl) statusEl.textContent = err.message;
+  }
+});
+
+document.getElementById('applyAbSupplierPasteBtn')?.addEventListener('click', async () => {
+  const rawText = document.getElementById('abSupplierPasteText')?.value || '';
+  const stockDate = document.getElementById('abSupplierDateInp')?.value || '';
+  const statusEl = document.getElementById('abSupplierPasteStatus');
+  if (!rawText.trim()) {
+    if (statusEl) statusEl.textContent = 'Paste AB supplier text first.';
+    return;
+  }
+  try {
+    const res = await api('/api/supplier-catalog/import', {
+      method: 'POST',
+      body: JSON.stringify({ rawText, stockDate }),
+    });
+    await loadInventory();
+    await loadSupplierCatalog();
+    renderCostCompareTool();
+    if (state.restockPlan) {
+      buildRestockDraftPlan();
+      renderRestockCards();
+    }
+    if (statusEl) {
+      statusEl.style.color = '#34d399';
+      statusEl.textContent = `Applied ${res.importedCount} supplier items & updated ${res.updatedProductsCount} AB Web product DP costs cleanly!`;
+    }
+    document.getElementById('abSupplierPastePreview')?.classList.add('hidden');
+  } catch (err) {
+    if (statusEl) statusEl.textContent = err.message;
+  }
 });
 
 async function loadCustomers() {
