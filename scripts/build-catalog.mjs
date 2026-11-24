@@ -616,7 +616,16 @@ async function main() {
   }
 
   const rawHtml = fs.readFileSync(path.join(publicDir, 'catalog.html'), 'utf8');
+  const pcCatalogPath = path.join(publicDir, 'branch-catalogs.json');
+  const pcCatalogSnapshot = fs.existsSync(pcCatalogPath) ? JSON.parse(fs.readFileSync(pcCatalogPath, 'utf8')) : null;
   for (const b of BRANCHES) {
+    const pcBranch = pcCatalogSnapshot?.[b.slug];
+    if (pcBranch && (!liveSynced || process.env.GITHUB_EVENT_NAME === 'push')) {
+      fs.writeFileSync(path.join(distDir, 'data', b.slug + '.json'), JSON.stringify(pcBranch));
+      fs.mkdirSync(path.join(distDir, b.slug), { recursive: true });
+      fs.writeFileSync(path.join(distDir, b.slug, 'index.html'), rawHtml);
+      continue;
+    }
     const discountRate = b.cash_discount_pct / 100;
     const catalogId = `cat-${b.id}`;
     const catalog = [];
