@@ -2091,6 +2091,51 @@ function renderObsoleteAuditUI(obsoleteList) {
   }
 }
 
+function buildPendingOrdersLookup() {
+  const byProdBranch = new Map();
+  const byProd = new Map();
+  const addPending = (pid, bid, qty, label) => {
+    if (!pid || !bid || !(qty > 0)) return;
+    const kb = `${pid}::${bid}`;
+    if (!byProdBranch.has(kb)) byProdBranch.set(kb, { qty: 0, refs: new Set() });
+    const cell = byProdBranch.get(kb);
+    cell.qty += qty;
+    if (label) cell.refs.add(label);
+
+    if (!byProd.has(pid)) byProd.set(pid, { qty: 0, refs: new Set() });
+    const pAgg = byProd.get(pid);
+    pAgg.qty += qty;
+    if (label) pAgg.refs.add(label);
+  };
+
+  const pendingStatuses = new Set(['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received']);
+  for (const o of state.savedOrders || []) {
+    if (!pendingStatuses.has(o.status)) continue;
+    for (const it of o.items || []) {
+      if (it.approved === false || it.isExtraItem) continue;
+      const appQty = Math.max(0, Number(it.qty) || 0);
+      const recQty =
+        it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== ''
+          ? Math.max(0, Number(it.receivedQty) || 0)
+          : 0;
+      const rem = Math.max(0, appQty - recQty);
+      if (rem > 0) addPending(it.productId, it.branchId, rem, o.id);
+    }
+  }
+
+  // Also include any in-transit AB Web deliveries whose header status is not RECEIVED yet
+  for (const d of state.abDeliveries || []) {
+    if (String(d.status || '').toUpperCase() === 'RECEIVED') continue;
+    for (const dl of d.items || []) {
+      if (dl.productId && (Number(dl.deliveredQty) || 0) > (Number(dl.receivedQty) || 0)) {
+        addPending(dl.productId, d.branchId, (Number(dl.deliveredQty) || 0) - (Number(dl.receivedQty) || 0), d.deliveryNo);
+      }
+    }
+  }
+
+  return { byProdBranch, byProd };
+}
+
 function buildRestockDraftPlan() {
   if (!state.inventory) return [];
   const mode = document.querySelector('input[name="restockSupplierMode"]:checked')?.value || 'LOWEST';
@@ -2099,10 +2144,12 @@ function buildRestockDraftPlan() {
   const budgetVal = parseMoneyInput(document.getElementById('restockBudgetInput')?.value);
   const globalBranchId = document.getElementById('globalBranch')?.value || '';
   const excludeObsolete = document.getElementById('restockExcludeObsoleteChk')?.checked !== false;
+  const deductPending = document.getElementById('restockDeductPendingChk')?.checked !== false;
 
   const { branches, items } = state.inventory;
   const targetBranches = globalBranchId ? branches.filter((b) => b.id === globalBranchId) : branches;
   const demandIdx = buildRestockDemandIndex();
+  const pendingIdx = buildPendingOrdersLookup();
 
   const candidates = [];
   const obsoleteList = [];
@@ -2114,7 +2161,8 @@ function buildRestockDraftPlan() {
     if (isNonOrderablePromoOrRepo(item)) continue;
 
     const health = isObsoleteOrNonMoving(item, branches, demandIdx);
-    if (health.status !== 'ACTIVE_MOVING') {
+    const prodPending = pendingIdx.byProd.get(item.id)?.qty || 0;
+    if (health.status !== 'ACTIVE_MOVING' && prodPending === 0) {
       obsoleteList.push({
         id: item.id,
         displayModel: formatSwapModelName({ brand: item.brand || '', model: item.model || item.name }),
@@ -2148,6 +2196,11 @@ function buildRestockDraftPlan() {
     for (const b of targetBranches) {
       const cell = item.byBranch?.[b.id];
       const avail = cell ? Math.max(0, Number(cell.qtyAvailable) || 0) : 0;
+      const pendInfo = pendingIdx.byProdBranch.get(`${item.id}::${b.id}`) || { qty: 0, refs: new Set() };
+      const pendingQty = pendInfo.qty || 0;
+      const pendingRefs = [...pendInfo.refs];
+      const effectiveAvail = avail + (deductPending ? pendingQty : 0);
+
       const brDemand = demandIdx.byProdBranch.get(`${item.id}::${b.id}`) || { sold30: 0, sold90: 0, allSold: 0 };
       const branchDemand90 = brDemand.sold90 || 0;
       const branchDemand30 = brDemand.sold30 || 0;
@@ -2159,8 +2212,8 @@ function buildRestockDraftPlan() {
       const demandRp = branchMonthlyDemand > 0 ? Math.ceil(branchMonthlyDemand * 0.4) : 0;
       const reorderPoint = Math.max(Number(cell?.reorderPoint) || defaultRp, demandRp);
 
-      // Always allow 0-stock units through; skip well-stocked branches above reorder point
-      if (avail > 0 && avail > reorderPoint) continue;
+      // Skip items whose current + pending stock isn't even low (unless they specifically have pending orders to inspect)
+      if (avail > 0 && avail > reorderPoint && pendingQty === 0) continue;
 
       const baseFloor =
         tier.key === 'LOW_END'
@@ -2172,12 +2225,18 @@ function buildRestockDraftPlan() {
               ? 2
               : 1
             : 1;
-      // Cover ~3.5 weeks of store demand (capped at 10 pcs/branch so one SKU doesn't absorb entire budget)
       const demandTarget = branchMonthlyDemand > 0 ? Math.min(10, Math.ceil(branchMonthlyDemand * 0.85)) : 0;
       const targetQty = branchDemand90 > 0
         ? Math.max(baseFloor, demandTarget, reorderPoint + (avail === 0 ? 1 : 0))
         : Math.max(baseFloor, avail === 0 ? baseFloor : reorderPoint + 1);
-      const suggestedQty = Math.max(1, targetQty - avail);
+
+      const coveredByPending = deductPending && pendingQty > 0 && effectiveAvail > reorderPoint;
+      const suggestedQty = coveredByPending ? 0 : Math.max(1, targetQty - effectiveAvail);
+      const rawNeededWithoutPending = Math.max(0, targetQty - avail);
+      const savedByPendingQty = deductPending ? Math.max(0, rawNeededWithoutPending - suggestedQty) : 0;
+
+      // Skip items only kept for healthy stock + pending if they had >0 avail and no order needed (unless coveredByPending so user can inspect pending coverage)
+      if (avail > reorderPoint && !coveredByPending && pendingQty === 0) continue;
 
       candidates.push({
         key: `${item.id}::${b.id}`,
@@ -2200,6 +2259,11 @@ function buildRestockDraftPlan() {
         websiteCost,
         savingsVsWebsite,
         avail,
+        pendingQty,
+        pendingRefs,
+        effectiveAvail,
+        coveredByPending,
+        savedByPendingQty,
         reorderPoint,
         branchDemand30,
         branchDemand90,
@@ -2208,17 +2272,21 @@ function buildRestockDraftPlan() {
         storewideDemand90,
         storewideAllSold,
         qty: suggestedQty,
-        selected: true,
+        selected: !coveredByPending && suggestedQty > 0,
       });
     }
   }
 
-  // Sort by selected priority strategy
+  // Sort by selected priority strategy (push fully-covered-by-pending rows after actionable rows)
   candidates.sort((a, b) => {
+    const aNeed = a.coveredByPending || a.qty <= 0 ? 1 : 0;
+    const bNeed = b.coveredByPending || b.qty <= 0 ? 1 : 0;
+    if (aNeed !== bNeed) return aNeed - bNeed;
+
     const aHasDemand = a.branchDemand90 > 0 || a.storewideDemand90 > 0 || a.storewideAllSold > 0 ? 1 : 0;
     const bHasDemand = b.branchDemand90 > 0 || b.storewideDemand90 > 0 || b.storewideAllSold > 0 ? 1 : 0;
-    const aZero = a.avail === 0 ? 1 : 0;
-    const bZero = b.avail === 0 ? 1 : 0;
+    const aZero = a.effectiveAvail === 0 ? 1 : 0;
+    const bZero = b.effectiveAvail === 0 ? 1 : 0;
 
     if (priorityMode === 'SAVINGS_FIRST') {
       const ap = a.unitCost > 0 ? 0 : 1;
@@ -2237,11 +2305,11 @@ function buildRestockDraftPlan() {
       if (a.branchDemand90 !== b.branchDemand90) return b.branchDemand90 - a.branchDemand90;
       if (a.storewideDemand90 !== b.storewideDemand90) return b.storewideDemand90 - a.storewideDemand90;
       if (a.tierRank !== b.tierRank) return a.tierRank - b.tierRank;
-      if (a.avail !== b.avail) return a.avail - b.avail;
+      if (a.effectiveAvail !== b.effectiveAvail) return a.effectiveAvail - b.effectiveAvail;
       return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel);
     }
 
-    // DEFAULT: LOW_END_DEMAND — Prioritize Active-Demand Low-End Cellphones (SRP <= ₱10k), Out-of-Stock first, then Store Demand
+    // DEFAULT: LOW_END_DEMAND — Prioritize Active-Demand Low-End Cellphones (SRP <= ₱10k), Out-of-Stock (after pending) first, then Store Demand
     if (aHasDemand !== bHasDemand) return bHasDemand - aHasDemand;
     if (a.tierRank !== b.tierRank) return a.tierRank - b.tierRank;
     if (aZero !== bZero) return bZero - aZero;
@@ -2250,13 +2318,17 @@ function buildRestockDraftPlan() {
     if (a.branchAllSold !== b.branchAllSold) return b.branchAllSold - a.branchAllSold;
     if (a.storewideAllSold !== b.storewideAllSold) return b.storewideAllSold - a.storewideAllSold;
     if (a.savingsVsWebsite !== b.savingsVsWebsite) return b.savingsVsWebsite - a.savingsVsWebsite;
-    if (a.avail !== b.avail) return a.avail - b.avail;
+    if (a.effectiveAvail !== b.effectiveAvail) return a.effectiveAvail - b.effectiveAvail;
     return a.unitCost - b.unitCost || a.displayModel.localeCompare(b.displayModel);
   });
 
   if (budgetVal > 0) {
     let spent = 0;
     for (const c of candidates) {
+      if (c.coveredByPending || c.qty <= 0) {
+        c.selected = false;
+        continue;
+      }
       if (c.unitCost <= 0) {
         c.selected = false;
         continue;
@@ -2287,8 +2359,10 @@ function getFilteredRestockRows() {
   return plan
     .map((r, idx) => ({ ...r, _idx: idx }))
     .filter((r) => {
-      if (showFilter === 'SELECTED' && !r.selected) return false;
-      if (showFilter === 'ZERO' && r.avail > 0) return false;
+      if (showFilter === 'SELECTED' && (!r.selected || r.qty <= 0)) return false;
+      if (showFilter === 'ALL' && r.coveredByPending) return false;
+      if (showFilter === 'ZERO' && (r.avail > 0 || r.coveredByPending)) return false;
+      if (showFilter === 'PENDING_COVERED' && !(r.pendingQty > 0)) return false;
       if (brandFilter !== 'ALL' && (r.brand || 'Other') !== brandFilter) return false;
       if (
         search &&
@@ -2325,13 +2399,19 @@ function renderRestockCards() {
   const midUnits = selected.filter((r) => r.tierKey === 'MID_RANGE').reduce((s, r) => s + r.qty, 0);
   const highUnits = selected.filter((r) => r.tierKey === 'HIGH_END').reduce((s, r) => s + r.qty, 0);
   const zeroLines = selected.filter((r) => r.avail === 0).length;
-  const totalZeroLines = plan.filter((r) => r.avail === 0).length;
+  const totalZeroLines = plan.filter((r) => r.avail === 0 && !r.coveredByPending).length;
+  const pendingSavedPcs = plan.reduce((s, r) => s + (Number(r.savedByPendingQty) || 0), 0);
+  const pendingLineCount = plan.filter((r) => r.pendingQty > 0).length;
   if (sumEl) {
     const tierNote =
       lowEndUnits + midUnits + highUnits > 0
         ? ` • <span style="color:var(--green);">Low-End: <strong>${fmtNum(lowEndUnits)}</strong></span>${midUnits ? ` • Mid: <strong>${fmtNum(midUnits)}</strong>` : ''}${highUnits ? ` • High: <strong>${fmtNum(highUnits)}</strong>` : ''}`
         : '';
-    sumEl.innerHTML = `Selected <strong>${fmtNum(selected.length)}</strong> line(s) (<strong>${fmtNum(zeroLines)}/${fmtNum(totalZeroLines)}</strong> out-of-stock) • <strong>${fmtNum(totalUnits)} pcs</strong>${tierNote} • Est. Total: <strong style="color:var(--gold-bright);">${fmtCurrency(totalCost)}</strong>`;
+    const pendNote =
+      pendingSavedPcs > 0
+        ? ` • <span style="color:#60a5fa;">Pending On-Order deducted: <strong>${fmtNum(pendingSavedPcs)} pcs</strong> (${pendingLineCount} branch line${pendingLineCount === 1 ? '' : 's'})</span>`
+        : '';
+    sumEl.innerHTML = `Selected <strong>${fmtNum(selected.length)}</strong> line(s) (<strong>${fmtNum(zeroLines)}/${fmtNum(totalZeroLines)}</strong> out-of-stock) • <strong>${fmtNum(totalUnits)} pcs</strong>${tierNote}${pendNote} • Est. Total: <strong style="color:var(--gold-bright);">${fmtCurrency(totalCost)}</strong>`;
   }
 
   const visible = getFilteredRestockRows();
@@ -2389,6 +2469,10 @@ function renderRestockCards() {
         const branchRowsHtml = m.rows
           .map((r) => {
             const zeroTag = r.avail === 0 ? `<span style="color:#ef4444;font-weight:700;font-size:10px;margin-left:2px;">OUT</span>` : '';
+            const pendTag =
+              r.pendingQty > 0
+                ? `<span style="color:#60a5fa;font-weight:700;font-size:10px;">+${fmtNum(r.pendingQty)} on order${r.coveredByPending ? ' (covered)' : ''}</span>`
+                : '';
             const brDemTag =
               r.branchDemand90 > 0
                 ? `<span style="color:var(--gold-bright);font-size:10.5px;">• ${fmtNum(r.branchDemand90)} sold/90d</span>`
@@ -2402,10 +2486,11 @@ function renderRestockCards() {
                 <span>${r.branchName}</span>
                 <span class="muted small">(${fmtNum(r.avail)}/${fmtNum(r.reorderPoint)})</span>
                 ${zeroTag}
+                ${pendTag}
                 ${brDemTag}
               </label>
               <div style="display:flex;align-items:center;gap:6px;">
-                <input type="number" class="reorder-qty-inp" data-idx="${r._idx}" value="${r.qty}" min="1" max="99" style="width:52px;padding:2px 5px;font-size:12px;text-align:center;" />
+                <input type="number" class="reorder-qty-inp" data-idx="${r._idx}" value="${r.qty}" min="0" max="99" style="width:52px;padding:2px 5px;font-size:12px;text-align:center;" />
                 <span class="small muted" style="min-width:22px;">pcs</span>
               </div>
             </div>`;
@@ -2514,8 +2599,12 @@ function renderRestockCards() {
   grid.querySelectorAll('.reorder-qty-inp').forEach((inp) => {
     inp.addEventListener('change', (e) => {
       const idx = Number(e.target.dataset.idx);
-      const val = Math.max(1, parseInt(e.target.value, 10) || 1);
-      if (state.restockPlan?.[idx]) state.restockPlan[idx].qty = val;
+      const parsed = parseInt(e.target.value, 10);
+      const val = Number.isFinite(parsed) ? Math.max(0, parsed) : 1;
+      if (state.restockPlan?.[idx]) {
+        state.restockPlan[idx].qty = val;
+        if (val === 0) state.restockPlan[idx].selected = false;
+      }
       renderRestockCards();
     });
   });
@@ -2540,27 +2629,48 @@ function renderRestockCards() {
   });
 }
 
-function computeOrderSummaryMetrics(items) {
+function computeOrderSummaryMetrics(items, orderStatus = 'Supplier Approved') {
   let requestedUnits = 0;
   let approvedUnits = 0;
+  let deliveredUnits = 0;
+  let pendingUnits = 0;
   let requestedTotal = 0;
   let approvedTotal = 0;
+  let deliveredTotal = 0;
+  const isPendingStatus = ['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received'].includes(orderStatus);
+
   for (const it of items || []) {
     const rq = Math.max(0, Number(it.requestedQty ?? it.qty) || 0);
     const rc = Math.max(0, Number(it.requestedCost ?? it.unitCost) || 0);
-    const isApp = it.approved !== false && it.selected !== false;
+    const isApp = it.approved !== false && it.selected !== false && !it.isExtraItem;
     const aq = isApp ? Math.max(0, Number(it.qty) || 0) : 0;
     const ac = Math.max(0, Number(it.unitCost) || 0);
+    const dq =
+      it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== ''
+        ? Math.max(0, Number(it.receivedQty) || 0)
+        : 0;
+    const dc = Math.max(0, Number(it.receivedCost ?? ac) || 0);
+
     requestedUnits += rq;
     requestedTotal += rq * rc;
     approvedUnits += aq;
     approvedTotal += aq * ac;
+    deliveredUnits += dq;
+    deliveredTotal += dq * dc;
+    if (isPendingStatus && isApp) {
+      pendingUnits += Math.max(0, aq - dq);
+    }
   }
   return {
     requestedUnits,
     approvedUnits,
+    deliveredUnits,
+    pendingUnits,
     requestedTotal: Number(requestedTotal.toFixed(2)),
     approvedTotal: Number(approvedTotal.toFixed(2)),
+    deliveredTotal: Number(deliveredTotal.toFixed(2)),
+    qtyVariance: deliveredUnits - approvedUnits,
+    costVariance: Number((deliveredTotal - approvedTotal).toFixed(2)),
   };
 }
 
@@ -2581,9 +2691,79 @@ function setLocalSavedOrders(orders) {
   }
 }
 
+function getDeletedLocalPoIds() {
+  try {
+    const raw = localStorage.getItem('ab_deleted_po_ids_v1');
+    return new Set(raw ? JSON.parse(raw) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function markLocalPoDeleted(poId) {
+  const s = getDeletedLocalPoIds();
+  s.add(poId);
+  try {
+    localStorage.setItem('ab_deleted_po_ids_v1', JSON.stringify([...s]));
+  } catch {}
+}
+
+async function loadAbDeliveries() {
+  if (IS_STATIC_GH) {
+    try {
+      const b = await getGhBundle();
+      state.abDeliveries = Array.isArray(b?.allDeliveries) ? b.allDeliveries : [];
+    } catch {
+      state.abDeliveries = [];
+    }
+    return state.abDeliveries;
+  }
+  try {
+    const res = await api('/api/deliveries');
+    state.abDeliveries = Array.isArray(res?.deliveries) ? res.deliveries : [];
+  } catch {
+    state.abDeliveries = [];
+  }
+  return state.abDeliveries;
+}
+
 async function loadSavedPurchaseOrders() {
   if (IS_STATIC_GH) {
-    state.savedOrders = getLocalSavedOrders().map((o) => ({ ...o, ...computeOrderSummaryMetrics(o.items) }));
+    let local = getLocalSavedOrders();
+    try {
+      const b = await getGhBundle();
+      const deleted = getDeletedLocalPoIds();
+      const seeded = Array.isArray(b?.purchaseOrders) ? b.purchaseOrders : [];
+      const haveIds = new Set(local.map((o) => o.id));
+      let added = false;
+      for (const s of seeded) {
+        if (!haveIds.has(s.id) && !deleted.has(s.id)) {
+          let parsedItems = [];
+          try {
+            parsedItems = typeof s.items_json === 'string' ? JSON.parse(s.items_json || '[]') : Array.isArray(s.items) ? s.items : [];
+          } catch {
+            parsedItems = [];
+          }
+          local.push({
+            id: s.id,
+            title: s.title,
+            status: s.status,
+            supplierFilter: s.supplier_filter || s.supplierFilter || 'LOWEST',
+            notes: s.notes || '',
+            expectedDate: s.expected_date || s.expectedDate || '',
+            abDeliveryRefs: s.ab_delivery_refs || s.abDeliveryRefs || '',
+            items: parsedItems,
+            createdAt: s.created_at || s.createdAt || new Date().toISOString(),
+            updatedAt: s.updated_at || s.updatedAt || new Date().toISOString(),
+          });
+          added = true;
+        }
+      }
+      if (added) setLocalSavedOrders(local);
+    } catch {}
+    state.savedOrders = local
+      .map((o) => ({ ...o, ...computeOrderSummaryMetrics(o.items, o.status) }))
+      .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
     return state.savedOrders;
   }
   try {
@@ -2599,14 +2779,14 @@ function applyEditedPricesToLocalInventory(items) {
   if (!state.inventory?.items || !Array.isArray(items)) return;
   const localMap = IS_STATIC_GH ? getLocalSupplierCostsMap() : null;
   for (const it of items) {
-    if (!it.productId || it.approved === false || !(Number(it.unitCost) > 0)) continue;
+    const useCost = Number(it.receivedCost) > 0 ? Number(it.receivedCost) : Number(it.unitCost) || 0;
+    if (!it.productId || it.approved === false || !(useCost > 0)) continue;
     const prod = state.inventory.items.find((p) => p.id === it.productId);
     if (!prod) continue;
     const sup = String(it.supplier || '').toUpperCase();
-    const val = Number(it.unitCost);
-    if (sup.includes('A&K')) prod.cost_ak = val;
-    else if (sup.includes('ONLINE')) prod.cost_online = val;
-    else prod.cost_ab = val;
+    if (sup.includes('A&K')) prod.cost_ak = useCost;
+    else if (sup.includes('ONLINE')) prod.cost_online = useCost;
+    else prod.cost_ab = useCost;
     if (localMap) {
       localMap[prod.id] = {
         cost_ab: Number(prod.cost_ab) || 0,
@@ -2622,69 +2802,177 @@ function applyEditedPricesToLocalInventory(items) {
   }
 }
 
+function reconcileStaticOrdersWithDeliveries(onlyPoId = null) {
+  const deliveries = (state.abDeliveries || []).filter((d) => String(d.status || '').toUpperCase() === 'RECEIVED');
+  if (!deliveries.length) return 0;
+  const orders = getLocalSavedOrders();
+  const claimed = new Set();
+  for (const o of orders) {
+    if (onlyPoId && o.id === onlyPoId) continue;
+    for (const ref of String(o.abDeliveryRefs || '').split(',').map((s) => s.trim()).filter(Boolean)) claimed.add(ref);
+  }
+  let updatedOrders = 0;
+  const now = new Date().toISOString();
+  for (const po of orders) {
+    if (onlyPoId && po.id !== onlyPoId) continue;
+    if (!['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received', 'Received (Pending AB Web)'].includes(po.status)) continue;
+    const orderDate = String(po.createdAt || '').slice(0, 10);
+    const refs = new Set(String(po.abDeliveryRefs || '').split(',').map((s) => s.trim()).filter(Boolean));
+    let changed = false;
+    for (const deliv of deliveries) {
+      if (orderDate && deliv.deliveryDate < orderDate) continue;
+      if (claimed.has(deliv.deliveryNo) && !refs.has(deliv.deliveryNo)) continue;
+      let matched = false;
+      for (const dl of deliv.items || []) {
+        if (!dl.productId) continue;
+        const target = (po.items || []).find(
+          (it) =>
+            it.approved !== false &&
+            it.branchId === deliv.branchId &&
+            it.productId === dl.productId &&
+            (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB' || it.abDeliveryNo === deliv.deliveryNo)
+        );
+        if (!target) continue;
+        matched = true;
+        if (target.abDeliveryNo !== deliv.deliveryNo) {
+          target.abDeliveryNo = deliv.deliveryNo;
+          target.receivedDate = target.receivedDate || deliv.deliveryDate;
+          if (target.receivedQty === undefined || target.receivedQty === null || target.receivedQty === '') {
+            target.receivedQty = Number(dl.receivedQty ?? dl.deliveredQty) || 0;
+          }
+          if (target.receivedCost === undefined || target.receivedCost === null || target.receivedCost === '') {
+            target.receivedCost = Number(target.unitCost) || 0;
+          }
+          target.abReportedQty = Number(dl.receivedQty ?? dl.deliveredQty) || 0;
+          changed = true;
+        }
+      }
+      if (matched && !refs.has(deliv.deliveryNo)) {
+        refs.add(deliv.deliveryNo);
+        claimed.add(deliv.deliveryNo);
+        changed = true;
+      }
+    }
+    if (changed) {
+      po.abDeliveryRefs = [...refs].join(', ');
+      po.updatedAt = now;
+      const appItems = (po.items || []).filter((it) => it.approved !== false && (Number(it.qty) || 0) > 0);
+      const anyRec = (po.items || []).some((it) => Number(it.receivedQty) > 0 || (it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== ''));
+      const allDone = appItems.length > 0 && appItems.every((it) => it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== '');
+      const hasMissingAb = (po.items || []).some((it) => Number(it.receivedQty) > 0 && (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB'));
+      if (allDone) po.status = hasMissingAb ? 'Received (Pending AB Web)' : 'Received';
+      else if (anyRec) po.status = 'Partially Received';
+      updatedOrders++;
+    }
+  }
+  if (updatedOrders > 0) setLocalSavedOrders(orders);
+  return updatedOrders;
+}
+
 function renderSavedOrdersPanel() {
   const listEl = document.getElementById('savedOrdersList');
   const badgeEl = document.getElementById('savedOrdersCountBadge');
+  const pendBadgeEl = document.getElementById('pendingUnitsBadge');
   const hdrEl = document.getElementById('savedOrdersSummaryHdr');
   const orders = state.savedOrders || [];
 
+  const pendingOrders = orders.filter((o) => ['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received'].includes(o.status));
+  const totalPendingUnits = pendingOrders.reduce((s, o) => s + (computeOrderSummaryMetrics(o.items, o.status).pendingUnits || 0), 0);
+  const totalPendingCost = orders.reduce((s, o) => {
+    if (!['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received'].includes(o.status)) return s;
+    for (const it of o.items || []) {
+      if (it.approved === false || it.isExtraItem) continue;
+      const app = Math.max(0, Number(it.qty) || 0);
+      const rec = it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== '' ? Math.max(0, Number(it.receivedQty) || 0) : 0;
+      const rem = Math.max(0, app - rec);
+      s += rem * (Number(it.unitCost) || 0);
+    }
+    return s;
+  }, 0);
+
   if (badgeEl) {
-    badgeEl.textContent = `${orders.length} saved`;
+    badgeEl.textContent = `${orders.length} order${orders.length === 1 ? '' : 's'}`;
     badgeEl.className = `badge ${orders.length ? 'badge-ok' : 'badge-warn'}`;
+  }
+  if (pendBadgeEl) {
+    if (totalPendingUnits > 0) {
+      pendBadgeEl.textContent = `${fmtNum(totalPendingUnits)} pcs waiting delivery`;
+      pendBadgeEl.classList.remove('hidden');
+    } else {
+      pendBadgeEl.classList.add('hidden');
+    }
   }
   if (hdrEl) {
     if (!orders.length) {
-      hdrEl.textContent = 'Save a plan to edit supplier-approved prices & qty';
+      hdrEl.textContent = 'Log pending orders, edit supplier approvals & reconcile deliveries';
     } else {
-      const activeCnt = orders.filter((o) => !['Received', 'Cancelled'].includes(o.status)).length;
-      const totApproved = orders
-        .filter((o) => o.status !== 'Cancelled')
-        .reduce((s, o) => s + (Number(o.approvedTotal) || 0), 0);
-      hdrEl.innerHTML = `${activeCnt} open • Total Approved: <strong style="color:var(--gold-bright);">${fmtCurrency(totApproved)}</strong>`;
+      hdrEl.innerHTML = `${pendingOrders.length} pending (<strong style="color:#60a5fa;">${fmtNum(totalPendingUnits)} pcs / ${fmtCurrency(totalPendingCost)}</strong> on order) • Considers Restock automatically`;
     }
   }
+
+  renderOrderVarianceReport();
+  renderAbDeliveriesView();
+
   if (!listEl) return;
 
   if (!orders.length) {
-    listEl.innerHTML = '<div class="muted small" style="padding:6px 0;">No saved orders yet. Click <strong>BUILD PLAN</strong> or <strong>SAVE ORDER</strong> to save a reorder request, then edit approved prices &amp; quantities once the supplier confirms.</div>';
+    listEl.innerHTML = '<div class="muted small" style="padding:6px 0;">No orders logged yet. Click <strong>+ LOG PENDING ORDER</strong>, <strong>PASTE EXCEL / TEXT</strong>, or build a Restock plan &amp; click <strong>SAVE ORDER</strong>.</div>';
+    renderSavedOrderInlineEditor();
     return;
   }
 
   const statusColor = (st) => {
-    if (st === 'Supplier Approved') return 'badge-ok';
-    if (st === 'Received') return 'badge-ok';
+    if (st === 'Received' || st === 'Supplier Approved') return 'badge-ok';
     if (st === 'Cancelled') return 'badge-danger';
     return 'badge-warn';
   };
 
   listEl.innerHTML = orders
     .map((o) => {
-      const m = computeOrderSummaryMetrics(o.items);
+      const m = computeOrderSummaryMetrics(o.items, o.status);
       const qtyDiff = m.approvedUnits - m.requestedUnits;
       const costDiff = m.approvedTotal - m.requestedTotal;
       const hasAdj = qtyDiff !== 0 || Math.abs(costDiff) >= 0.01;
       const diffText = hasAdj
         ? `<span style="color:${costDiff <= 0 ? 'var(--green)' : '#f59e0b'};font-weight:700;">(${qtyDiff >= 0 ? '+' : ''}${qtyDiff} pcs • ${costDiff >= 0 ? '+' : ''}${fmtCurrency(costDiff)})</span>`
-        : '<span class="muted">matches requested</span>';
-      const dtLabel = o.updatedAt ? new Date(o.updatedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+        : '';
+      const delivPart =
+        m.deliveredUnits > 0 || o.status === 'Received' || o.status === 'Received (Pending AB Web)' || o.status === 'Partially Received'
+          ? ` → Delivered: <strong style="color:${m.qtyVariance === 0 ? 'var(--green)' : '#f59e0b'};">${fmtNum(m.deliveredUnits)} pcs</strong> (${fmtCurrency(m.deliveredTotal)}${m.qtyVariance !== 0 ? `, Var ${m.qtyVariance >= 0 ? '+' : ''}${m.qtyVariance} pcs` : ''})`
+          : '';
+      const missingAbCount = (o.items || []).filter(
+        (it) => Number(it.receivedQty) > 0 && (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB')
+      ).length;
+      const pendTag =
+        m.pendingUnits > 0
+          ? `<span class="badge badge-warn" style="font-size:10px;">⏳ ${fmtNum(m.pendingUnits)} pcs pending delivery</span>`
+          : '';
+      const abMissTag =
+        missingAbCount > 0
+          ? `<span class="badge badge-danger" style="font-size:10px;">${missingAbCount} line(s) not yet in AB Web</span>`
+          : o.abDeliveryRefs
+            ? `<span class="badge badge-ok" style="font-size:10px;">AB: ${o.abDeliveryRefs}</span>`
+            : '';
+      const dtLabel = String(o.createdAt || o.updatedAt || '').slice(0, 10);
       return `
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.03);">
-          <div style="min-width:220px;flex:1;">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <div style="min-width:240px;flex:1;">
+            <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
               <strong style="color:var(--gold-bright);font-size:13px;">${o.id}</strong>
               <strong style="font-size:13px;">${o.title}</strong>
               <span class="badge ${statusColor(o.status)}" style="font-size:10px;">${o.status}</span>
+              ${pendTag}
+              ${abMissTag}
             </div>
             <div class="small muted" style="margin-top:3px;">
-              Requested: <strong>${fmtNum(m.requestedUnits)} pcs</strong> (${fmtCurrency(m.requestedTotal)}) →
-              Approved: <strong style="color:var(--text);">${fmtNum(m.approvedUnits)} pcs</strong> (<strong style="color:var(--green);">${fmtCurrency(m.approvedTotal)}</strong>)
+              Order Date: <strong>${dtLabel}</strong> • Approved: <strong style="color:var(--text);">${fmtNum(m.approvedUnits)} pcs</strong> (<strong style="color:var(--gold-bright);">${fmtCurrency(m.approvedTotal)}</strong>)
               ${diffText}
-              ${dtLabel ? ` • Updated ${dtLabel}` : ''}
+              ${delivPart}
             </div>
-            ${o.notes ? `<div class="small" style="color:var(--gold-bright);margin-top:2px;">Note: ${o.notes}</div>` : ''}
+            ${o.notes ? `<div class="small muted" style="margin-top:2px;">Note: ${o.notes}</div>` : ''}
           </div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            <button type="button" class="saved-po-edit-btn" data-poid="${o.id}" style="padding:5px 10px;font-size:11px;min-height:0;">EDIT PRICES &amp; QTY</button>
+            <button type="button" class="saved-po-edit-btn" data-poid="${o.id}" style="padding:5px 10px;font-size:11px;min-height:0;">EDIT / RECORD DELIVERY</button>
             <button type="button" class="secondary saved-po-preview-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">PREVIEW</button>
             <button type="button" class="secondary saved-po-copy-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">COPY</button>
             <button type="button" class="secondary saved-po-pdf-btn" data-poid="${o.id}" style="padding:5px 9px;font-size:11px;min-height:0;">PDF</button>
@@ -2736,9 +3024,10 @@ function renderSavedOrdersPanel() {
       const poId = btn.dataset.poid;
       if (!confirm(`Delete saved order ${poId}?`)) return;
       if (IS_STATIC_GH) {
+        markLocalPoDeleted(poId);
         const next = getLocalSavedOrders().filter((o) => o.id !== poId);
         setLocalSavedOrders(next);
-        state.savedOrders = next;
+        state.savedOrders = next.map((o) => ({ ...o, ...computeOrderSummaryMetrics(o.items, o.status) }));
       } else {
         await api(`/api/purchase-orders/${encodeURIComponent(poId)}`, { method: 'DELETE' });
         await loadSavedPurchaseOrders();
@@ -2749,10 +3038,15 @@ function renderSavedOrdersPanel() {
       }
       if (state.previewOrderOverride?.id === poId) state.previewOrderOverride = null;
       renderSavedOrdersPanel();
+      buildRestockDraftPlan();
+      renderRestockCards();
     });
   });
 
-  renderSavedOrderInlineEditor();
+  // Don't interrupt user typing inside the inline editor
+  const wrap = document.getElementById('savedOrderInlineEditor');
+  const activeInside = wrap && document.activeElement && wrap.contains(document.activeElement);
+  if (!activeInside) renderSavedOrderInlineEditor();
 }
 
 function openSavedOrderInlineEditor(order) {
@@ -2763,6 +3057,249 @@ function openSavedOrderInlineEditor(order) {
   if (caret) caret.textContent = '−';
   renderSavedOrderInlineEditor();
   document.getElementById('savedOrderInlineEditor')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function openNewPendingOrderCreator() {
+  const now = new Date().toISOString();
+  const dayTag = now.slice(0, 10).replace(/-/g, '');
+  const existingCnt = (state.savedOrders || []).filter((o) => String(o.id || '').startsWith(`PO-${dayTag}-`)).length;
+  const id = `PO-${dayTag}-${String(existingCnt + 1).padStart(2, '0')}`;
+  state.editingSavedOrder = {
+    id,
+    _isNew: true,
+    title: `AB Main Supplier Order (${todayStr})`,
+    status: 'Supplier Approved',
+    supplierFilter: 'AB',
+    notes: 'Pending delivery',
+    expectedDate: '',
+    abDeliveryRefs: '',
+    createdAt: now,
+    updatedAt: now,
+    items: [],
+  };
+  const body = document.getElementById('savedOrdersBody');
+  const caret = document.getElementById('savedOrdersCaret');
+  if (body) body.classList.remove('hidden');
+  if (caret) caret.textContent = '−';
+  renderSavedOrderInlineEditor('Add products below, then click SAVE ORDER CHANGES');
+}
+
+function matchProductByFreeText(rawName) {
+  const items = state.inventory?.items || [];
+  const norm = (s) =>
+    String(s || '')
+      .toLowerCase()
+      .replace(/\bplus\b/g, '+')
+      .replace(/\bgalaxy\b/g, '')
+      .replace(/\b4g\b/g, '')
+      .replace(/gb\b/g, '')
+      .replace(/\s+/g, '')
+      .replace(/[^a-z0-9+]/g, '');
+  const tgt = norm(rawName);
+  if (!tgt) return null;
+
+  const activePhones = items.filter((p) => (p.lifecycle_status || 'Active') === 'Active' && !isNonOrderablePromoOrRepo(p));
+  const pool = [...activePhones, ...items.filter((p) => !isNonOrderablePromoOrRepo(p))];
+
+  // 1. Exact normalized match
+  for (const p of pool) {
+    if (norm(p.name) === tgt || norm(`${p.brand || ''} ${p.model || ''}`) === tgt || norm(p.model) === tgt) return p;
+  }
+  // 2. Spec-preserving includes match (e.g. 4128 vs 464)
+  for (const p of pool) {
+    const k1 = norm(p.name);
+    const k2 = norm(`${p.brand || ''} ${p.model || ''}`);
+    if ((k1.includes(tgt) || tgt.includes(k1)) && tgt.length >= 5) return p;
+    if ((k2.includes(tgt) || tgt.includes(k2)) && tgt.length >= 5) return p;
+  }
+  // 3. Token overlap scoring
+  const tokens = String(rawName || '')
+    .toLowerCase()
+    .replace(/\bgb\b/g, '')
+    .split(/[^a-z0-9+]+/)
+    .filter(Boolean);
+  let best = null;
+  let bestScore = 0;
+  for (const p of activePhones) {
+    const pStr = `${p.brand || ''} ${p.name || ''} ${p.model || ''}`.toLowerCase();
+    let score = 0;
+    for (const tk of tokens) {
+      if (pStr.includes(tk)) score += tk.includes('/') || /^\d+$/.test(tk) ? 3 : 2;
+    }
+    if (score > bestScore && score >= Math.max(4, tokens.length * 1.5)) {
+      bestScore = score;
+      best = p;
+    }
+  }
+  return best;
+}
+
+async function parseAndCreatePastedOrder() {
+  const txt = (document.getElementById('pasteOrderText')?.value || '').trim();
+  const titleInp = (document.getElementById('pasteOrderTitleInp')?.value || '').trim();
+  const defaultBrId = document.getElementById('pasteOrderBranchSel')?.value || 'br-molave';
+  const supplier = document.getElementById('pasteOrderSupplierSel')?.value || 'AB Main Supplier';
+  const stEl = document.getElementById('pasteOrderStatus');
+  if (!txt) {
+    if (stEl) stEl.textContent = 'Paste at least one order line first.';
+    return;
+  }
+
+  const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
+  let curBranchId = defaultBrId;
+  const parsedItems = [];
+  const unmatchedLines = [];
+  let detectedDate = '';
+
+  for (const rawLine of txt.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const up = line.toUpperCase();
+
+    const dtMatch = line.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})|(\d{4}-\d{2}-\d{2})/);
+    if (dtMatch) {
+      detectedDate = dtMatch[4]
+        ? dtMatch[4]
+        : `${dtMatch[3]}-${String(dtMatch[1]).padStart(2, '0')}-${String(dtMatch[2]).padStart(2, '0')}`;
+    }
+    if (up.includes('MOLAVE') && (up.includes('ORDER') || up.includes('BRANCH') || up.length <= 24)) {
+      curBranchId = 'br-molave';
+      continue;
+    }
+    if (up.includes('TAMBULIG') && (up.includes('ORDER') || up.includes('BRANCH') || up.length <= 24)) {
+      curBranchId = 'br-tambulig';
+      continue;
+    }
+    if (up.includes('BONIFACIO') && (up.includes('ORDER') || up.includes('BRANCH') || up.length <= 24)) {
+      curBranchId = 'br-bonifacio';
+      continue;
+    }
+    if (up.startsWith('TOTAL')) continue;
+
+    // Try tab-separated or whitespace-separated: Model | Qty | [Price] | [Total]
+    let modelPart = '';
+    let qty = 1;
+    let price = 0;
+
+    if (line.includes('\t')) {
+      const cols = line.split('\t').map((c) => c.trim()).filter(Boolean);
+      modelPart = cols[0] || '';
+      const nums = cols.slice(1).map((c) => parseMoneyInput(c)).filter((n) => n > 0);
+      if (nums.length >= 1) qty = Math.max(1, Math.round(nums[0]));
+      if (nums.length >= 2) price = nums[1];
+    } else {
+      const m = line.match(/^(.*?)\s+(\d{1,3})(?:\s+([\d,]+(?:\.\d+)?))?(?:\s+([\d,]+(?:\.\d+)?))?$/);
+      if (m) {
+        modelPart = m[1].trim();
+        qty = Math.max(1, parseInt(m[2], 10) || 1);
+        price = m[3] ? parseMoneyInput(m[3]) : 0;
+      } else {
+        modelPart = line;
+      }
+    }
+
+    const prod = matchProductByFreeText(modelPart);
+    if (!prod) {
+      unmatchedLines.push(modelPart);
+      continue;
+    }
+    if (!(price > 0)) {
+      const sup = resolveSupplierForProduct(prod, supplier.includes('A&K') ? 'AK' : supplier.includes('Online') ? 'ONLINE' : 'AB') ||
+        resolveSupplierForProduct(prod, 'LOWEST');
+      price = Number(sup?.unitCost) > 0 ? sup.unitCost : Math.round((Number(prod.base_price) || 0) * 0.85);
+    }
+    const tier = getCellphonePriceTier(prod);
+    parsedItems.push({
+      key: `${prod.id}::${curBranchId}`,
+      productId: prod.id,
+      brand: prod.brand || '',
+      model: prod.model || prod.name,
+      displayModel: formatSwapModelName({ brand: prod.brand || '', model: prod.model || prod.name }),
+      sku: prod.website_codes || prod.sku || '',
+      branchId: curBranchId,
+      branchName: branchNames[curBranchId] || curBranchId,
+      supplier,
+      tierKey: tier.key,
+      tierLabel: tier.label,
+      avail: Number(prod.byBranch?.[curBranchId]?.qtyAvailable) || 0,
+      branchDemand90: 0,
+      storewideDemand90: 0,
+      requestedQty: qty,
+      qty,
+      requestedCost: price,
+      unitCost: price,
+      approved: true,
+      receivedQty: null,
+      receivedCost: price,
+      receivedDate: '',
+      abDeliveryNo: '',
+      abReportedQty: null,
+      isExtraItem: false,
+    });
+  }
+
+  if (!parsedItems.length) {
+    if (stEl) {
+      stEl.style.color = 'var(--danger)';
+      stEl.textContent = `Could not match any product rows${unmatchedLines.length ? ` (Unmatched: ${unmatchedLines.join(', ')})` : ''}.`;
+    }
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const createdAt = detectedDate ? `${detectedDate}T10:00:00.000Z` : now;
+  const orderDateTag = (detectedDate || todayStr).replace(/-/g, '');
+  const seq = String((state.savedOrders || []).filter((o) => String(o.id || '').startsWith(`PO-${orderDateTag}`)).length + 1).padStart(2, '0');
+  const title = titleInp || `${supplier} Order (${detectedDate || todayStr})`;
+
+  let createdOrder = null;
+  if (IS_STATIC_GH) {
+    const id = `PO-${orderDateTag}-${seq}`;
+    createdOrder = {
+      id,
+      title,
+      status: 'Supplier Approved',
+      supplierFilter: supplier,
+      notes: unmatchedLines.length ? `Unmatched lines skipped: ${unmatchedLines.join(', ')}` : '',
+      expectedDate: '',
+      abDeliveryRefs: '',
+      items: parsedItems,
+      ...computeOrderSummaryMetrics(parsedItems, 'Supplier Approved'),
+      createdAt,
+      updatedAt: now,
+    };
+    const all = getLocalSavedOrders();
+    all.unshift(createdOrder);
+    setLocalSavedOrders(all);
+    state.savedOrders = all;
+  } else {
+    const res = await api('/api/purchase-orders', {
+      method: 'POST',
+      body: JSON.stringify({
+        title,
+        status: 'Supplier Approved',
+        supplierFilter: supplier,
+        notes: unmatchedLines.length ? `Unmatched lines skipped: ${unmatchedLines.join(', ')}` : '',
+        items: parsedItems,
+        createdAt,
+        syncSupplierCosts: true,
+      }),
+    });
+    createdOrder = res?.order || null;
+    await loadSavedPurchaseOrders();
+  }
+
+  applyEditedPricesToLocalInventory(parsedItems);
+  document.getElementById('pasteOrderBox')?.classList.add('hidden');
+  document.getElementById('pasteOrderText').value = '';
+  if (createdOrder) openSavedOrderInlineEditor(createdOrder);
+  renderSavedOrdersPanel();
+  buildRestockDraftPlan();
+  renderRestockCards();
+  if (stEl) {
+    stEl.style.color = 'var(--green)';
+    stEl.textContent = `Imported ${parsedItems.length} item(s)${unmatchedLines.length ? ` (skipped: ${unmatchedLines.join(', ')})` : ''}!`;
+  }
 }
 
 function renderSavedOrderInlineEditor(statusMsg = '') {
@@ -2776,14 +3313,13 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
   }
 
   wrap.classList.remove('hidden');
-  const m = computeOrderSummaryMetrics(po.items);
+  const m = computeOrderSummaryMetrics(po.items, po.status);
   const qtyVar = m.approvedUnits - m.requestedUnits;
   const costVar = m.approvedTotal - m.requestedTotal;
   const activeProds = (state.inventory?.items || [])
     .filter((i) => (i.lifecycle_status || 'Active') === 'Active' && !isNonOrderablePromoOrRepo(i))
     .sort((a, b) => formatSwapModelName({ brand: a.brand || '', model: a.model || a.name }).localeCompare(formatSwapModelName({ brand: b.brand || '', model: b.model || b.name })));
 
-  // Group items by supplier -> branch while keeping original index
   const indexed = (po.items || []).map((r, idx) => ({ ...r, _idx: idx }));
   const bySup = new Map();
   for (const sup of SUPPLIER_ORDER) bySup.set(sup, new Map());
@@ -2795,6 +3331,9 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
     if (!bMap.has(brName)) bMap.set(brName, []);
     bMap.get(brName).push(r);
   }
+
+  const orderDate = String(po.createdAt || todayStr).slice(0, 10);
+  const recentDeliveries = (state.abDeliveries || []).filter((d) => d.deliveryDate >= orderDate || d.status !== 'RECEIVED');
 
   const groupsHtml = [...bySup.entries()]
     .filter(([, bMap]) => bMap.size > 0)
@@ -2815,34 +3354,46 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
                   <div style="font-weight:700;font-size:11.5px;color:var(--muted);margin-bottom:4px;">${bName}</div>
                   ${rows
                     .map((r) => {
-                      const isApp = r.approved !== false;
-                      const reqQty = Number(r.requestedQty ?? r.qty) || 0;
-                      const reqCost = Number(r.requestedCost ?? r.unitCost) || 0;
-                      const curQty = Number(r.qty) || 0;
+                      const isExtra = Boolean(r.isExtraItem);
+                      const isApp = r.approved !== false && !isExtra;
+                      const curQty = isExtra ? 0 : Number(r.qty) || 0;
                       const curCost = Number(r.unitCost) || 0;
-                      const lineSub = isApp ? curQty * curCost : 0;
-                      const diffBadges = [];
-                      if (curQty !== reqQty || !isApp) {
-                        diffBadges.push(`<span style="color:#f59e0b;font-size:10.5px;font-weight:700;">Req ${reqQty}→${isApp ? curQty : 0}</span>`);
-                      }
-                      if (Math.abs(curCost - reqCost) >= 0.01) {
-                        const d = curCost - reqCost;
-                        diffBadges.push(`<span style="color:${d < 0 ? 'var(--green)' : '#f59e0b'};font-size:10.5px;font-weight:700;">${d < 0 ? '' : '+'}${fmtCurrency(d)}/pc</span>`);
-                      }
+                      const recQtyRaw = r.receivedQty !== undefined && r.receivedQty !== null && r.receivedQty !== '' ? Number(r.receivedQty) : '';
+                      const recCostRaw = r.receivedCost !== undefined && r.receivedCost !== null && r.receivedCost !== '' ? Number(r.receivedCost) : curCost;
+                      const delivQtyNum = recQtyRaw === '' ? 0 : Math.max(0, Number(recQtyRaw) || 0);
+                      const hasRec = recQtyRaw !== '';
+                      const qVar = hasRec ? delivQtyNum - (isApp ? curQty : 0) : 0;
+                      const cVar = hasRec ? recCostRaw - curCost : 0;
+                      const varTag = hasRec
+                        ? qVar === 0 && Math.abs(cVar) < 0.01
+                          ? `<span style="color:var(--green);font-weight:700;font-size:10.5px;">✓ Match</span>`
+                          : `<span style="color:${qVar < 0 || cVar > 0 ? '#ef4444' : '#f59e0b'};font-weight:700;font-size:10.5px;">${qVar !== 0 ? `${qVar > 0 ? '+' : ''}${qVar} pcs` : ''}${Math.abs(cVar) >= 0.01 ? ` ${cVar > 0 ? '+' : ''}${fmtCurrency(cVar)}/pc` : ''}</span>`
+                        : `<span class="muted" style="font-size:10px;">pending delivery</span>`;
+                      const abTag = hasRec
+                        ? r.abDeliveryNo && r.abDeliveryNo !== 'PENDING IN AB WEB'
+                          ? `<span class="badge badge-ok" style="font-size:9.5px;">${r.abDeliveryNo}</span>`
+                          : `<span class="badge badge-danger" style="font-size:9.5px;">Not in AB Web</span>`
+                        : '';
                       return `
-                        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.06);font-size:12px;${isApp ? '' : 'opacity:0.48;'}">
-                          <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer;flex:1;min-width:180px;flex-wrap:wrap;">
-                            <input type="checkbox" class="main-po-chk" data-idx="${r._idx}" ${isApp ? 'checked' : ''} style="width:15px;height:15px;margin:0;accent-color:var(--gold);" />
-                            <span style="${isApp ? '' : 'text-decoration:line-through;'}font-weight:600;">${r.displayModel || r.model}</span>
-                            ${diffBadges.join(' ')}
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);font-size:12px;${isApp || isExtra ? '' : 'opacity:0.48;'}">
+                          <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer;flex:1;min-width:190px;flex-wrap:wrap;">
+                            <input type="checkbox" class="main-po-chk" data-idx="${r._idx}" ${r.approved !== false ? 'checked' : ''} style="width:15px;height:15px;margin:0;accent-color:var(--gold);" title="Supplier approved" />
+                            <span style="${r.approved !== false ? '' : 'text-decoration:line-through;'}font-weight:600;">${r.displayModel || r.model}</span>
+                            ${isExtra ? '<span class="badge badge-warn" style="font-size:9.5px;">EXTRA / SUB</span>' : ''}
+                            ${varTag}
+                            ${abTag}
                           </label>
-                          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                            <span class="small muted">Price ₱</span>
-                            <input type="number" class="main-po-price" data-idx="${r._idx}" value="${curCost}" min="0" step="0.01" style="width:86px;padding:3px 6px;font-size:12px;text-align:right;" title="Approved supplier unit price" />
+                          <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;justify-content:flex-end;">
+                            <span class="small muted" title="Approved Supplier Unit Price">Appr ₱</span>
+                            <input type="number" class="main-po-price" data-idx="${r._idx}" value="${curCost}" min="0" step="0.01" style="width:76px;padding:3px 5px;font-size:11.5px;text-align:right;" title="Approved supplier price" />
                             <span class="small muted">×</span>
-                            <input type="number" class="main-po-qty" data-idx="${r._idx}" value="${curQty}" min="0" max="999" style="width:56px;padding:3px 5px;font-size:12px;text-align:center;" title="Approved quantity" />
-                            <span class="small muted">pcs</span>
-                            <strong style="min-width:86px;text-align:right;color:var(--gold-bright);">${fmtCurrency(lineSub)}</strong>
+                            <input type="number" class="main-po-qty" data-idx="${r._idx}" value="${curQty}" min="0" max="999" style="width:46px;padding:3px 4px;font-size:11.5px;text-align:center;" title="Approved qty" />
+                            <span class="small muted" style="margin-left:4px;color:#60a5fa;">Rec:</span>
+                            <input type="number" class="main-po-rec-qty" data-idx="${r._idx}" value="${recQtyRaw}" placeholder="—" min="0" max="999" style="width:48px;padding:3px 4px;font-size:11.5px;text-align:center;border-color:#3b82f6;" title="Actually Delivered / Reported Qty (leave blank if still waiting)" />
+                            <span class="small muted" title="Billed Price Upon Delivery">Billed ₱</span>
+                            <input type="number" class="main-po-rec-cost" data-idx="${r._idx}" value="${recCostRaw}" min="0" step="0.01" style="width:74px;padding:3px 5px;font-size:11.5px;text-align:right;border-color:#3b82f6;" title="Billed unit price on delivery receipt" />
+                            <input type="text" class="main-po-ab-ref" data-idx="${r._idx}" value="${String(r.abDeliveryNo || '').replace(/"/g, '&quot;')}" placeholder="AB Web Ref / Pending" style="width:118px;padding:3px 5px;font-size:11px;" title="AB Web Delivery # (leave blank if still not recorded in AB Web)" />
+                            <button type="button" class="secondary main-po-del-line" data-idx="${r._idx}" style="padding:2px 6px;font-size:10.5px;min-height:0;color:var(--danger);" title="Remove line">✕</button>
                           </div>
                         </div>`;
                     })
@@ -2857,42 +3408,49 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
   wrap.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
       <div>
-        <strong style="color:var(--gold-bright);font-size:13.5px;">EDIT ORDER ${po.id} — SUPPLIER-APPROVED PRICES &amp; QUANTITIES</strong>
+        <strong style="color:var(--gold-bright);font-size:13.5px;">${po._isNew ? `NEW PENDING ORDER (${po.id})` : `ORDER ${po.id}`} — SUPPLIER APPROVALS &amp; DELIVERY RECONCILIATION</strong>
         <div class="small muted">
-          Requested: <strong>${fmtNum(m.requestedUnits)} pcs</strong> (${fmtCurrency(m.requestedTotal)}) →
-          Approved: <strong style="color:var(--text);">${fmtNum(m.approvedUnits)} pcs</strong> (<strong style="color:var(--green);">${fmtCurrency(m.approvedTotal)}</strong>)
-          ${qtyVar !== 0 || Math.abs(costVar) >= 0.01 ? `<span style="color:${costVar <= 0 ? 'var(--green)' : '#f59e0b'};font-weight:700;">(${qtyVar >= 0 ? '+' : ''}${qtyVar} pcs • ${costVar >= 0 ? '+' : ''}${fmtCurrency(costVar)})</span>` : ''}
+          Approved: <strong style="color:var(--text);">${fmtNum(m.approvedUnits)} pcs</strong> (<strong style="color:var(--gold-bright);">${fmtCurrency(m.approvedTotal)}</strong>)
+          • Pending Delivery: <strong style="color:#60a5fa;">${fmtNum(m.pendingUnits)} pcs</strong>
+          • Delivered: <strong style="color:var(--green);">${fmtNum(m.deliveredUnits)} pcs</strong> (${fmtCurrency(m.deliveredTotal)})
+          ${qtyVar !== 0 || Math.abs(costVar) >= 0.01 ? `<span class="muted">• Adj vs Req: ${qtyVar >= 0 ? '+' : ''}${qtyVar} pcs</span>` : ''}
         </div>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        <button type="button" id="mainPoPreviewBtn" class="secondary" style="padding:5px 10px;font-size:11px;min-height:0;">PREVIEW</button>
-        <button type="button" id="mainPoCopyBtn" class="secondary" style="padding:5px 10px;font-size:11px;min-height:0;">COPY</button>
-        <button type="button" id="mainPoCloseBtn" class="secondary" style="padding:5px 10px;font-size:11px;min-height:0;">CLOSE</button>
+        <button type="button" id="mainPoFillDeliveredBtn" class="secondary" style="padding:5px 9px;font-size:11px;min-height:0;" title="Mark all lines as physically delivered equal to Approved Qty (tagged Not Yet in AB Web)">MARK ALL DELIVERED</button>
+        <button type="button" id="mainPoMatchAbBtn" class="secondary" style="padding:5px 9px;font-size:11px;min-height:0;" title="Sync & match from AB Web /panel/deliveries">MATCH AB WEB (${recentDeliveries.length})</button>
+        <button type="button" id="mainPoPreviewBtn" class="secondary" style="padding:5px 9px;font-size:11px;min-height:0;">PREVIEW</button>
+        <button type="button" id="mainPoCopyBtn" class="secondary" style="padding:5px 9px;font-size:11px;min-height:0;">COPY</button>
+        <button type="button" id="mainPoCloseBtn" class="secondary" style="padding:5px 9px;font-size:11px;min-height:0;">CLOSE</button>
       </div>
     </div>
 
-    <div class="grid-3" style="gap:8px;margin-bottom:10px;">
+    <div style="display:grid;grid-template-columns:1.5fr 1fr 0.8fr 1.4fr;gap:8px;margin-bottom:10px;">
       <div>
         <label for="mainPoTitleInp" style="font-size:10.5px;">ORDER NAME</label>
         <input type="text" id="mainPoTitleInp" value="${String(po.title || '').replace(/"/g, '&quot;')}" style="padding:5px 8px;font-size:12px;" />
       </div>
       <div>
-        <label for="mainPoStatusSel" style="font-size:10.5px;">SUPPLIER APPROVAL STATUS</label>
+        <label for="mainPoStatusSel" style="font-size:10.5px;">ORDER / DELIVERY STATUS</label>
         <select id="mainPoStatusSel" style="padding:5px 8px;font-size:12px;">
-          ${['Draft', 'Sent to Supplier', 'Supplier Approved', 'Received', 'Cancelled']
+          ${['Draft', 'Sent to Supplier', 'Supplier Approved', 'Partially Received', 'Received (Pending AB Web)', 'Received', 'Cancelled']
             .map((st) => `<option value="${st}" ${po.status === st ? 'selected' : ''}>${st}</option>`)
             .join('')}
         </select>
       </div>
       <div>
-        <label for="mainPoNotesInp" style="font-size:10.5px;">SUPPLIER NOTES</label>
-        <input type="text" id="mainPoNotesInp" value="${String(po.notes || '').replace(/"/g, '&quot;')}" placeholder="Approved adjustments, ETA..." style="padding:5px 8px;font-size:12px;" />
+        <label for="mainPoDateInp" style="font-size:10.5px;">ORDER DATE</label>
+        <input type="date" id="mainPoDateInp" value="${orderDate}" style="padding:5px 8px;font-size:12px;" />
+      </div>
+      <div>
+        <label for="mainPoNotesInp" style="font-size:10.5px;">SUPPLIER / DELIVERY NOTES</label>
+        <input type="text" id="mainPoNotesInp" value="${String(po.notes || '').replace(/"/g, '&quot;')}" placeholder="Approved notes, DR#, missing items..." style="padding:5px 8px;font-size:12px;" />
       </div>
     </div>
 
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:6px 8px;border-radius:6px;background:rgba(255,255,255,0.03);border:1px dashed var(--border);margin-bottom:10px;">
-      <select id="mainPoAddProdSel" style="flex:2;min-width:180px;padding:5px 8px;font-size:12px;">
-        <option value="">+ Add another unit approved by supplier...</option>
+      <select id="mainPoAddProdSel" style="flex:2;min-width:170px;padding:5px 8px;font-size:12px;">
+        <option value="">+ Add unit (ordered or extra/substituted delivery)...</option>
         ${activeProds
           .map((i) => {
             const nm = formatSwapModelName({ brand: i.brand || '', model: i.model || i.name });
@@ -2910,27 +3468,34 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
         <option value="A&K">A&amp;K</option>
         <option value="Online Purchase">Online Purchase</option>
       </select>
-      <input type="number" id="mainPoAddPriceInp" placeholder="Price ₱" min="0" step="0.01" style="width:88px;padding:5px 6px;font-size:12px;" />
-      <input type="number" id="mainPoAddQtyInp" value="1" min="1" max="999" style="width:56px;padding:5px 6px;font-size:12px;text-align:center;" />
+      <input type="number" id="mainPoAddPriceInp" placeholder="Price ₱" min="0" step="0.01" style="width:82px;padding:5px 6px;font-size:12px;" />
+      <input type="number" id="mainPoAddQtyInp" value="1" min="1" max="999" style="width:52px;padding:5px 6px;font-size:12px;text-align:center;" />
+      <label style="display:flex;align-items:center;gap:4px;margin:0;font-size:11px;cursor:pointer;" title="Check if this item was delivered as an unexpected/substituted item not on the original order">
+        <input type="checkbox" id="mainPoAddExtraChk" style="width:14px;height:14px;margin:0;accent-color:#f59e0b;" />
+        <span>Extra Deliv</span>
+      </label>
       <button type="button" id="mainPoAddBtn" class="secondary" style="padding:5px 10px;font-size:11.5px;min-height:0;">+ ADD</button>
     </div>
 
-    <div style="max-height:360px;overflow-y:auto;padding-right:4px;">${groupsHtml || '<div class="muted small">No items in this order.</div>'}</div>
+    <div style="max-height:380px;overflow-y:auto;padding-right:4px;">${groupsHtml || '<div class="muted small">No items yet — add items above.</div>'}</div>
 
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border-soft);">
       <label style="display:flex;align-items:center;gap:6px;margin:0;font-size:12px;cursor:pointer;">
         <input type="checkbox" id="mainPoSyncCostsChk" checked style="width:15px;height:15px;margin:0;accent-color:var(--gold);" />
-        <span>Also update Product Supplier Costs from edited prices</span>
+        <span>Also update Product Supplier Costs from edited/billed prices</span>
       </label>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <span id="mainPoSaveStatus" class="small" style="color:var(--green);font-weight:700;">${statusMsg}</span>
-        <button type="button" id="mainPoSaveBtn" style="padding:7px 16px;font-size:12px;">SAVE APPROVED CHANGES</button>
+        <button type="button" id="mainPoSaveBtn" style="padding:7px 16px;font-size:12px;">SAVE ORDER &amp; DELIVERY</button>
       </div>
     </div>
   `;
 
   wrap.querySelector('#mainPoTitleInp')?.addEventListener('input', (e) => { po.title = e.target.value; });
   wrap.querySelector('#mainPoStatusSel')?.addEventListener('change', (e) => { po.status = e.target.value; });
+  wrap.querySelector('#mainPoDateInp')?.addEventListener('change', (e) => {
+    if (e.target.value) po.createdAt = `${e.target.value}T10:00:00.000Z`;
+  });
   wrap.querySelector('#mainPoNotesInp')?.addEventListener('input', (e) => { po.notes = e.target.value; });
 
   wrap.querySelectorAll('.main-po-chk').forEach((chk) => {
@@ -2943,8 +3508,13 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
   wrap.querySelectorAll('.main-po-price').forEach((inp) => {
     inp.addEventListener('change', () => {
       const idx = Number(inp.dataset.idx);
+      const val = Math.max(0, Number(inp.value) || 0);
       if (po.items[idx]) {
-        po.items[idx].unitCost = Math.max(0, Number(inp.value) || 0);
+        const oldU = po.items[idx].unitCost;
+        po.items[idx].unitCost = val;
+        if (po.items[idx].receivedCost === undefined || po.items[idx].receivedCost === oldU) {
+          po.items[idx].receivedCost = val;
+        }
         po.items[idx].isEstimatedCost = false;
       }
       renderSavedOrderInlineEditor();
@@ -2960,6 +3530,62 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
       }
       renderSavedOrderInlineEditor();
     });
+  });
+  wrap.querySelectorAll('.main-po-rec-qty').forEach((inp) => {
+    inp.addEventListener('change', () => {
+      const idx = Number(inp.dataset.idx);
+      const it = po.items[idx];
+      if (!it) return;
+      if (inp.value === '') {
+        it.receivedQty = null;
+      } else {
+        it.receivedQty = Math.max(0, parseInt(inp.value, 10) || 0);
+        if (!it.receivedDate) it.receivedDate = todayStr;
+        if (!it.abDeliveryNo) it.abDeliveryNo = 'PENDING IN AB WEB';
+      }
+      renderSavedOrderInlineEditor();
+    });
+  });
+  wrap.querySelectorAll('.main-po-rec-cost').forEach((inp) => {
+    inp.addEventListener('change', () => {
+      const idx = Number(inp.dataset.idx);
+      if (po.items[idx]) po.items[idx].receivedCost = Math.max(0, Number(inp.value) || 0);
+      renderSavedOrderInlineEditor();
+    });
+  });
+  wrap.querySelectorAll('.main-po-ab-ref').forEach((inp) => {
+    inp.addEventListener('change', () => {
+      const idx = Number(inp.dataset.idx);
+      if (po.items[idx]) po.items[idx].abDeliveryNo = inp.value.trim();
+    });
+  });
+  wrap.querySelectorAll('.main-po-del-line').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.idx);
+      po.items.splice(idx, 1);
+      renderSavedOrderInlineEditor();
+    });
+  });
+
+  wrap.querySelector('#mainPoFillDeliveredBtn')?.addEventListener('click', () => {
+    for (const it of po.items || []) {
+      if (it.approved === false || it.isExtraItem) continue;
+      it.receivedQty = Number(it.qty) || 0;
+      it.receivedCost = Number(it.receivedCost ?? it.unitCost) || 0;
+      if (!it.receivedDate) it.receivedDate = todayStr;
+      if (!it.abDeliveryNo) it.abDeliveryNo = 'PENDING IN AB WEB';
+    }
+    const anyMissingAb = (po.items || []).some((it) => Number(it.receivedQty) > 0 && (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB'));
+    po.status = anyMissingAb ? 'Received (Pending AB Web)' : 'Received';
+    renderSavedOrderInlineEditor('All approved quantities filled as Delivered (click SAVE ORDER & DELIVERY)');
+  });
+
+  wrap.querySelector('#mainPoMatchAbBtn')?.addEventListener('click', async () => {
+    if (po._isNew) {
+      alert('Please save the order first before auto-matching AB Web deliveries.');
+      return;
+    }
+    await matchSingleOrderWithAbWeb(po.id);
   });
 
   wrap.querySelector('#mainPoAddProdSel')?.addEventListener('change', (e) => {
@@ -2980,6 +3606,7 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
     const supplier = wrap.querySelector('#mainPoAddSupSel')?.value || 'AB Main Supplier';
     const unitCost = Math.max(0, Number(wrap.querySelector('#mainPoAddPriceInp')?.value) || 0);
     const qty = Math.max(1, parseInt(wrap.querySelector('#mainPoAddQtyInp')?.value, 10) || 1);
+    const isExtra = Boolean(wrap.querySelector('#mainPoAddExtraChk')?.checked);
     const item = (state.inventory?.items || []).find((i) => i.id === pid);
     if (!item) return;
     const branchName = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' }[branchId] || branchId;
@@ -2999,11 +3626,17 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
       avail: Number(item.byBranch?.[branchId]?.qtyAvailable) || 0,
       branchDemand90: 0,
       storewideDemand90: 0,
-      requestedQty: qty,
-      qty,
+      requestedQty: isExtra ? 0 : qty,
+      qty: isExtra ? 0 : qty,
       requestedCost: unitCost,
       unitCost,
       approved: true,
+      receivedQty: isExtra ? qty : null,
+      receivedCost: unitCost,
+      receivedDate: isExtra ? todayStr : '',
+      abDeliveryNo: isExtra ? 'PENDING IN AB WEB' : '',
+      abReportedQty: null,
+      isExtraItem: isExtra,
     });
     renderSavedOrderInlineEditor();
   });
@@ -3028,11 +3661,33 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
   wrap.querySelector('#mainPoSaveBtn')?.addEventListener('click', async () => {
     const syncSupplierCosts = Boolean(wrap.querySelector('#mainPoSyncCostsChk')?.checked);
     const title = (po.title || '').trim() || `Restock Order • ${todayStr}`;
-    const status = po.status || 'Supplier Approved';
+    let status = po.status || 'Supplier Approved';
     const notes = (po.notes || '').trim();
+
+    // Auto-update status if delivery quantities were entered
+    const appItems = (po.items || []).filter((it) => it.approved !== false && !it.isExtraItem && (Number(it.qty) || 0) > 0);
+    const anyRec = (po.items || []).some((it) => it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== '');
+    const allRec = appItems.length > 0 && appItems.every((it) => it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== '');
+    const missingAb = (po.items || []).some((it) => Number(it.receivedQty) > 0 && (!it.abDeliveryNo || it.abDeliveryNo === 'PENDING IN AB WEB'));
+    if (!['Cancelled', 'Draft'].includes(status)) {
+      if (allRec && status !== 'Received') status = missingAb ? 'Received (Pending AB Web)' : 'Received';
+      else if (anyRec && !allRec && ['Sent to Supplier', 'Supplier Approved'].includes(status)) status = 'Partially Received';
+    }
+    const refs = [...new Set((po.items || []).map((it) => String(it.abDeliveryNo || '').trim()).filter((r) => r && r !== 'PENDING IN AB WEB'))].join(', ');
+
     if (IS_STATIC_GH) {
       const now = new Date().toISOString();
-      const updatedObj = { ...po, title, status, notes, updatedAt: now, ...computeOrderSummaryMetrics(po.items) };
+      const updatedObj = {
+        ...po,
+        _isNew: undefined,
+        title,
+        status,
+        notes,
+        abDeliveryRefs: refs,
+        updatedAt: now,
+        ...computeOrderSummaryMetrics(po.items, status),
+      };
+      delete updatedObj._isNew;
       const all = getLocalSavedOrders();
       const idx = all.findIndex((o) => o.id === po.id);
       if (idx >= 0) all[idx] = updatedObj;
@@ -3040,22 +3695,386 @@ function renderSavedOrderInlineEditor(statusMsg = '') {
       setLocalSavedOrders(all);
       state.savedOrders = all;
       state.editingSavedOrder = JSON.parse(JSON.stringify(updatedObj));
+    } else if (po._isNew) {
+      const res = await api('/api/purchase-orders', {
+        method: 'POST',
+        body: JSON.stringify({
+          id: po.id,
+          title,
+          status,
+          supplierFilter: po.supplierFilter || 'LOWEST',
+          notes,
+          abDeliveryRefs: refs,
+          items: po.items,
+          createdAt: po.createdAt,
+          syncSupplierCosts,
+        }),
+      });
+      await loadSavedPurchaseOrders();
+      if (res?.order) state.editingSavedOrder = JSON.parse(JSON.stringify(res.order));
     } else {
       const res = await api(`/api/purchase-orders/${encodeURIComponent(po.id)}`, {
         method: 'PATCH',
-        body: JSON.stringify({ title, status, notes, items: po.items, syncSupplierCosts }),
+        body: JSON.stringify({
+          title,
+          status,
+          notes,
+          abDeliveryRefs: refs,
+          items: po.items,
+          createdAt: po.createdAt,
+          syncSupplierCosts,
+        }),
       });
       await loadSavedPurchaseOrders();
       if (res?.order) state.editingSavedOrder = JSON.parse(JSON.stringify(res.order));
     }
     if (syncSupplierCosts) {
       applyEditedPricesToLocalInventory(po.items);
-      renderRestockCards();
       renderInventory();
     }
     renderSavedOrdersPanel();
+    buildRestockDraftPlan();
+    renderRestockCards();
     renderSavedOrderInlineEditor(`Saved ${po.id}${syncSupplierCosts ? ' & updated supplier costs' : ''} ✓`);
   });
+}
+
+async function matchSingleOrderWithAbWeb(poId = 'ALL') {
+  const btn = document.getElementById('syncAbDeliveriesBtn');
+  if (btn) btn.textContent = 'SYNCING...';
+  try {
+    if (IS_STATIC_GH) {
+      await loadAbDeliveries();
+      const cnt = reconcileStaticOrdersWithDeliveries(poId === 'ALL' ? null : poId);
+      await loadSavedPurchaseOrders();
+      if (state.editingSavedOrder && poId !== 'ALL') {
+        const refreshed = state.savedOrders.find((o) => o.id === poId);
+        if (refreshed) state.editingSavedOrder = JSON.parse(JSON.stringify(refreshed));
+      }
+      renderSavedOrdersPanel();
+      buildRestockDraftPlan();
+      renderRestockCards();
+      if (btn) btn.textContent = cnt > 0 ? `MATCHED ${cnt} ✓` : 'SYNCED (0 NEW)';
+    } else {
+      const res = await api(`/api/purchase-orders/${encodeURIComponent(poId)}/match-deliveries`, { method: 'POST', body: JSON.stringify({}) });
+      await Promise.all([loadAbDeliveries(), loadSavedPurchaseOrders()]);
+      if (state.editingSavedOrder && res?.order) {
+        state.editingSavedOrder = JSON.parse(JSON.stringify(res.order));
+      }
+      renderSavedOrdersPanel();
+      buildRestockDraftPlan();
+      renderRestockCards();
+      if (btn) btn.textContent = res?.matchedLines > 0 ? `MATCHED ${res.matchedLines} LINE(S) ✓` : 'UP TO DATE ✓';
+    }
+  } catch (err) {
+    if (btn) btn.textContent = 'SYNC ERROR';
+    alert(err.message);
+  }
+  setTimeout(() => {
+    if (btn) btn.textContent = 'SYNC & MATCH AB WEB';
+  }, 2200);
+}
+
+function buildVarianceReportRows() {
+  const orderFilter = document.getElementById('varianceOrderFilter')?.value || 'ALL';
+  const typeFilter = document.getElementById('varianceTypeFilter')?.value || 'ALL';
+  const orders = (state.savedOrders || []).filter((o) => o.status !== 'Cancelled' && (orderFilter === 'ALL' || o.id === orderFilter));
+
+  const out = [];
+  for (const o of orders) {
+    const ordDate = String(o.createdAt || '').slice(0, 10);
+    for (const it of o.items || []) {
+      const reqQty = Math.max(0, Number(it.requestedQty ?? it.qty) || 0);
+      const isApp = it.approved !== false && !it.isExtraItem;
+      const appQty = isApp ? Math.max(0, Number(it.qty) || 0) : 0;
+      const appCost = Math.max(0, Number(it.unitCost) || 0);
+      const hasRec = it.receivedQty !== undefined && it.receivedQty !== null && it.receivedQty !== '';
+      const delQty = hasRec ? Math.max(0, Number(it.receivedQty) || 0) : 0;
+      const delCost = hasRec ? Math.max(0, Number(it.receivedCost ?? appCost) || 0) : appCost;
+      const qtyVar = hasRec ? delQty - appQty : 0;
+      const unitPriceVar = hasRec ? delCost - appCost : 0;
+      const pesoImpact = hasRec ? delQty * delCost - appQty * appCost : 0;
+      const abRef = String(it.abDeliveryNo || '').trim();
+      const missingInAb = hasRec && delQty > 0 && (!abRef || abRef === 'PENDING IN AB WEB');
+
+      let rowStatus = 'Waiting Delivery';
+      if (it.isExtraItem) rowStatus = 'Extra / Substituted';
+      else if (!isApp) rowStatus = 'Cancelled by Supplier';
+      else if (hasRec) {
+        if (qtyVar < 0) rowStatus = `Short (${qtyVar})`;
+        else if (qtyVar > 0) rowStatus = `Over (+${qtyVar})`;
+        else if (Math.abs(unitPriceVar) >= 0.01) rowStatus = 'Price Diff';
+        else rowStatus = 'Matched ✓';
+      }
+
+      const isVariance = Boolean(it.isExtraItem) || (hasRec && (qtyVar !== 0 || Math.abs(unitPriceVar) >= 0.01)) || !isApp;
+      if (typeFilter === 'VARIANCES_ONLY' && !isVariance) continue;
+      if (typeFilter === 'PENDING_ONLY' && (hasRec || !isApp)) continue;
+      if (typeFilter === 'NOT_IN_AB' && !missingInAb) continue;
+
+      out.push({
+        orderId: o.id,
+        orderTitle: o.title,
+        orderDate: ordDate,
+        orderStatus: o.status,
+        branchName: it.branchName || '',
+        displayModel: it.displayModel || it.model || '',
+        supplier: it.supplier || '',
+        reqQty,
+        appQty,
+        delQty: hasRec ? delQty : null,
+        qtyVar,
+        appCost,
+        delCost: hasRec ? delCost : null,
+        unitPriceVar,
+        pesoImpact,
+        hasRec,
+        isApp,
+        isExtra: Boolean(it.isExtraItem),
+        abRef,
+        missingInAb,
+        rowStatus,
+      });
+    }
+  }
+  return out;
+}
+
+function renderOrderVarianceReport() {
+  const orderSel = document.getElementById('varianceOrderFilter');
+  const kpiGrid = document.getElementById('varianceKpiGrid');
+  const banner = document.getElementById('varianceInsightBanner');
+  const tbody = document.querySelector('#orderVarianceTable tbody');
+  if (!tbody) return;
+
+  const orders = (state.savedOrders || []).filter((o) => o.status !== 'Cancelled');
+  if (orderSel) {
+    const prev = orderSel.value || 'ALL';
+    orderSel.innerHTML =
+      '<option value="ALL">All Orders (Ordered vs Delivered)</option>' +
+      orders.map((o) => `<option value="${o.id}">${o.id} — ${o.title} (${o.status})</option>`).join('');
+    if ([...orderSel.options].some((opt) => opt.value === prev)) orderSel.value = prev;
+  }
+
+  const rows = buildVarianceReportRows();
+  let sumAppQty = 0, sumDelQty = 0, sumPendingQty = 0, sumAppVal = 0, sumDelVal = 0, sumPriceImpact = 0;
+  let shortUnits = 0, overUnits = 0, missingAbCount = 0;
+
+  for (const r of rows) {
+    sumAppQty += r.appQty;
+    sumAppVal += r.appQty * r.appCost;
+    if (r.hasRec) {
+      sumDelQty += r.delQty;
+      sumDelVal += r.delQty * r.delCost;
+      sumPriceImpact += r.delQty * (r.delCost - r.appCost);
+      if (r.qtyVar < 0) shortUnits += Math.abs(r.qtyVar);
+      if (r.qtyVar > 0) overUnits += r.qtyVar;
+      if (r.missingInAb) missingAbCount++;
+    } else if (r.isApp) {
+      sumPendingQty += r.appQty;
+    }
+  }
+
+  const reportedAppQty = Math.max(0, sumAppQty - sumPendingQty);
+  const fillRate = reportedAppQty > 0 ? (sumDelQty / reportedAppQty) * 100 : 0;
+  const netQtyVar = sumDelQty - reportedAppQty;
+  const netValVar = sumDelVal - (sumAppVal - rows.filter((r) => !r.hasRec && r.isApp).reduce((s, r) => s + r.appQty * r.appCost, 0));
+
+  if (kpiGrid) {
+    kpiGrid.innerHTML = `
+      <div class="summary-box">
+        DELIVERY FILL RATE (REPORTED LINES)
+        <strong style="color:${fillRate >= 98 ? 'var(--green)' : '#f59e0b'};">${fillRate.toFixed(1)}%</strong>
+        <span class="summary-note">${fmtNum(sumDelQty)} delivered vs ${fmtNum(reportedAppQty)} reported • ${fmtNum(sumPendingQty)} pcs still pending</span>
+      </div>
+      <div class="summary-box">
+        QUANTITY VARIANCE (SHORT vs OVER)
+        <strong style="color:${netQtyVar === 0 ? 'var(--green)' : netQtyVar < 0 ? 'var(--danger)' : '#f59e0b'};">${netQtyVar >= 0 ? '+' : ''}${fmtNum(netQtyVar)} pcs</strong>
+        <span class="summary-note">Short: −${fmtNum(shortUnits)} pcs • Over/Extra: +${fmtNum(overUnits)} pcs</span>
+      </div>
+      <div class="summary-box">
+        INVOICE / PRICE VARIANCE
+        <strong style="color:${sumPriceImpact <= 0 ? 'var(--green)' : 'var(--danger)'};">${sumPriceImpact >= 0 ? '+' : ''}${fmtCurrency(sumPriceImpact)}</strong>
+        <span class="summary-note">Total Peso Var (incl. qty): ${netValVar >= 0 ? '+' : ''}${fmtCurrency(netValVar)}</span>
+      </div>
+      <div class="summary-box" style="border-color:${missingAbCount > 0 ? 'var(--danger)' : 'var(--green)'};">
+        AB WEB RECORD SYNC STATUS
+        <strong style="color:${missingAbCount > 0 ? '#f59e0b' : 'var(--green)'};">${missingAbCount > 0 ? `${fmtNum(missingAbCount)} Missing in AB` : 'Synced'}</strong>
+        <span class="summary-note">${missingAbCount > 0 ? 'Delivered physically, still not in AB Web /panel/deliveries' : 'All recorded deliveries matched in AB Web'}</span>
+      </div>
+    `;
+  }
+
+  if (banner) {
+    const latestAb = (state.abDeliveries || [])[0];
+    const brNameMap = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
+    const latestStr = latestAb ? `Latest AB Web delivery synced: <strong>${latestAb.deliveryDate} (${latestAb.deliveryNo} • ${latestAb.branchName || brNameMap[latestAb.branchId] || latestAb.branchId || ''})</strong>.` : '';
+    banner.innerHTML = `<strong>Order vs. Delivery Audit:</strong> Showing <strong>${rows.length}</strong> line item(s). ${
+      missingAbCount > 0
+        ? `<strong style="color:#f59e0b;">${missingAbCount} line(s)</strong> are physically recorded as delivered but <strong>not yet in AB Web</strong> (keep tracking until they appear on AB Web). `
+        : ''
+    }${shortUnits > 0 ? `<strong style="color:var(--danger);">${shortUnits} unit(s) short-delivered</strong> — check backorder or next Restock. ` : ''}${latestStr}`;
+  }
+
+  tbody.innerHTML = rows.length
+    ? rows
+        .map((r) => {
+          const varColor = !r.hasRec
+            ? 'var(--muted)'
+            : r.qtyVar < 0
+              ? 'var(--danger)'
+              : r.qtyVar > 0 || r.isExtra
+                ? '#f59e0b'
+                : 'var(--green)';
+          const priceDisp = r.hasRec
+            ? `${fmtCurrency(r.appCost)} → <strong style="color:${Math.abs(r.unitPriceVar) < 0.01 ? 'var(--text)' : r.unitPriceVar < 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(r.delCost)}</strong>`
+            : fmtCurrency(r.appCost);
+          const abBadge = !r.hasRec
+            ? `<span class="badge badge-warn" style="font-size:10px;">Waiting Delivery</span>`
+            : r.missingInAb
+              ? `<span class="badge badge-danger" style="font-size:10px;">Not Yet in AB Web</span>`
+              : `<span class="badge badge-ok" style="font-size:10px;">${r.abRef}</span>`;
+          return `
+            <tr>
+              <td><strong>${r.orderId}</strong><div class="small muted">${r.orderDate}</div></td>
+              <td>${r.branchName}</td>
+              <td><strong>${r.displayModel}</strong><div class="small muted">${r.supplier}</div></td>
+              <td>${fmtNum(r.reqQty)}</td>
+              <td><strong>${fmtNum(r.appQty)}</strong></td>
+              <td>${r.hasRec ? `<strong>${fmtNum(r.delQty)}</strong>` : '<span class="muted">—</span>'}</td>
+              <td style="color:${varColor};font-weight:700;">${r.hasRec ? `${r.qtyVar > 0 ? '+' : ''}${r.qtyVar}` : '—'}</td>
+              <td>${priceDisp}</td>
+              <td style="color:${r.pesoImpact === 0 ? 'var(--muted)' : r.pesoImpact < 0 ? '#f59e0b' : 'var(--danger)'};"><strong>${r.hasRec ? `${r.pesoImpact >= 0 ? '+' : ''}${fmtCurrency(r.pesoImpact)}` : '—'}</strong></td>
+              <td>${abBadge}<div class="small" style="color:${varColor};margin-top:2px;">${r.rowStatus}</div></td>
+            </tr>`;
+        })
+        .join('')
+    : '<tr><td colspan="10" class="muted">No order lines match this variance filter.</td></tr>';
+}
+
+function renderAbDeliveriesView() {
+  const tbody = document.querySelector('#abDeliveriesTable tbody');
+  if (!tbody) return;
+  const brFilter = document.getElementById('abDeliveryBranchFilter')?.value || 'ALL';
+  const bNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
+  const linkedRefs = new Map();
+  for (const o of state.savedOrders || []) {
+    for (const ref of String(o.abDeliveryRefs || '').split(',').map((s) => s.trim()).filter(Boolean)) {
+      linkedRefs.set(ref, o.id);
+    }
+  }
+
+  const list = (state.abDeliveries || []).filter((d) => brFilter === 'ALL' || d.branchId === brFilter);
+  tbody.innerHTML = list.length
+    ? list
+        .slice(0, 60)
+        .map((d) => {
+          const linkedPo = linkedRefs.get(d.deliveryNo);
+          const itemChips = (d.items || [])
+            .filter((it) => !/FREE/i.test(it.code) && !/FREE\s*BUNDLE/i.test(it.productName))
+            .slice(0, 6)
+            .map((it) => `<span style="display:inline-block;padding:1px 6px;margin:1px;border-radius:4px;background:rgba(255,255,255,0.06);font-size:11px;">${it.productName} ×<strong>${it.receivedQty || it.deliveredQty}</strong></span>`)
+            .join('');
+          const moreCnt = Math.max(0, (d.items || []).filter((it) => !/FREE/i.test(it.code)).length - 6);
+          return `
+            <tr>
+              <td><strong>${d.deliveryDate}</strong></td>
+              <td><strong>${d.deliveryNo}</strong>${linkedPo ? `<div class="small" style="color:var(--green);">Linked: ${linkedPo}</div>` : ''}</td>
+              <td>${bNames[d.branchId] || d.branchId}</td>
+              <td><span class="badge ${d.status === 'RECEIVED' ? 'badge-ok' : 'badge-warn'}">${d.status}</span></td>
+              <td><strong>${fmtNum(d.totalDeliveredQty)} / ${fmtNum(d.totalReceivedQty)} pcs</strong><div class="small muted">${fmtCurrency(d.totalAmount)} SRP</div></td>
+              <td>${itemChips || '<span class="muted small">No line items</span>'}${moreCnt > 0 ? ` <span class="small muted">+${moreCnt} more</span>` : ''}</td>
+            </tr>`;
+        })
+        .join('')
+    : '<tr><td colspan="6" class="muted">No AB Web deliveries synced yet (click Sync Now or Sync &amp; Match AB Web).</td></tr>';
+}
+
+function downloadVariancePdf() {
+  const jspdfNs = window.jspdf;
+  if (!jspdfNs || typeof jspdfNs.jsPDF !== 'function') return alert('PDF library loading...');
+  const rows = buildVarianceReportRows();
+  if (!rows.length) return alert('No variance rows to export.');
+  const doc = new jspdfNs.jsPDF({ orientation: 'landscape', unit: 'in', format: [8.5, 13], compress: true });
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text('AB-GADGETZ · ORDER VS. DELIVERY VARIANCE REPORT', 6.5, 0.45, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.text(`Generated ${todayStr} • ${rows.length} line item(s)`, 6.5, 0.63, { align: 'center' });
+
+  doc.autoTable({
+    startY: 0.78,
+    margin: { left: 0.35, right: 0.35, bottom: 0.35 },
+    head: [['Order ID', 'Date', 'Branch', 'Model', 'Req', 'Appr', 'Deliv', 'Qty Var', 'Appr ₱', 'Billed ₱', '₱ Impact', 'AB Web Ref / Status']],
+    body: rows.map((r) => [
+      r.orderId,
+      r.orderDate,
+      r.branchName,
+      r.displayModel,
+      r.reqQty,
+      r.appQty,
+      r.hasRec ? r.delQty : '—',
+      r.hasRec ? (r.qtyVar > 0 ? `+${r.qtyVar}` : r.qtyVar) : '—',
+      `PHP ${fmtNum(Math.round(r.appCost))}`,
+      r.hasRec ? `PHP ${fmtNum(Math.round(r.delCost))}` : '—',
+      r.hasRec ? `PHP ${fmtNum(Math.round(r.pesoImpact))}` : '—',
+      r.hasRec ? (r.missingInAb ? `Not in AB Web (${r.rowStatus})` : `${r.abRef} (${r.rowStatus})`) : 'Waiting Delivery',
+    ]),
+    theme: 'grid',
+    styles: { font: 'helvetica', fontSize: 7.5, cellPadding: 3 / 72, lineColor: [60, 60, 60], lineWidth: 0.65 / 72 },
+    headStyles: { fillColor: [235, 226, 190], textColor: [27, 25, 19], fontStyle: 'bold' },
+  });
+  doc.save(`AB_Gadgetz_Order_Delivery_Variance_${todayStr}.pdf`);
+}
+
+async function downloadVarianceExcel() {
+  if (!window.ExcelJS) return alert('Excel library loading...');
+  const rows = buildVarianceReportRows();
+  if (!rows.length) return alert('No variance rows to export.');
+  const wb = new window.ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Order vs Delivery Variance');
+  ws.mergeCells(1, 1, 1, 12);
+  ws.getCell(1, 1).value = `AB-GADGETZ · ORDER VS. DELIVERY VARIANCE REPORT (${todayStr})`;
+  ws.getCell(1, 1).font = { bold: true, size: 13 };
+  ws.getCell(1, 1).alignment = { horizontal: 'center' };
+  const hdr = ws.addRow(['Order ID', 'Order Date', 'Branch', 'Model', 'Requested', 'Approved', 'Delivered', 'Qty Variance', 'Approved Price', 'Billed Price', 'Peso Impact', 'AB Web Ref / Status']);
+  hdr.eachCell((c) => {
+    c.font = { bold: true, size: 10 };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEBE2BE' } };
+    c.border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+  });
+  for (const r of rows) {
+    const er = ws.addRow([
+      r.orderId,
+      r.orderDate,
+      r.branchName,
+      r.displayModel,
+      r.reqQty,
+      r.appQty,
+      r.hasRec ? r.delQty : '',
+      r.hasRec ? r.qtyVar : '',
+      r.appCost,
+      r.hasRec ? r.delCost : '',
+      r.hasRec ? r.pesoImpact : '',
+      r.hasRec ? (r.missingInAb ? `Not Yet in AB Web (${r.rowStatus})` : `${r.abRef} (${r.rowStatus})`) : 'Waiting Delivery',
+    ]);
+    er.getCell(9).numFmt = '"₱"#,##0.00';
+    if (r.hasRec) {
+      er.getCell(10).numFmt = '"₱"#,##0.00';
+      er.getCell(11).numFmt = '"₱"#,##0.00';
+    }
+  }
+  ws.columns = [
+    { width: 16 }, { width: 12 }, { width: 12 }, { width: 32 }, { width: 10 }, { width: 10 },
+    { width: 10 }, { width: 12 }, { width: 14 }, { width: 14 }, { width: 15 }, { width: 26 },
+  ];
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `AB_Gadgetz_Order_Delivery_Variance_${todayStr}.xlsx`;
+  a.click();
 }
 
 async function createSavedOrderFromDraft() {
@@ -3087,6 +4106,12 @@ async function createSavedOrderFromDraft() {
     requestedCost: Number(r.unitCost) || 0,
     unitCost: Number(r.unitCost) || 0,
     approved: true,
+    receivedQty: null,
+    receivedCost: Number(r.unitCost) || 0,
+    receivedDate: '',
+    abDeliveryNo: '',
+    abReportedQty: null,
+    isExtraItem: false,
   }));
 
   let createdOrder = null;
@@ -3102,8 +4127,10 @@ async function createSavedOrderFromDraft() {
       status: 'Sent to Supplier',
       supplierFilter: mode,
       notes: '',
+      expectedDate: '',
+      abDeliveryRefs: '',
       items: itemsPayload,
-      ...computeOrderSummaryMetrics(itemsPayload),
+      ...computeOrderSummaryMetrics(itemsPayload, 'Sent to Supplier'),
       createdAt: now,
       updatedAt: now,
     };
@@ -3122,7 +4149,9 @@ async function createSavedOrderFromDraft() {
   if (createdOrder) {
     openSavedOrderInlineEditor(createdOrder);
     renderSavedOrdersPanel();
-    renderSavedOrderInlineEditor(`Order ${createdOrder.id} saved — edit approved prices & qty above anytime ✓`);
+    buildRestockDraftPlan();
+    renderRestockCards();
+    renderSavedOrderInlineEditor(`Order ${createdOrder.id} saved — Restock now deducts these pending units automatically ✓`);
   }
 }
 
@@ -3469,12 +4498,13 @@ async function loadPlanning() {
       api('/api/budget'),
       state.planningActivity ? Promise.resolve(state.planningActivity) : api('/api/activity?start=2024-01-01&end=2099-12-31').catch(() => null),
       loadSavedPurchaseOrders(),
+      loadAbDeliveries(),
     ]);
     state.planning = planning;
     state.budget = budget;
     if (act) state.planningActivity = act;
   } catch {
-    await loadSavedPurchaseOrders();
+    await Promise.all([loadSavedPurchaseOrders(), loadAbDeliveries()]);
   }
   renderPlanning();
 }
@@ -3754,6 +4784,50 @@ document.getElementById('savedOrdersToggle')?.addEventListener('click', () => {
   if (caret) caret.textContent = hidden ? '+' : '−';
 });
 
+document.querySelectorAll('.po-subview-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const view = btn.dataset.poview || 'orders';
+    document.querySelectorAll('.po-subview-btn').forEach((b) => {
+      const active = b === btn;
+      b.classList.toggle('active', active);
+      b.classList.toggle('secondary', !active);
+    });
+    ['orders', 'variance', 'deliveries'].forEach((v) => {
+      document.getElementById(`poView-${v}`)?.classList.toggle('hidden', v !== view);
+    });
+    const body = document.getElementById('savedOrdersBody');
+    const caret = document.getElementById('savedOrdersCaret');
+    if (body) body.classList.remove('hidden');
+    if (caret) caret.textContent = '−';
+    if (view === 'variance') renderOrderVarianceReport();
+    if (view === 'deliveries') renderAbDeliveriesView();
+  });
+});
+
+document.getElementById('logNewPendingOrderBtn')?.addEventListener('click', () => {
+  openNewPendingOrderCreator();
+});
+document.getElementById('pasteOrderBtn')?.addEventListener('click', () => {
+  const box = document.getElementById('pasteOrderBox');
+  if (!box) return;
+  const hidden = box.classList.toggle('hidden');
+  if (!hidden) document.getElementById('pasteOrderText')?.focus();
+});
+document.getElementById('closePasteOrderBtn')?.addEventListener('click', () => {
+  document.getElementById('pasteOrderBox')?.classList.add('hidden');
+});
+document.getElementById('parseAndCreateOrderBtn')?.addEventListener('click', () => {
+  parseAndCreatePastedOrder();
+});
+document.getElementById('syncAbDeliveriesBtn')?.addEventListener('click', () => {
+  matchSingleOrderWithAbWeb('ALL');
+});
+document.getElementById('varianceOrderFilter')?.addEventListener('change', renderOrderVarianceReport);
+document.getElementById('varianceTypeFilter')?.addEventListener('change', renderOrderVarianceReport);
+document.getElementById('variancePdfBtn')?.addEventListener('click', downloadVariancePdf);
+document.getElementById('varianceExcelBtn')?.addEventListener('click', downloadVarianceExcel);
+document.getElementById('abDeliveryBranchFilter')?.addEventListener('change', renderAbDeliveriesView);
+
 document.getElementById('orderFundsToggle')?.addEventListener('click', () => {
   const body = document.getElementById('orderFundsBody');
   const caret = document.getElementById('orderFundsCaret');
@@ -3833,6 +4907,10 @@ document.getElementById('restockSearchInput')?.addEventListener('input', renderR
 document.getElementById('restockBrandFilter')?.addEventListener('change', renderRestockCards);
 document.getElementById('restockShowFilter')?.addEventListener('change', renderRestockCards);
 document.getElementById('restockExcludeObsoleteChk')?.addEventListener('change', () => {
+  buildRestockDraftPlan();
+  renderRestockCards();
+});
+document.getElementById('restockDeductPendingChk')?.addEventListener('change', () => {
   buildRestockDraftPlan();
   renderRestockCards();
 });
@@ -8266,8 +9344,40 @@ function connectEvents() {
   eventSource.addEventListener('sync', async (e) => {
     const payload = JSON.parse(e.data);
     updateSyncPill(payload);
+    if (payload.deliveriesUpdated > 0 || payload.ordersUpdated > 0) {
+      await Promise.all([loadSavedPurchaseOrders(), loadAbDeliveries()]);
+      if (state.activeTab === 'inventory' && state.activeInvTool === 'restock') {
+        if (payload.updatedCount > 0) await loadInventory();
+        const editingOrder = Boolean(document.activeElement?.closest('#savedOrderInlineEditor, #pasteOrderBox'));
+        if (!editingOrder) renderSavedOrdersPanel();
+        else {
+          renderOrderVarianceReport();
+          renderAbDeliveriesView();
+        }
+        if (!document.activeElement?.closest('.reorder-qty-inp')) {
+          buildRestockDraftPlan();
+          renderRestockCards();
+        }
+        return;
+      }
+    }
     if (payload.updatedCount > 0 || state.activeTab === 'websiteStock') {
       await refreshActiveTab();
+    }
+  });
+  eventSource.addEventListener('orders', async () => {
+    await Promise.all([loadSavedPurchaseOrders(), loadAbDeliveries()]);
+    if (state.activeTab === 'inventory' && state.activeInvTool === 'restock') {
+      const editingOrder = Boolean(document.activeElement?.closest('#savedOrderInlineEditor, #pasteOrderBox'));
+      if (!editingOrder) renderSavedOrdersPanel();
+      else {
+        renderOrderVarianceReport();
+        renderAbDeliveriesView();
+      }
+      if (!document.activeElement?.closest('.reorder-qty-inp')) {
+        buildRestockDraftPlan();
+        renderRestockCards();
+      }
     }
   });
 }

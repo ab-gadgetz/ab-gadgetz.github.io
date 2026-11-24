@@ -249,7 +249,76 @@ async function loginAndFetchPortal(username, password) {
       }
     } catch {}
   }
-  return { inventoryByBranch: result, stockCardsByBranch, liveInstallments, livePayments, liveExpenses, livePastDues };
+
+  // Fetch latest deliveries from /panel/deliveries (+ latest 35 delivery views)
+  const liveDeliveries = [];
+  try {
+    const dListRes = await fetch(`${PORTAL_BASE}/panel/deliveries`, { headers: { Cookie: cookieHeader(jar) } });
+    if (dListRes.ok) {
+      const dHtml = await dListRes.text();
+      const brMap = { MOLAVE: 'br-molave', TAMBULIG: 'br-tambulig', BONIFACIO: 'br-bonifacio' };
+      const dHeaders = [];
+      for (const tr of dHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
+        const tds = extractCells(tr[1]);
+        if (tds.length < 4 || !/^\d{4}-\d{2}-\d{2}$/.test(tds[0].trim())) continue;
+        const linkMatch = tr[1].match(/href=["']\/panel\/deliveries\/view\/(\d+)["']/i);
+        const portalDeliveryId = linkMatch ? parseInt(linkMatch[1], 10) : 0;
+        const branchId = brMap[String(tds[2] || '').trim().toUpperCase()] || '';
+        if (!portalDeliveryId || !branchId) continue;
+        dHeaders.push({
+          portalDeliveryId,
+          deliveryDate: tds[0].trim().slice(0, 10),
+          deliveryNo: String(tds[1] || '').trim(),
+          branchId,
+          status: String(tds[3] || 'RECEIVED').trim().toUpperCase(),
+        });
+      }
+      const targetHeaders = dHeaders.slice(0, 40);
+      for (let i = 0; i < targetHeaders.length; i += 6) {
+        const chunk = targetHeaders.slice(i, i + 6);
+        const done = await Promise.all(
+          chunk.map(async (h) => {
+            try {
+              const vRes = await fetch(`${PORTAL_BASE}/panel/deliveries/view/${h.portalDeliveryId}`, { headers: { Cookie: cookieHeader(jar) } });
+              if (!vRes.ok) return { ...h, totalDeliveredQty: 0, totalReceivedQty: 0, totalAmount: 0, items: [] };
+              const vHtml = await vRes.text();
+              const items = [];
+              let totD = 0, totR = 0, totAmt = 0;
+              for (const tr of vHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
+                const tds = extractCells(tr[1]);
+                if (tds.length < 6) continue;
+                const code = String(tds[0] || '').replace(/\s+/g, ' ').trim();
+                const productName = String(tds[1] || '').trim();
+                if (!code || code.toUpperCase() === 'TOTAL' || code.toUpperCase() === 'CODE:') continue;
+                const deliveredQty = parseInt(String(tds[2] || '0').replace(/[^0-9-]/g, ''), 10) || 0;
+                const receivedQty = parseInt(String(tds[3] || '0').replace(/[^0-9-]/g, ''), 10) || 0;
+                const lineAmount = parseNum(tds[4]);
+                items.push({
+                  code,
+                  productName,
+                  productId: '',
+                  deliveredQty,
+                  receivedQty,
+                  lineAmount,
+                  unitSrp: deliveredQty > 0 ? Number((lineAmount / deliveredQty).toFixed(2)) : 0,
+                  itemStatus: String(tds[5] || '').trim().toUpperCase(),
+                });
+                totD += deliveredQty;
+                totR += receivedQty;
+                totAmt += lineAmount;
+              }
+              return { ...h, totalDeliveredQty: totD, totalReceivedQty: totR, totalAmount: Number(totAmt.toFixed(2)), items };
+            } catch {
+              return { ...h, totalDeliveredQty: 0, totalReceivedQty: 0, totalAmount: 0, items: [] };
+            }
+          })
+        );
+        liveDeliveries.push(...done);
+      }
+    }
+  } catch {}
+
+  return { inventoryByBranch: result, stockCardsByBranch, liveInstallments, livePayments, liveExpenses, livePastDues, liveDeliveries };
 }
 
 const PHONE_CATEGORIES = new Set(['CELLPHONES', 'REPO', 'KEYPAD CELLPHONES']);
@@ -308,6 +377,19 @@ async function main() {
   let allPayments = Array.isArray(seedSnapshot.portal_payments) ? [...seedSnapshot.portal_payments] : [];
   let allExpenses = Array.isArray(seedSnapshot.portal_expenses) ? [...seedSnapshot.portal_expenses] : [];
   let allPastDues = Array.isArray(seedSnapshot.portal_past_dues) ? [...seedSnapshot.portal_past_dues] : [];
+  let allDeliveries = Array.isArray(seedSnapshot.portal_deliveries)
+    ? seedSnapshot.portal_deliveries.map((d) => ({
+        portalDeliveryId: d.portal_delivery_id,
+        deliveryDate: d.delivery_date,
+        deliveryNo: d.delivery_no,
+        branchId: d.branch_id,
+        status: d.status,
+        totalDeliveredQty: d.total_delivered_qty || 0,
+        totalReceivedQty: d.total_received_qty || 0,
+        totalAmount: d.total_amount || 0,
+        items: (() => { try { return JSON.parse(d.items_json || '[]'); } catch { return []; } })(),
+      }))
+    : [];
   const prevInvMap = new Map(seedSnapshot.branch_inventory.map((r) => [`${r.branch_id}::${r.product_id}`, Number(r.qty_on_hand) || 0]));
 
   // Load previously deployed live state from GitHub Pages so 30-min syncs only record real new movements
@@ -347,7 +429,21 @@ async function main() {
         livePayments: fetchedPayments,
         liveExpenses: fetchedExpenses,
         livePastDues: fetchedPastDues,
+        liveDeliveries: fetchedDeliveries,
       } = await loginAndFetchPortal(user, pass);
+      if (fetchedDeliveries && fetchedDeliveries.length > 0) {
+        allDeliveries = fetchedDeliveries.map((d) => ({
+          ...d,
+          items: (d.items || []).map((it) => ({
+            ...it,
+            productId:
+              it.productId ||
+              codeToProduct.get(String(it.code || '').replace(/\s+/g, '').toUpperCase())?.id ||
+              codeToProduct.get(String(it.code || '').trim().toUpperCase())?.id ||
+              '',
+          })),
+        }));
+      }
       if (fetchedInstallments.length > 0) {
         allInstallments = fetchedInstallments.sort((a, b) => String(b.sale_date).localeCompare(String(a.sale_date)));
       }
@@ -621,6 +717,8 @@ async function main() {
     allPayments,
     allExpenses,
     allPastDues,
+    allDeliveries,
+    purchaseOrders: seedSnapshot.purchase_orders || [],
     syncedAt: syncedAtIso,
     liveSynced,
     liveSyncNote,

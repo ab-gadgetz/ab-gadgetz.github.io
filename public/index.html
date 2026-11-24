@@ -317,21 +317,140 @@
           </div>
         </div>
 
-        <!-- Saved Orders Made (Editable Approved Prices & Quantities) -->
+        <!-- Saved Orders Made, Pending Deliveries & Real-Time Variance Report -->
         <div class="sub-panel" style="padding:12px;margin-bottom:12px;">
           <div id="savedOrdersToggle" style="display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer;">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-              <strong style="font-size:12px;letter-spacing:0.6px;color:var(--text);">ORDERS MADE &amp; SUPPLIER APPROVALS</strong>
+              <strong style="font-size:12px;letter-spacing:0.6px;color:var(--text);">PENDING ORDERS, DELIVERIES &amp; VARIANCE REPORT</strong>
               <span id="savedOrdersCountBadge" class="badge badge-warn" style="font-size:10px;">0 saved</span>
+              <span id="pendingUnitsBadge" class="badge badge-ok hidden" style="font-size:10px;">0 pcs waiting delivery</span>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
-              <span id="savedOrdersSummaryHdr" class="small muted">Save a plan to edit supplier-approved prices &amp; qty</span>
-              <span id="savedOrdersCaret" class="muted" style="font-weight:700;">+</span>
+              <span id="savedOrdersSummaryHdr" class="small muted">Track pending orders, physical receipts &amp; AB Web deliveries</span>
+              <span id="savedOrdersCaret" class="muted" style="font-weight:700;">−</span>
             </div>
           </div>
-          <div id="savedOrdersBody" class="hidden" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border-soft);">
-            <div id="savedOrdersList" style="display:flex;flex-direction:column;gap:8px;"></div>
-            <div id="savedOrderInlineEditor" class="hidden" style="margin-top:12px;padding:12px;border-radius:10px;border:1px solid var(--gold);background:rgba(255,255,255,0.03);"></div>
+          <div id="savedOrdersBody" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border-soft);">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button type="button" class="po-subview-btn active" data-poview="orders" style="padding:5px 10px;font-size:11.5px;min-height:0;">ORDERS &amp; PENDING</button>
+                <button type="button" class="secondary po-subview-btn" data-poview="variance" style="padding:5px 10px;font-size:11.5px;min-height:0;">VARIANCE REPORT</button>
+                <button type="button" class="secondary po-subview-btn" data-poview="deliveries" style="padding:5px 10px;font-size:11.5px;min-height:0;">AB WEB DELIVERIES (LIVE)</button>
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button type="button" id="logNewPendingOrderBtn" style="padding:5px 10px;font-size:11.5px;min-height:0;">+ LOG PENDING ORDER</button>
+                <button type="button" id="pasteOrderBtn" class="secondary" style="padding:5px 10px;font-size:11.5px;min-height:0;">PASTE EXCEL / TEXT</button>
+                <button type="button" id="syncAbDeliveriesBtn" class="secondary" style="padding:5px 10px;font-size:11.5px;min-height:0;">SYNC &amp; MATCH AB WEB</button>
+              </div>
+            </div>
+
+            <!-- Paste Spreadsheet / Text Order Importer -->
+            <div id="pasteOrderBox" class="hidden" style="margin-bottom:10px;padding:10px;border-radius:8px;border:1px solid var(--gold);background:rgba(255,255,255,0.03);">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+                <strong style="font-size:12px;color:var(--gold-bright);">PASTE ORDER FROM EXCEL / MESSENGER (AUTO-MATCHES MODELS)</strong>
+                <button type="button" id="closePasteOrderBtn" class="secondary" style="padding:3px 8px;font-size:11px;min-height:0;">✕</button>
+              </div>
+              <div class="grid-3" style="gap:8px;margin-bottom:8px;">
+                <div>
+                  <label for="pasteOrderTitleInp" style="font-size:10.5px;">ORDER TITLE</label>
+                  <input type="text" id="pasteOrderTitleInp" placeholder="e.g. AB Main Supplier Order 11/24" style="padding:5px 8px;font-size:12px;" />
+                </div>
+                <div>
+                  <label for="pasteOrderBranchSel" style="font-size:10.5px;">DEFAULT BRANCH (IF NOT IN TEXT)</label>
+                  <select id="pasteOrderBranchSel" style="padding:5px 8px;font-size:12px;">
+                    <option value="br-molave">Molave</option>
+                    <option value="br-tambulig">Tambulig</option>
+                    <option value="br-bonifacio">Bonifacio</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="pasteOrderSupplierSel" style="font-size:10.5px;">SUPPLIER</label>
+                  <select id="pasteOrderSupplierSel" style="padding:5px 8px;font-size:12px;">
+                    <option value="AB Main Supplier">AB Main Supplier</option>
+                    <option value="A&K">A&amp;K</option>
+                    <option value="Online Purchase">Online Purchase</option>
+                  </select>
+                </div>
+              </div>
+              <textarea id="pasteOrderText" rows="5" placeholder="Paste rows from Excel or chat, e.g.:&#10;MOLAVE&#10;Infinix Smart 20 4/128  5  7049&#10;Tecno Spark go 3 4/128  5  6974&#10;TAMBULIG&#10;Itel A100C s 3/64  3  4507" style="width:100%;padding:8px;font-size:12px;background:var(--bg-soft);color:var(--text);border:1px solid var(--border);border-radius:6px;"></textarea>
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px;">
+                <span id="pasteOrderStatus" class="small muted">Supports tabs, spaces, hyphens, and branch headers (Molave / Tambulig / Bonifacio).</span>
+                <button type="button" id="parseAndCreateOrderBtn" style="padding:6px 14px;font-size:12px;">CREATE PENDING ORDER</button>
+              </div>
+            </div>
+
+            <div id="poView-orders">
+              <div id="savedOrdersList" style="display:flex;flex-direction:column;gap:8px;"></div>
+              <div id="savedOrderInlineEditor" class="hidden" style="margin-top:12px;padding:12px;border-radius:10px;border:1px solid var(--gold);background:rgba(255,255,255,0.03);"></div>
+            </div>
+
+            <div id="poView-variance" class="hidden">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                  <select id="varianceOrderFilter" style="width:auto;padding:5px 9px;font-size:12px;">
+                    <option value="ALL">All Orders (Ordered vs Delivered)</option>
+                  </select>
+                  <select id="varianceTypeFilter" style="width:auto;padding:5px 9px;font-size:12px;">
+                    <option value="ALL">All Line Items</option>
+                    <option value="VARIANCES_ONLY">Variances Only (Short / Over / Price Diff)</option>
+                    <option value="PENDING_ONLY">Still Waiting Delivery</option>
+                    <option value="NOT_IN_AB">Received but NOT Yet in AB Web</option>
+                  </select>
+                </div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                  <button type="button" id="variancePdfBtn" class="secondary" style="padding:5px 10px;font-size:11.5px;min-height:0;">PDF VARIANCE REPORT</button>
+                  <button type="button" id="varianceExcelBtn" class="secondary" style="padding:5px 10px;font-size:11.5px;min-height:0;">EXCEL VARIANCE</button>
+                </div>
+              </div>
+              <div class="summary-grid" id="varianceKpiGrid" style="margin-bottom:10px;"></div>
+              <div id="varianceInsightBanner" class="sub-panel" style="padding:9px 12px;margin-bottom:10px;font-size:12px;border-left:3px solid var(--gold);"></div>
+              <div class="table-wrap" style="max-height:380px;overflow-y:auto;">
+                <table class="data-table" id="orderVarianceTable">
+                  <thead>
+                    <tr>
+                      <th>Order / Date</th>
+                      <th>Branch</th>
+                      <th>Model</th>
+                      <th>Requested</th>
+                      <th>Approved</th>
+                      <th>Delivered</th>
+                      <th>Qty Var.</th>
+                      <th>Approved ₱ → Billed ₱</th>
+                      <th>₱ Impact</th>
+                      <th>AB Web Record / Status</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div id="poView-deliveries" class="hidden">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                <div class="small muted">Real-time synced from <code>https://app.abgadgetz.com.ph/panel/deliveries</code> (auto-checked every 15s locally / on Sync Now).</div>
+                <select id="abDeliveryBranchFilter" style="width:auto;padding:5px 9px;font-size:12px;">
+                  <option value="ALL">All Branches</option>
+                  <option value="br-molave">Molave</option>
+                  <option value="br-tambulig">Tambulig</option>
+                  <option value="br-bonifacio">Bonifacio</option>
+                </select>
+              </div>
+              <div class="table-wrap" style="max-height:360px;overflow-y:auto;">
+                <table class="data-table" id="abDeliveriesTable">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Delivery #</th>
+                      <th>Branch</th>
+                      <th>Status</th>
+                      <th>Delivered / Received</th>
+                      <th>Items Summary</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -392,7 +511,12 @@
               <option value="SELECTED">Selected / Budgeted Only</option>
               <option value="ALL">All Low-Stock</option>
               <option value="ZERO">Out of Stock (0) Only</option>
+              <option value="PENDING_COVERED">Has Pending Order Waiting Delivery</option>
             </select>
+            <label style="display:flex;align-items:center;gap:5px;margin:0;font-size:12px;cursor:pointer;" title="Subtract pending orders waiting for delivery from Restock quantities">
+              <input type="checkbox" id="restockDeductPendingChk" checked style="width:15px;height:15px;margin:0;accent-color:var(--gold);" />
+              <span>Consider Pending Orders</span>
+            </label>
             <label style="display:flex;align-items:center;gap:5px;margin:0;font-size:12px;cursor:pointer;" title="Auto-hide old web-synced models with 0 stock and 0 sales/reorders">
               <input type="checkbox" id="restockExcludeObsoleteChk" checked style="width:15px;height:15px;margin:0;accent-color:var(--gold);" />
               <span>Hide Obsolete / Non-Moving</span>
