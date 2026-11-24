@@ -39,6 +39,30 @@ const fmtTime = (iso) => {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 };
 
+const manilaTodayClient = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+
+function addMonthsIsoClient(isoDate, months = 3) {
+  const m = String(isoDate || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return '';
+  const y = Number(m[1]), mo = Number(m[2]) - 1, d = Number(m[3]);
+  const tf = new Date(Date.UTC(y, mo + months, 1));
+  const ld = new Date(Date.UTC(tf.getUTCFullYear(), tf.getUTCMonth() + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(tf.getUTCFullYear(), tf.getUTCMonth(), Math.min(d, ld))).toISOString().slice(0, 10);
+}
+
+function hasThreeMonthsPassedClient(sinceDate, todayDate = manilaTodayClient()) {
+  if (!sinceDate || !todayDate) return false;
+  const deadline = addMonthsIsoClient(sinceDate, 3);
+  return Boolean(deadline) && String(todayDate).slice(0, 10) >= deadline;
+}
+
+function daysBetweenIsoClient(startIso, endIso) {
+  const s = Date.parse(`${String(startIso || '').slice(0, 10)}T00:00:00Z`);
+  const e = Date.parse(`${String(endIso || '').slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(s) || !Number.isFinite(e)) return 0;
+  return Math.max(0, Math.round((e - s) / 86400000));
+}
+
 // Hamburger menu toggle + Main Tabs (lazy-load data only when tab is opened)
 const menuToggleBtn = document.getElementById('menuToggleBtn');
 const mainTabsMenu = document.getElementById('mainTabsMenu');
@@ -669,8 +693,17 @@ async function staticGhApi(url, opts = {}) {
     if (!parsed.length) throw new Error('No DP prices found in pasted text');
     const prevCatalog = await staticGhApi('/api/supplier-catalog');
     const mergedMap = new Map((prevCatalog.entries || []).map((e) => [String(e.modelName || '').toUpperCase(), { ...e }]));
+    const batchBrands = new Set(parsed.map((e) => String(e.brand || '').toUpperCase()).filter(Boolean));
+    for (const [k, existing] of mergedMap.entries()) {
+      if (batchBrands.has(String(existing.brand || '').toUpperCase())) {
+        mergedMap.set(k, { ...existing, isAvailable: false });
+      }
+    }
     const updatedIds = new Set();
+    const matchedIds = new Set();
     const diffs = [];
+    const lcOverrides = (() => { try { return JSON.parse(localStorage.getItem('ab_lifecycle_overrides_v1') || '{}'); } catch { return {}; } })();
+    const todayIso = manilaTodayClient();
     for (const entry of parsed) {
       const m = matchSupplierEntryToProductsClient(entry, allProds);
       const effectiveDate = body.stockDate || entry.stockDate || '2026-11-23';
@@ -685,16 +718,54 @@ async function staticGhApi(url, opts = {}) {
         isAvailable: true,
       });
       for (const p of m) {
+        matchedIds.add(p.id);
         const prevAb = p.cost_ab !== null && p.cost_ab !== undefined ? Number(p.cost_ab) : null;
         await saveProductSupplierCosts(p.id, { costAb: entry.dpCost });
+        p.last_supplier_seen_at = effectiveDate;
+        p.supplier_missing_since = '';
+        if (p.lifecycle_status === 'Subject to Phaseout') {
+          p.lifecycle_status = 'Active';
+          lcOverrides[p.id] = { lifecycle_status: 'Active', supplier_missing_since: '' };
+        }
         updatedIds.add(p.id);
         diffs.push({ productId: p.id, productName: p.name, prevAb, nextAb: entry.dpCost, changed: prevAb !== entry.dpCost });
       }
     }
+    let subjectToPhaseoutCount = 0;
+    let autoPhasedOutCount = 0;
+    const batchLatestDate = parsed.reduce((mx, e) => (e.stockDate && e.stockDate > mx ? e.stockDate : mx), body.stockDate || todayIso);
+    for (const p of allProds) {
+      if (matchedIds.has(p.id)) continue;
+      const u = `${p.brand || ''} ${p.model || ''} ${p.name || ''}`.toUpperCase();
+      if (/\bREPO\b|\bREPAIRED\b|\bLDU\b|FREEBIE|FREE BUNDLE|\bFREE\b|\bDEMO\b/.test(u)) continue;
+      const inBatch = [...batchBrands].some((bu) => (bu === 'ANKER' ? u.includes('ANKER') || u.includes('SOUNDCORE') : bu === 'INFINIX' ? u.includes('INFINIX') || u.includes('XPAD') || u.includes('XBOOK') || u.includes('GTBOOK') : u.includes(bu)));
+      if (!inBatch || !['Active', 'Subject to Phaseout'].includes(p.lifecycle_status || 'Active')) continue;
+      const ms = String(p.supplier_missing_since || '').trim() || batchLatestDate || todayIso;
+      const nextLc = hasThreeMonthsPassedClient(ms, todayIso) ? 'Phaseout / Do Not Reorder' : 'Subject to Phaseout';
+      p.supplier_missing_since = ms;
+      p.lifecycle_status = nextLc;
+      lcOverrides[p.id] = { lifecycle_status: nextLc, supplier_missing_since: ms };
+      if (nextLc === 'Phaseout / Do Not Reorder') autoPhasedOutCount++;
+      else subjectToPhaseoutCount++;
+    }
+    localStorage.setItem('ab_lifecycle_overrides_v1', JSON.stringify(lcOverrides));
     const nextList = Array.from(mergedMap.values());
     const nextStockDate = nextList.reduce((mx, e) => (e.stockDate && e.stockDate > mx ? e.stockDate : mx), '');
     localStorage.setItem('ab_supplier_catalog_v1', JSON.stringify({ stockDate: nextStockDate, entries: nextList }));
-    return { ok: true, importedCount: parsed.length, updatedProductsCount: updatedIds.size, diffs };
+    const waitingCount = nextList.filter((e) => e.isAvailable !== false && !e.matchedProductId).length;
+    return { ok: true, importedCount: parsed.length, updatedProductsCount: updatedIds.size, waitingCount, subjectToPhaseoutCount, autoPhasedOutCount, diffs };
+  }
+  if (pathname === '/api/products/lifecycle' && opts.method === 'PATCH') {
+    const body = JSON.parse(opts.body || '{}');
+    const lcOverrides = (() => { try { return JSON.parse(localStorage.getItem('ab_lifecycle_overrides_v1') || '{}'); } catch { return {}; } })();
+    const todayIso = manilaTodayClient();
+    for (const pid of (body.productIds || [])) {
+      const prev = lcOverrides[pid] || {};
+      const ms = body.status === 'Active' ? '' : (body.status === 'Subject to Phaseout' ? (prev.supplier_missing_since || todayIso) : (prev.supplier_missing_since || ''));
+      lcOverrides[pid] = { lifecycle_status: body.status, supplier_missing_since: ms };
+    }
+    localStorage.setItem('ab_lifecycle_overrides_v1', JSON.stringify(lcOverrides));
+    return { ok: true, count: (body.productIds || []).length };
   }
   return {};
 }
@@ -775,12 +846,22 @@ async function loadInventory() {
   state.inventory = await api('/api/inventory');
   if (IS_STATIC_GH && state.inventory?.items) {
     const localCosts = getLocalSupplierCostsMap();
+    const lcOverrides = (() => { try { return JSON.parse(localStorage.getItem('ab_lifecycle_overrides_v1') || '{}'); } catch { return {}; } })();
+    const todayIso = manilaTodayClient();
     for (const item of state.inventory.items) {
       const ov = localCosts[item.id];
       if (ov) {
         item.cost_ab = ov.cost_ab;
         item.cost_ak = ov.cost_ak;
         item.cost_online = ov.cost_online;
+      }
+      const lov = lcOverrides[item.id];
+      if (lov) {
+        item.lifecycle_status = lov.lifecycle_status || item.lifecycle_status;
+        item.supplier_missing_since = lov.supplier_missing_since ?? item.supplier_missing_since;
+      }
+      if (item.lifecycle_status === 'Subject to Phaseout' && item.supplier_missing_since && hasThreeMonthsPassedClient(item.supplier_missing_since, todayIso)) {
+        item.lifecycle_status = 'Phaseout / Do Not Reorder';
       }
     }
   }
@@ -1050,7 +1131,9 @@ function renderModelCard(item, visibleBranches) {
     .join('');
   const lifecycleBadge =
     item.lifecycle_status && item.lifecycle_status !== 'Active'
-      ? `<span class="lifecycle-pill">${item.lifecycle_status}</span>`
+      ? item.lifecycle_status === 'Subject to Phaseout'
+        ? `<span class="lifecycle-pill" style="background:rgba(245,158,11,0.18);color:#fbbf24;border-color:rgba(245,158,11,0.45);" title="Not in latest AB supplier stock update (${item.supplier_missing_since || '2026-11-23'}). Auto-phaseout after 3 months (${addMonthsIsoClient(item.supplier_missing_since || '2026-11-23', 3)}).">Subject to Phaseout • Since ${item.supplier_missing_since || 'Nov 23'}</span>`
+        : `<span class="lifecycle-pill">${item.lifecycle_status}</span>`
       : '';
   const thumb = item.imageUrl
     ? `<img src="${item.imageUrl}" alt="${item.name}" style="width:52px;height:52px;object-fit:contain;background:#fff;border-radius:9px;padding:2px;flex:0 0 52px;box-shadow:0 2px 8px rgba(0,0,0,.3);" loading="lazy" />`
@@ -1141,6 +1224,7 @@ function renderInventory() {
 
     let matchView = true;
     if (stockView === 'available') matchView = itemAvail > 0;
+    else if (stockView === 'subject_phaseout') matchView = item.lifecycle_status === 'Subject to Phaseout';
     else if (stockView === 'phaseout') matchView = item.lifecycle_status !== 'Active';
     else if (stockView === 'unavailable') matchView = itemAvail === 0;
     else if (stockView === 'reorder') matchView = anyLow && item.lifecycle_status === 'Active';
@@ -5624,8 +5708,16 @@ function renderCostCompareTool() {
   if (abBadge) {
     abBadge.textContent = abCatCount > 0 ? `(${abCatCount} • ${state.abSupplierCatalog?.stockDate || 'Nov 23'})` : '';
   }
+  const abSubjCount = (state.inventory?.items || []).filter((it) => it.lifecycle_status === 'Subject to Phaseout').length;
+  const abPhasedBadge = document.getElementById('abPhaseoutTrackerBadge');
+  if (abPhasedBadge) {
+    abPhasedBadge.textContent = abSubjCount > 0 ? `(${abSubjCount})` : '';
+  }
   if (state.activeCcView === 'supplierCatalog') {
     renderAbSupplierCatalogView();
+  }
+  if (state.activeCcView === 'phaseoutTracker') {
+    renderSubjectToPhaseoutTracker();
   }
   const search = (document.getElementById('costCompareSearch')?.value || '').trim().toLowerCase();
   const typeFilter = document.getElementById('costCompareType')?.value || 'Cellphones';
@@ -5642,7 +5734,7 @@ function renderCostCompareTool() {
   const supplierWins = { 'AB Main Supplier': 0, 'A&K': 0, 'Online Purchase': 0 };
 
   for (const item of items) {
-    if ((item.lifecycle_status || 'Active') !== 'Active') continue;
+    if (!['Active', 'Subject to Phaseout'].includes(item.lifecycle_status || 'Active')) continue;
     const pType = item.product_type || 'Cellphones';
     if (typeFilter !== 'ALL' && pType !== typeFilter) continue;
 
@@ -5811,9 +5903,13 @@ function renderCostCompareTool() {
             ? `<strong>${fmtCurrency(r.srp)}</strong><div class="small" style="color:${marginColor};font-weight:700;">${r.srpMarginPct !== null ? `${r.srpMarginPct.toFixed(1)}% SRP • ${r.cashMarginPct.toFixed(1)}% Cash` : '—'}</div>`
             : '<span class="muted">—</span>';
 
+          const ccProdObj = state.inventory?.items?.find((i) => i.id === r.id);
+          const ccSubjBadge = ccProdObj?.lifecycle_status === 'Subject to Phaseout'
+            ? '<span class="badge badge-warn" style="margin-left:4px;font-size:10px;">Subject to Phaseout</span>'
+            : '';
           return `
             <tr data-pid="${r.id}">
-              <td><strong>${r.displayModel}</strong><div class="small muted">${r.sku} • ${r.totalAvail} avail</div></td>
+              <td><strong>${r.displayModel}</strong>${ccSubjBadge}<div class="small muted">${r.sku} • ${r.totalAvail} avail</div></td>
               <td>${priceMarginHtml}</td>
               <td><strong>${r.webCost > 0 ? fmtCurrency(r.webCost) : '—'}</strong></td>
               <td>${fmtCell(r.cAb, r.webCost, 'cc-ab-inp', r.id)}</td>
@@ -6067,7 +6163,7 @@ function renderAbSupplierCatalogView() {
     sumGrid.innerHTML = `
       <div class="summary-box">AB SUPPLIER ITEMS (${escAbHtml(catalog.stockDate || 'Nov 23')})<strong>${fmtNum(enriched.length)}</strong></div>
       <div class="summary-box">SYNCED TO AB WEB PRODUCTS<strong style="color:var(--green);">${fmtNum(matchedCount)} (${fmtNum(activeMatchedCount)} Active)</strong></div>
-      <div class="summary-box">SUPPLIER ITEMS NOT ON AB WEB<strong style="color:var(--gold-bright);">${fmtNum(unmatchedCount)}</strong></div>
+      <div class="summary-box">WAITING FOR AB WEB INPUT<strong style="color:var(--gold-bright);">${fmtNum(unmatchedCount)}</strong></div>
       <div class="summary-box">SELLING PRICE SOURCE<strong>AB Web Current Prices (SRP Ignored)</strong></div>
     `;
   }
@@ -6092,7 +6188,7 @@ function renderAbSupplierCatalogView() {
             ? `<strong>${fmtCurrency(e.basePrice)}</strong><div class="small muted">Cash (-5%): ${fmtCurrency(e.cashPrice)}</div>`
             : e.matchedProductId
               ? '<span class="muted small">AB Web ₱0</span>'
-              : '<span class="muted small">Not on AB Web (SRP ignored)</span>';
+              : '<span class="muted small">Waiting for AB Web price (SRP ignored)</span>';
           const marginColor = e.marginPct === null ? 'var(--muted)' : e.marginPct >= 10 ? 'var(--green)' : e.marginPct >= 5 ? 'var(--gold-bright)' : '#f87171';
           const marginHtml = e.marginPct !== null
             ? `<strong style="color:${marginColor};">${e.marginPct.toFixed(1)}%</strong><div class="small" style="color:${marginColor};">${e.marginPhp >= 0 ? '+' : ''}${fmtCurrency(e.marginPhp)}</div>`
@@ -6100,8 +6196,8 @@ function renderAbSupplierCatalogView() {
           const statusHtml = e.matchedProductId
             ? e.lifecycleStatus === 'Active'
               ? `<span class="badge badge-ok">On AB Web • Active</span><div class="small muted">${escAbHtml(e.productName)} (${fmtNum(e.totalAvail)} avail)</div>`
-              : `<span class="badge badge-warn">Phaseout on AB Web</span><div class="small muted">${escAbHtml(e.productName)}</div>${e.basePrice >= e.dp ? `<button type="button" class="secondary ab-cat-reactivate-btn" data-pid="${escAbHtml(e.matchedProductId)}" style="margin-top:4px;padding:2px 8px;font-size:10.5px;min-height:0;">Reactivate</button>` : '<div class="small" style="color:#f59e0b;">Note: AB Web price below new DP</div>'}`
-            : '<span class="badge" style="background:rgba(255,255,255,0.08);color:var(--muted);">Supplier Available Only</span>';
+              : `<span class="badge badge-warn">${escAbHtml(e.lifecycleStatus || 'Phaseout on AB Web')}</span><div class="small muted">${escAbHtml(e.productName)}</div>${e.basePrice >= e.dp ? `<button type="button" class="secondary ab-cat-reactivate-btn" data-pid="${escAbHtml(e.matchedProductId)}" style="margin-top:4px;padding:2px 8px;font-size:10.5px;min-height:0;">Reactivate</button>` : '<div class="small" style="color:#f59e0b;">Note: AB Web price below new DP</div>'}`
+            : '<span class="badge" style="background:rgba(59,130,246,0.18);color:#93c5fd;">Waiting for AB Web Input</span><div class="small muted">DP recorded — links automatically once added on AB Web</div>';
 
           return `
             <tr>
@@ -6121,19 +6217,98 @@ function renderAbSupplierCatalogView() {
     btn.addEventListener('click', async () => {
       const pid = btn.dataset.pid;
       const prod = state.inventory?.items?.find((i) => i.id === pid);
-      if (prod) prod.lifecycle_status = 'Active';
-      if (!IS_STATIC_GH) {
-        try {
-          await api('/api/products/lifecycle', { method: 'PATCH', body: JSON.stringify({ productIds: [pid], status: 'Active' }) });
-        } catch (err) {
-          alert(err.message);
-        }
+      if (prod) { prod.lifecycle_status = 'Active'; prod.supplier_missing_since = ''; }
+      try {
+        await api('/api/products/lifecycle', { method: 'PATCH', body: JSON.stringify({ productIds: [pid], status: 'Active' }) });
+      } catch (err) {
+        alert(err.message);
       }
       renderAbSupplierCatalogView();
       renderCostCompareTool();
       if (state.restockPlan) { buildRestockDraftPlan(); renderRestockCards(); }
     });
   });
+}
+
+function renderSubjectToPhaseoutTracker() {
+  const items = state.inventory?.items || [];
+  const branches = state.inventory?.branches || [];
+  const todayIso = manilaTodayClient();
+  const tracked = items
+    .filter((p) => p.lifecycle_status === 'Subject to Phaseout' || (p.lifecycle_status === 'Phaseout / Do Not Reorder' && p.supplier_missing_since))
+    .map((p) => {
+      const totalAvail = branches.reduce((s, b) => s + (Number(p.byBranch?.[b.id]?.qtyAvailable) || 0), 0);
+      const missingSince = p.supplier_missing_since || '2026-11-23';
+      const deadline = addMonthsIsoClient(missingSince, 3);
+      const elapsedDays = daysBetweenIsoClient(missingSince, todayIso);
+      const daysLeft = deadline ? Math.max(0, daysBetweenIsoClient(todayIso, deadline)) : 0;
+      const isPhasedOut = p.lifecycle_status === 'Phaseout / Do Not Reorder';
+      return { ...p, totalAvail, missingSince, deadline, elapsedDays, daysLeft, isPhasedOut };
+    })
+    .sort((a, b) => (a.isPhasedOut !== b.isPhasedOut ? (a.isPhasedOut ? 1 : -1) : b.totalAvail - a.totalAvail || a.name.localeCompare(b.name)));
+
+  const subjOnly = tracked.filter((x) => !x.isPhasedOut);
+  const autoPhased = tracked.filter((x) => x.isPhasedOut);
+  const withStock = subjOnly.filter((x) => x.totalAvail > 0).length;
+
+  const sumEl = document.getElementById('abPhaseoutSummaryGrid');
+  if (sumEl) {
+    sumEl.innerHTML = `
+      <div class="summary-box">SUBJECT TO PHASEOUT (&lt; 3 MOS)<strong style="color:#fbbf24;">${fmtNum(subjOnly.length)}</strong></div>
+      <div class="summary-box">SELLABLE IN-STOCK LEFT<strong>${fmtNum(withStock)} models</strong></div>
+      <div class="summary-box">AUTO-PHASED OUT (&ge; 3 MOS)<strong style="color:#f87171;">${fmtNum(autoPhased.length)}</strong></div>
+      <div class="summary-box">RESTOCK PROTECTION<strong>Excluded from New Reorders</strong></div>
+    `;
+  }
+
+  const tbody = document.querySelector('#abPhaseoutTrackerTable tbody');
+  if (!tbody) return;
+  tbody.innerHTML = tracked.length
+    ? tracked
+        .map((p) => {
+          const dispName = formatSwapModelName({ brand: p.brand || '', model: p.model || p.name });
+          const lastCost = Number(p.cost_ab) || Number(p.cost_price) || 0;
+          const deadlineHtml = p.isPhasedOut
+            ? `<span style="color:#f87171;font-weight:700;">Passed 3 months (since ${escAbHtml(p.missingSince)})</span>`
+            : `<strong>Since ${escAbHtml(p.missingSince)}</strong><div class="small muted">Auto-phaseout: ${escAbHtml(p.deadline || '—')} (${fmtNum(p.daysLeft)}d left)</div>`;
+          const statusHtml = p.isPhasedOut
+            ? '<span class="badge" style="background:rgba(239,68,68,0.18);color:#f87171;">Phaseout / Do Not Reorder</span>'
+            : '<span class="badge badge-warn">Subject to Phaseout</span>';
+          const actionsHtml = p.isPhasedOut
+            ? `<button type="button" class="secondary ph-restore-btn" data-pid="${escAbHtml(p.id)}" style="padding:3px 8px;font-size:11px;min-height:0;">Restore Active</button>`
+            : `<div style="display:flex;gap:4px;flex-wrap:wrap;"><button type="button" class="secondary ph-restore-btn" data-pid="${escAbHtml(p.id)}" style="padding:3px 8px;font-size:11px;min-height:0;">Keep Active</button><button type="button" class="danger ph-force-btn" data-pid="${escAbHtml(p.id)}" style="padding:3px 8px;font-size:11px;min-height:0;">Phaseout Now</button></div>`;
+          return `
+            <tr>
+              <td><strong>${escAbHtml(dispName)}</strong><div class="small muted">${escAbHtml(p.brand)} • ${escAbHtml(p.product_type || 'Cellphones')} • ${escAbHtml(p.sku || '')}</div></td>
+              <td><strong>${fmtNum(p.totalAvail)} pcs</strong></td>
+              <td><strong>${p.base_price > 0 ? fmtCurrency(p.base_price) : '—'}</strong><div class="small muted">Last Cost: ${lastCost > 0 ? fmtCurrency(lastCost) : '—'}</div></td>
+              <td>${deadlineHtml}</td>
+              <td>${statusHtml}</td>
+              <td>${actionsHtml}</td>
+            </tr>
+          `;
+        })
+        .join('')
+    : '<tr><td colspan="6" class="muted">No products currently flagged as Subject to Phaseout.</td></tr>';
+
+  const setLc = async (pid, nextStatus) => {
+    const prod = state.inventory?.items?.find((i) => i.id === pid);
+    if (prod) {
+      prod.lifecycle_status = nextStatus;
+      if (nextStatus === 'Active') prod.supplier_missing_since = '';
+    }
+    try {
+      await api('/api/products/lifecycle', { method: 'PATCH', body: JSON.stringify({ productIds: [pid], status: nextStatus }) });
+    } catch (err) {
+      alert(err.message);
+    }
+    renderCostCompareTool();
+    renderInventory();
+    if (state.restockPlan) { buildRestockDraftPlan(); renderRestockCards(); }
+  };
+
+  tbody.querySelectorAll('.ph-restore-btn').forEach((b) => b.addEventListener('click', () => setLc(b.dataset.pid, 'Active')));
+  tbody.querySelectorAll('.ph-force-btn').forEach((b) => b.addEventListener('click', () => setLc(b.dataset.pid, 'Phaseout / Do Not Reorder')));
 }
 
 document.querySelectorAll('.cc-subview-btn').forEach((btn) => {
@@ -6146,7 +6321,9 @@ document.querySelectorAll('.cc-subview-btn').forEach((btn) => {
     });
     document.getElementById('ccView-compare')?.classList.toggle('hidden', state.activeCcView !== 'compare');
     document.getElementById('ccView-supplierCatalog')?.classList.toggle('hidden', state.activeCcView !== 'supplierCatalog');
+    document.getElementById('ccView-phaseoutTracker')?.classList.toggle('hidden', state.activeCcView !== 'phaseoutTracker');
     if (state.activeCcView === 'supplierCatalog') renderAbSupplierCatalogView();
+    if (state.activeCcView === 'phaseoutTracker') renderSubjectToPhaseoutTracker();
   });
 });
 
@@ -6211,7 +6388,7 @@ document.getElementById('applyAbSupplierPasteBtn')?.addEventListener('click', as
     }
     if (statusEl) {
       statusEl.style.color = '#34d399';
-      statusEl.textContent = `Applied ${res.importedCount} supplier items & updated ${res.updatedProductsCount} AB Web product DP costs cleanly!`;
+      statusEl.textContent = `Applied ${res.importedCount} items (${res.updatedProductsCount} synced to AB Web, ${res.waitingCount || 0} waiting for AB Web, ${res.subjectToPhaseoutCount || 0} subject to phaseout${res.autoPhasedOutCount ? `, ${res.autoPhasedOutCount} auto-phased out` : ''})!`;
     }
     document.getElementById('abSupplierPastePreview')?.classList.add('hidden');
   } catch (err) {
@@ -10283,10 +10460,11 @@ function applyRolePermissions() {
         <option value="unavailable">Unavailable</option>
       `;
       stockViewSel.value = curVal === 'unavailable' ? 'unavailable' : 'available';
-    } else if (stockViewSel.options.length < 5) {
+    } else if (stockViewSel.options.length < 6) {
       stockViewSel.innerHTML = `
         <option value="available">Available phones</option>
-        <option value="phaseout">Phaseout products (include 0)</option>
+        <option value="subject_phaseout">Subject to Phaseout (&lt; 3 mos)</option>
+        <option value="phaseout">Phaseout / Do Not Reorder (incl. 0)</option>
         <option value="all">All products, incl. unavailable</option>
         <option value="unavailable">Unavailable</option>
         <option value="reorder">Reorder suggestions</option>

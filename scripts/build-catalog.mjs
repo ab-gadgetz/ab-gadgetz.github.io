@@ -894,10 +894,77 @@ async function main() {
       };
     }),
     abSupplierCatalog: (() => {
-      const itemMap = new Map(inventoryItems.map((it) => [it.id, it]));
+      const todayIso = manilaDateDaysAgo(0);
+      const addMonths = (iso, months = 3) => {
+        const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (!m) return '';
+        const y = Number(m[1]), mo = Number(m[2]) - 1, d = Number(m[3]);
+        const tf = new Date(Date.UTC(y, mo + months, 1));
+        const ld = new Date(Date.UTC(tf.getUTCFullYear(), tf.getUTCMonth() + 1, 0)).getUTCDate();
+        return new Date(Date.UTC(tf.getUTCFullYear(), tf.getUTCMonth(), Math.min(d, ld))).toISOString().slice(0, 10);
+      };
+      const has3Mo = (since) => Boolean(since) && todayIso >= addMonths(since, 3);
+      const normK = (s) => String(s || '').toLowerCase().replace(/\(repo\)|\(repaired.*?\)|\(ldu\)|\(limited\)|\(new model\)/gi, ' ').replace(/\bbt\b/gi, 'bluetooth').replace(/(\d+)\s*gb\b/gi, '$1').replace(/(\d+)\s*[+/]\s*(\d+)/g, ' $1_$2 ').replace(/[^a-z0-9_]+/g, ' ').replace(/\s+/g, ' ').trim();
+      const compK = (s) => normK(s).replace(/[_ ]+/g, '');
+      const aliases = {
+        pocom8s5g8256: ['prd-poco-85'], pocom8s5g8gb256gb: ['prd-poco-85'],
+        infinixgt50pro12256: ['prd-infinix-021'], infinixgt50pro12256gb: ['prd-infinix-021'],
+        xpad20pro8256: ['prd-infinix-098', 'prd-xpad-098'], xpad20pro8256gb: ['prd-infinix-098', 'prd-xpad-098'],
+        infinixxpad20pro8256: ['prd-infinix-098', 'prd-xpad-098'], xpad30ebtkeyboard: ['prd-xpad-099'],
+        xwatchh4xw4l: ['prd-infinix-058'], smartwatchh5proxw5p: ['prd-infinix-032'],
+        xwatchn5pro: ['prd-infinix-031'], gtwatch5pro: ['prd-watch-019'],
+      };
+      const validProds = inventoryItems.filter((p) => !/\bREPO\b|\bREPAIRED\b|\bLDU\b|FREEBIE|FREE BUNDLE|\bFREE\b|\bDEMO\b/.test(`${p.name || ''} ${p.model || ''}`.toUpperCase()));
+      const matchEntry = (brand, modelName) => {
+        const ce = compK(modelName);
+        if (aliases[ce]) {
+          const h = validProds.filter((p) => aliases[ce].includes(p.id));
+          if (h.length) return h;
+        }
+        const tk = normK(modelName);
+        const rr = tk.match(/\b\d+_\d+\b/g) || [];
+        const bu = String(brand || '').toUpperCase();
+        const pool = validProds.filter((p) => {
+          const tu = `${p.brand || ''} ${p.model || ''} ${p.name || ''}`.toUpperCase();
+          if (bu === 'POCO') return tu.includes('POCO');
+          if (bu === 'OPPO') return tu.includes('OPPO');
+          if (bu === 'ANKER') return tu.includes('ANKER') || tu.includes('SOUNDCORE');
+          if (bu === 'INFINIX') return tu.includes('INFINIX') || tu.includes('XPAD') || tu.includes('XBOOK') || tu.includes('GTBOOK') || tu.includes('XWATCH') || tu.includes('XBUDS');
+          return !bu || tu.includes(bu);
+        });
+        const exact = pool.filter((p) => compK(`${p.brand || ''} ${p.model || ''}`) === ce || compK(p.name) === ce);
+        if (exact.length) return exact;
+        const words = tk.split(' ').filter((w) => w && !/^\d+_\d+$/.test(w) && !['poco', 'oppo', 'infinix', 'anker', 'tecno', 'realme', 'itel', '5g', '4g', 'bt', 'limited'].includes(w));
+        if (!words.length) return [];
+        return pool.filter((p) => {
+          const pk = normK(`${p.brand || ''} ${p.model || ''} ${p.name || ''}`);
+          const pw = new Set(pk.split(' '));
+          const pr = pk.match(/\b\d+_\d+\b/g) || [];
+          if (rr.length) { for (const r of rr) if (!pr.includes(r)) return false; } else if (pr.length) return false;
+          if (/KEYBOARD|CASE|PENCIL/i.test(modelName)) {
+            const extra = pk.split(' ').filter((w) => w && !['infinix', 'oppo', 'poco', 'tecno', 'bt', 'bluetooth', 'keyboard', 'case'].includes(w) && !words.includes(w));
+            if (extra.some((w) => /\d/.test(w))) return false;
+          }
+          return words.every((w) => pw.has(w));
+        });
+      };
+
       const rawEntries = Array.isArray(seedSnapshot.ab_supplier_catalog) ? seedSnapshot.ab_supplier_catalog : [];
+      const coveredBrands = new Set(rawEntries.map((r) => String(r.brand || '').toUpperCase()).filter(Boolean));
+      const matchedIds = new Set();
       const entries = rawEntries.map((r) => {
-        const matchedProd = r.matched_product_id ? itemMap.get(r.matched_product_id) : null;
+        const isAvail = r.is_available === undefined ? true : Boolean(r.is_available);
+        const hits = isAvail ? matchEntry(r.brand, r.model_name) : [];
+        const matchedProd = hits[0] || (r.matched_product_id ? inventoryItems.find((it) => it.id === r.matched_product_id) : null);
+        if (isAvail) {
+          for (const p of hits) {
+            matchedIds.add(p.id);
+            p.cost_ab = Number(r.dp_cost) || p.cost_ab;
+            p.supplier_missing_since = '';
+            p.last_supplier_seen_at = r.stock_date || todayIso;
+            if (p.lifecycle_status === 'Subject to Phaseout') p.lifecycle_status = 'Active';
+          }
+        }
         const totalAvail = matchedProd
           ? BRANCHES.reduce((s, b) => s + (matchedProd.byBranch?.[b.id]?.qtyAvailable || 0), 0)
           : 0;
@@ -908,9 +975,9 @@ async function main() {
           modelName: r.model_name,
           dpCost: Number(r.dp_cost) || 0,
           colorsNotes: r.colors_notes || '',
-          matchedProductId: r.matched_product_id || '',
+          matchedProductId: hits[0]?.id || r.matched_product_id || '',
           stockDate: r.stock_date || '',
-          isAvailable: Boolean(r.is_available),
+          isAvailable: isAvail,
           updatedAt: r.updated_at || '',
           productName: matchedProd?.name || '',
           productSku: matchedProd?.sku || '',
@@ -923,6 +990,24 @@ async function main() {
           totalAvail,
         };
       });
+      // Advance covered-brand missing products & 3-month auto-phaseout
+      for (const p of inventoryItems) {
+        if (matchedIds.has(p.id)) continue;
+        if (p.lifecycle_status === 'Subject to Phaseout') {
+          const ms = String(p.supplier_missing_since || '').trim() || todayIso;
+          p.supplier_missing_since = ms;
+          if (has3Mo(ms)) p.lifecycle_status = 'Phaseout / Do Not Reorder';
+        } else if (p.lifecycle_status === 'Active' && coveredBrands.size) {
+          const pTextU = `${String(p.brand || '').toUpperCase()} ${String(p.name || '').toUpperCase()}`;
+          const isCovered = [...coveredBrands].some((bu) => (bu === 'ANKER' ? pTextU.includes('ANKER') || pTextU.includes('SOUNDCORE') : bu === 'INFINIX' ? pTextU.includes('INFINIX') || pTextU.includes('XPAD') || pTextU.includes('XBOOK') || pTextU.includes('GTBOOK') : pTextU.includes(bu)));
+          const isExcluded = /\bREPO\b|\bREPAIRED\b|\bLDU\b|FREEBIE|FREE BUNDLE|\bFREE\b|\bDEMO\b/.test(pTextU);
+          if (isCovered && !isExcluded) {
+            const ms = String(p.supplier_missing_since || '').trim() || todayIso;
+            p.supplier_missing_since = ms;
+            p.lifecycle_status = has3Mo(ms) ? 'Phaseout / Do Not Reorder' : 'Subject to Phaseout';
+          }
+        }
+      }
       const stockDate = entries.reduce((mx, e) => (e.stockDate && e.stockDate > mx ? e.stockDate : mx), '');
       return { stockDate, entries };
     })(),

@@ -153,7 +153,8 @@
           <label for="stockViewSelect" style="margin:0;color:var(--muted);font-size:11px;">STOCK VIEW</label>
           <select id="stockViewSelect" style="width:auto;padding:7px 10px;font-size:12px;">
             <option value="available">Available phones</option>
-            <option value="phaseout">Phaseout products (include 0)</option>
+            <option value="subject_phaseout">Subject to Phaseout (&lt; 3 mos)</option>
+            <option value="phaseout">Phaseout / Do Not Reorder (incl. 0)</option>
             <option value="all">All products, incl. unavailable</option>
             <option value="unavailable">Unavailable</option>
             <option value="reorder">Reorder suggestions</option>
@@ -592,6 +593,7 @@
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
           <button type="button" class="cc-subview-btn active" data-ccview="compare" style="padding:6px 12px;font-size:12px;min-height:0;">3-SUPPLIER COST COMPARE</button>
           <button type="button" class="secondary cc-subview-btn" data-ccview="supplierCatalog" style="padding:6px 12px;font-size:12px;min-height:0;">AB SUPPLIER STOCK &amp; DP <span id="abSupplierCatalogBadge" style="margin-left:4px;color:var(--gold-bright);"></span></button>
+          <button type="button" class="secondary cc-subview-btn" data-ccview="phaseoutTracker" style="padding:6px 12px;font-size:12px;min-height:0;">SUBJECT TO PHASEOUT / 3-MO TRACKER <span id="abPhaseoutTrackerBadge" style="margin-left:4px;color:#f59e0b;"></span></button>
         </div>
 
         <div id="ccView-compare">
@@ -658,7 +660,7 @@
             <select id="abCatMatchFilter" style="width:auto;padding:6px 10px;font-size:12px;">
               <option value="ALL">All Supplier Items</option>
               <option value="MATCHED">Carried on AB Web (Synced DP)</option>
-              <option value="UNMATCHED">Not Yet on AB Web (Available at Supplier)</option>
+              <option value="UNMATCHED">Waiting for AB Web Input (New Stocks)</option>
             </select>
           </div>
           <div class="table-wrap">
@@ -671,6 +673,28 @@
                   <th>AB Web Selling Price</th>
                   <th>Gross Margin vs DP</th>
                   <th>AB Web Status &amp; Stock</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="ccView-phaseoutTracker" class="hidden">
+          <div class="summary-grid" id="abPhaseoutSummaryGrid" style="margin-bottom:10px;"></div>
+          <div class="sub-panel" style="padding:10px 12px;margin-bottom:10px;font-size:12px;border-left:3px solid #f59e0b;">
+            <strong>Auto-Phaseout Rule:</strong> Active products of covered brands (<strong>POCO, OPPO, INFINIX, ANKER</strong>, plus future uploaded sheets) not found in the supplier's available stock update are flagged <strong>Subject to Phaseout</strong>. If still missing after <strong>3 months</strong>, they automatically move to <strong>Phaseout / Do Not Reorder</strong>.
+          </div>
+          <div class="table-wrap">
+            <table class="data-table" id="abPhaseoutTrackerTable">
+              <thead>
+                <tr>
+                  <th>Product &amp; Brand</th>
+                  <th>On-Hand Stock</th>
+                  <th>AB Web Price &amp; Last Cost</th>
+                  <th>Missing Since &amp; 3-Mo Deadline</th>
+                  <th>Lifecycle Status</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -698,6 +722,7 @@
             <label for="lifecycleStatus">Lifecycle Status</label>
             <select id="lifecycleStatus">
               <option value="Active">Active</option>
+              <option value="Subject to Phaseout">Subject to Phaseout (&lt; 3 mos)</option>
               <option value="Clearance">Clearance</option>
               <option value="Phaseout / Do Not Reorder">Phaseout / Do Not Reorder</option>
             </select>
