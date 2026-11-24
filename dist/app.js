@@ -3188,7 +3188,9 @@ function reconcileStaticOrdersWithDeliveries(onlyPoId = null) {
       const delivId = Number(deliv.id || deliv.portalDeliveryId) || 0;
       if (!delivId) continue;
       const autoId = `PO-AB-${delivId}`;
-      if (existingIds.has(autoId) || deletedIds.has(autoId)) continue;
+      if (deletedIds.has(autoId)) continue;
+      const existingOrd = orders.find((o) => o.id === autoId);
+      const existingProdIds = new Set((existingOrd?.items || []).map((it) => it.productId));
       const dStatus = String(deliv.status || '').toUpperCase();
       const isRec = dStatus === 'RECEIVED';
       const isPendingWarehouse = !isRec && dStatus !== 'CANCELLED' && (Number(deliv.totalDeliveredQty) || 0) > 0;
@@ -3197,7 +3199,7 @@ function reconcileStaticOrdersWithDeliveries(onlyPoId = null) {
 
       const itemsOut = [];
       for (const dl of deliv.items || []) {
-        if (!dl.productId) continue;
+        if (!dl.productId || existingProdIds.has(dl.productId)) continue;
         if (/FREE/i.test(String(dl.code || '')) || /FREE\s*BUNDLE/i.test(String(dl.productName || ''))) continue;
         const qty = Math.max(0, Number(dl.deliveredQty) || 0);
         if (qty <= 0) continue;
@@ -3252,6 +3254,14 @@ function reconcileStaticOrdersWithDeliveries(onlyPoId = null) {
       }
       if (!itemsOut.length) continue;
       const poStatus = isRec ? 'Received' : 'At Warehouse (AB Web INITIAL)';
+      if (existingOrd) {
+        existingOrd.items = [...(existingOrd.items || []), ...itemsOut];
+        existingOrd.abDeliveryRefs = deliv.deliveryNo;
+        Object.assign(existingOrd, computeOrderSummaryMetrics(existingOrd.items, existingOrd.status));
+        existingOrd.updatedAt = now;
+        updatedOrders++;
+        continue;
+      }
       orders.unshift({
         id: autoId,
         title: `AB Web Delivery • ${deliv.deliveryNo} (${brNames[deliv.branchId] || deliv.branchId})`,
