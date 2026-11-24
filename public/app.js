@@ -408,6 +408,17 @@ async function staticGhApi(url, opts = {}) {
     window.open('https://github.com/ab-gadgetz/ab-gadgetz.github.io/actions/workflows/deploy-catalog.yml', '_blank');
     return { ok: true };
   }
+  if (pathname === '/api/catalog/publish-github' && method === 'POST') {
+    if (localStorage.getItem('bs_gh_pub_token')) {
+      const ok = await pushPhoneOrdersToGh();
+      if (ok) {
+        return {
+          ok: true,
+          message: 'Phone saved plans synced to GitHub for PC import ✓ (Full catalog publish runs from PC localhost:3456).',
+        };
+      }
+    }
+  }
   if (method !== 'GET') {
     throw new Error('Make edits in your Local Admin Portal (http://localhost:3456), then click 🚀 Publish Catalogs.');
   }
@@ -7450,13 +7461,18 @@ document.getElementById('catSelectAllVisible').addEventListener('change', async 
 
 document.querySelectorAll('.publish-github-btn').forEach((btn) => {
   btn.addEventListener('click', async () => {
+    if (IS_STATIC_GH && btn.closest('#tab-staffPins')) {
+      document.getElementById('saveStaffPinsBtn')?.click();
+      return;
+    }
     const origText = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Publishing...';
     const catMsg = document.getElementById('publishCatalogMsg');
     const photoMsg = document.getElementById('photoMsg');
     try {
-      const res = await api('/api/catalog/publish-github', { method: 'POST', body: '{}' });
+      const publishStaffOnly = btn.parentElement?.querySelector('#saveStaffPinsBtn') || btn.textContent.includes('Publish PINs');
+      const res = await api(publishStaffOnly ? '/api/staff-pins/publish' : '/api/catalog/publish-github', { method: 'POST', body: '{}' });
       if (catMsg) catMsg.textContent = res.message;
       if (photoMsg) photoMsg.textContent = res.message;
       btn.textContent = '✓ Published!';
