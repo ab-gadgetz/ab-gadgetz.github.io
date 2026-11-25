@@ -11,7 +11,7 @@
   <link rel="icon" href="../ab-logo-square.png" type="image/png" />
   <link rel="apple-touch-icon" href="../ab-logo-square.png" />
   <title>Staff Portal — AB Gadgetz</title>
-  <link rel="stylesheet" href="../styles.css?v=1795614974376" />
+  <link rel="stylesheet" href="../styles.css?v=1795615070163" />
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
@@ -62,24 +62,22 @@
 
     <div id="appShell" class="hidden">
     <div class="card owner-bar">
-      <div class="owner-bar-main">
+      <div class="owner-bar-top">
         <strong id="portalGreeting">Welcome, Maynard</strong>
-        <div class="owner-branch-row">
-          <div class="owner-branch">
-            <label for="globalBranch">BRANCH</label>
-            <select id="globalBranch">
-              <option value="">All Branches</option>
-            </select>
-          </div>
-          <div class="owner-icon-actions">
-            <button type="button" class="secondary owner-icon-btn" id="syncNowBtn" title="Sync Now" aria-label="Sync Now">🔄</button>
-            <button type="button" class="secondary owner-icon-btn publish-github-btn" style="border-color:var(--gold);color:var(--gold-bright);" title="Update Online Website" aria-label="Update Online Website">☁️</button>
-            <button type="button" class="secondary owner-icon-btn" id="toggleSyncBtn" title="Pause Auto-Sync" aria-label="Pause Auto-Sync">⏸️</button>
-            <button type="button" class="secondary owner-icon-btn" id="logoutBtn" title="Log Out" aria-label="Log Out">🚪</button>
-          </div>
+        <div class="owner-icon-actions">
+          <button type="button" class="secondary owner-icon-btn" id="syncNowBtn" title="Sync Now" aria-label="Sync Now">🔄</button>
+          <button type="button" class="secondary owner-icon-btn publish-github-btn" style="border-color:var(--gold);color:var(--gold-bright);" title="Update Online Website" aria-label="Update Online Website">☁️</button>
+          <button type="button" class="secondary owner-icon-btn" id="toggleSyncBtn" title="Pause Auto-Sync" aria-label="Pause Auto-Sync">⏸️</button>
+          <button type="button" class="secondary owner-icon-btn" id="logoutBtn" title="Log Out" aria-label="Log Out">🚪</button>
         </div>
       </div>
-      <div class="sync-controls">
+      <div class="owner-bar-bottom">
+        <div class="owner-branch">
+          <label for="globalBranch">BRANCH</label>
+          <select id="globalBranch">
+            <option value="">All Branches</option>
+          </select>
+        </div>
         <div class="sync-pill">
           <span class="dot" id="syncDot"></span>
           <span id="syncStatusText">Connecting...</span>
@@ -1766,6 +1764,6 @@
     </div>
   </div>
 
-  <script src="../app.js?v=1795614974376"></script>
+  <script src="../app.js?v=1795615070163"></script>
 </body>
 </html>
