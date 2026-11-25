@@ -8587,41 +8587,48 @@ function renderSalesSummary() {
 
   const kpiGrid = document.getElementById('salesKpiGrid');
   if (kpiGrid) {
-    kpiGrid.innerHTML = `
-      <div class="summary-box sales-kpi-drill" data-branch="ALL" data-date="${todayStr}" data-label="Today's Net Cash Sales" style="border-color:var(--gold);cursor:pointer;" title="Click to view detailed computation">
-        TODAY'S NET SALES (${todayStr})
-        <strong style="color:var(--gold-bright);">${fmtCurrency(todayAll.a)}</strong>
-        <span class="summary-note">Gross: ${fmtCurrency(todayAll.g)} • ${fmtNum(todayAll.u)} ${unitLabel} • 🔎</span>
-      </div>
-      <div class="summary-box sales-kpi-drill" data-branch="ALL" data-date="" data-label="Range Net Cash Sales" style="cursor:pointer;" title="Click to view detailed computation">
-        RANGE NET SALES (${sd.start} → ${sd.end})
-        <strong style="color:var(--green);">${fmtCurrency(rangeAll.a)}</strong>
-        <span class="summary-note">Gross: ${fmtCurrency(rangeAll.g)} • Disc: ${fmtCurrency(rangeAll.d)} • ${fmtNum(rangeAll.u)} ${unitLabel} • 🔎</span>
-      </div>
-      ${branchIds
-        .map(
-          (b) => `
-        <div class="summary-box sales-kpi-drill" data-branch="${b}" data-date="" data-label="${branchNames[b]} Cash Sales" style="cursor:pointer;" title="Click to view detailed computation">
-          ${branchNames[b].toUpperCase()} (RANGE)
-          <strong>${fmtCurrency(rangeTotals[b].a)}</strong>
-          <span class="summary-note">Gross: ${fmtCurrency(rangeTotals[b].g)} • ${fmtNum(rangeTotals[b].u)} ${unitLabel} • 🔎</span>
-        </div>`
-        )
-        .join('')}
-    `;
+    const renderBigBox = (title, totals, dateFilter, labelPrefix, accentColor, borderGold) => `
+      <div class="summary-box sales-big-box"${borderGold ? ' style="border-color:var(--gold);"' : ''}>
+        <div class="sales-big-main sales-kpi-drill" data-branch="ALL" data-date="${dateFilter}" data-label="${labelPrefix} (All Branches)" title="Click to view detailed computation">
+          <div class="sales-big-title">${title}</div>
+          <strong class="sales-big-val" style="color:${accentColor};">${fmtCurrency(totals.all.a)}</strong>
+          <div class="summary-note">Gross: ${fmtCurrency(totals.all.g)}${totals.all.d > 0 ? ` • Disc: ${fmtCurrency(totals.all.d)}` : ''} • ${fmtNum(totals.all.u)} ${unitLabel} • 🔎</div>
+        </div>
+        <div class="sales-branch-subgrid">
+          ${branchIds
+            .map((b) => {
+              const c = totals.byBranch[b];
+              return `
+              <div class="sales-branch-chip sales-kpi-drill" data-branch="${b}" data-date="${dateFilter}" data-label="${branchNames[b]} ${labelPrefix}" title="Click for ${branchNames[b]} computation">
+                <span class="sales-chip-name">${branchNames[b]}</span>
+                <strong class="sales-chip-val">${fmtCurrency(c.a)}</strong>
+                <span class="sales-chip-sub">${fmtNum(c.u)} ${unitLabel}</span>
+              </div>`;
+            })
+            .join('')}
+        </div>
+      </div>`;
+
+    kpiGrid.innerHTML =
+      renderBigBox(`TODAY'S NET SALES (${todayStr})`, { all: todayAll, byBranch: todayTotals }, todayStr, "Today's Net Cash Sales", 'var(--gold-bright)', true) +
+      renderBigBox(`RANGE NET SALES (${sd.start} → ${sd.end})`, { all: rangeAll, byBranch: rangeTotals }, '', 'Range Net Cash Sales', 'var(--green)', false);
+
     kpiGrid.querySelectorAll('.sales-kpi-drill').forEach((box) => {
-      box.addEventListener('click', () => {
+      box.addEventListener('click', (e) => {
+        e.stopPropagation();
         openSalesDrilldown('cash', box.dataset.branch || 'ALL', box.dataset.label || 'Cash Sales', box.dataset.date || '');
       });
     });
   }
 
-  const fmtCell = (cell) =>
+  const fmtCell = (cell, bid, period, labelPrefix, color = '') =>
     cell.u > 0
-      ? `<strong>${fmtCurrency(cell.a)}</strong><div class="small muted">Gross: ${fmtCurrency(cell.g)} • ${fmtNum(cell.u)} ${unitLabel}</div>`
-      : '<span class="muted">—</span>';
+      ? `<td class="sales-cash-cell" data-branch="${bid}" data-period="${period}" data-label="${labelPrefix}" title="Click for supporting computation"><strong${color ? ` style="color:${color};"` : ''}>${fmtCurrency(cell.a)}</strong><div class="small muted">Gross: ${fmtCurrency(cell.g)} • ${fmtNum(cell.u)} ${unitLabel}</div></td>`
+      : '<td><span class="muted">—</span></td>';
 
   const dailyRows = [...dailyMap.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  const dailyBadge = document.getElementById('salesDailyCountBadge');
+  if (dailyBadge) dailyBadge.textContent = `${dailyRows.length} day${dailyRows.length === 1 ? '' : 's'}`;
   const dailyTbody = document.querySelector('#salesDailyTable tbody');
   if (dailyTbody) {
     dailyTbody.innerHTML = dailyRows.length
@@ -8631,10 +8638,10 @@ function renderSalesSummary() {
             return `
             <tr>
               <td><strong>${dt}</strong></td>
-              <td>${fmtCell(row['br-molave'])}</td>
-              <td>${fmtCell(row['br-tambulig'])}</td>
-              <td>${fmtCell(row['br-bonifacio'])}</td>
-              <td><strong style="color:var(--gold-bright);">${fmtCurrency(tot.a)}</strong><div class="small muted">Gross: ${fmtCurrency(tot.g)} • ${fmtNum(tot.u)} ${unitLabel}</div></td>
+              ${fmtCell(row['br-molave'], 'br-molave', dt, `Molave Cash Sales (${dt})`)}
+              ${fmtCell(row['br-tambulig'], 'br-tambulig', dt, `Tambulig Cash Sales (${dt})`)}
+              ${fmtCell(row['br-bonifacio'], 'br-bonifacio', dt, `Bonifacio Cash Sales (${dt})`)}
+              ${fmtCell(tot, 'ALL', dt, `All Branches Cash Sales (${dt})`, 'var(--gold-bright)')}
             </tr>`;
           })
           .join('')
@@ -8642,6 +8649,8 @@ function renderSalesSummary() {
   }
 
   const monthlyRows = [...monthlyMap.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  const monthlyBadge = document.getElementById('salesMonthlyCountBadge');
+  if (monthlyBadge) monthlyBadge.textContent = `${monthlyRows.length} month${monthlyRows.length === 1 ? '' : 's'}`;
   const monthlyTbody = document.querySelector('#salesMonthlyTable tbody');
   if (monthlyTbody) {
     monthlyTbody.innerHTML = monthlyRows.length
@@ -8651,10 +8660,10 @@ function renderSalesSummary() {
             return `
             <tr>
               <td><strong>${mo}</strong></td>
-              <td>${fmtCell(row['br-molave'])}</td>
-              <td>${fmtCell(row['br-tambulig'])}</td>
-              <td>${fmtCell(row['br-bonifacio'])}</td>
-              <td><strong style="color:var(--green);">${fmtCurrency(tot.a)}</strong><div class="small muted">Gross: ${fmtCurrency(tot.g)} • ${fmtNum(tot.u)} ${unitLabel}</div></td>
+              ${fmtCell(row['br-molave'], 'br-molave', mo, `Molave Cash Sales (${mo})`)}
+              ${fmtCell(row['br-tambulig'], 'br-tambulig', mo, `Tambulig Cash Sales (${mo})`)}
+              ${fmtCell(row['br-bonifacio'], 'br-bonifacio', mo, `Bonifacio Cash Sales (${mo})`)}
+              ${fmtCell(tot, 'ALL', mo, `All Branches Cash Sales (${mo})`, 'var(--green)')}
             </tr>`;
           })
           .join('')
@@ -9646,6 +9655,30 @@ document.querySelectorAll('.sales-tool-btn').forEach((btn) => {
     if (target === 'rebates') renderSalesRebatesTool();
   });
 });
+document.getElementById('salesDailyToggle')?.addEventListener('click', () => {
+  const body = document.getElementById('salesDailyBody');
+  const caret = document.getElementById('salesDailyCaret');
+  if (!body) return;
+  const hidden = body.classList.toggle('hidden');
+  if (caret) caret.textContent = hidden ? '+' : '−';
+});
+
+document.getElementById('salesMonthlyToggle')?.addEventListener('click', () => {
+  const body = document.getElementById('salesMonthlyBody');
+  const caret = document.getElementById('salesMonthlyCaret');
+  if (!body) return;
+  const hidden = body.classList.toggle('hidden');
+  if (caret) caret.textContent = hidden ? '+' : '−';
+});
+
+['salesDailyTable', 'salesMonthlyTable'].forEach((tid) => {
+  document.getElementById(tid)?.addEventListener('click', (e) => {
+    const cell = e.target.closest('.sales-cash-cell');
+    if (!cell) return;
+    openSalesDrilldown('cash', cell.dataset.branch || 'ALL', cell.dataset.label || 'Cash Sales', cell.dataset.period || '');
+  });
+});
+
 document.getElementById('accrualBadDebtPct')?.addEventListener('input', renderSalesInstallmentAccrualTool);
 
 function openSalesDrilldown(kind, branchId, label, periodFilter = '', modeOverride = '') {
@@ -9664,31 +9697,65 @@ function openSalesDrilldown(kind, branchId, label, periodFilter = '', modeOverri
 
   if (kind === 'cash') {
     const typeFilter = document.getElementById('salesTypeFilter')?.value || 'ALL';
-    const exactDate = /^\d{4}-\d{2}-\d{2}$/.test(String(periodFilter || '')) ? String(periodFilter) : '';
-    const matchDate = (dt) => (exactDate ? dt === exactDate : dt >= sd.start && dt <= sd.end);
+    const pStr = String(periodFilter || '');
+    const exactDate = /^\d{4}-\d{2}-\d{2}$/.test(pStr) ? pStr : '';
+    const exactMonth = !exactDate && /^\d{4}-\d{2}$/.test(pStr) ? pStr : '';
+    const matchDate = (dt) => {
+      if (exactDate) return dt === exactDate;
+      if (exactMonth) return dt.startsWith(exactMonth);
+      return dt >= sd.start && dt <= sd.end;
+    };
     const useExact = typeFilter === 'ALL' && (sd.transactions || []).length > 0;
+    const renderChunked = (items, colSpan, mapRowFn, totalRowHtml) => {
+      const CHUNK = 120;
+      let shown = Math.min(CHUNK, items.length);
+      const draw = () => {
+        const rowsHtml = items.length ? items.slice(0, shown).map(mapRowFn).join('') : `<tr><td colspan="${colSpan}" class="muted">No cash sales recorded in this period.</td></tr>`;
+        const moreRow =
+          shown < items.length
+            ? `<tr id="drillMoreRow"><td colspan="${colSpan}" style="text-align:center;padding:8px;"><button type="button" class="secondary" id="drillShowMoreBtn" style="padding:5px 10px;font-size:11px;min-height:30px;">Load ${Math.min(CHUNK, items.length - shown)} more (${shown} / ${items.length})</button> <button type="button" class="secondary" id="drillShowAllBtn" style="padding:5px 10px;font-size:11px;min-height:30px;">Show All (${items.length})</button></td></tr>`
+            : '';
+        tbody.innerHTML = rowsHtml + moreRow + totalRowHtml;
+        document.getElementById('drillShowMoreBtn')?.addEventListener('click', () => {
+          shown = Math.min(items.length, shown + CHUNK);
+          draw();
+        });
+        document.getElementById('drillShowAllBtn')?.addEventListener('click', () => {
+          shown = items.length;
+          draw();
+        });
+      };
+      draw();
+    };
     if (useExact) {
       const txs = (sd.transactions || []).filter((t) => {
         const dt = String(t.tx_date || '').slice(0, 10);
         return matchDate(dt) && matchBranch(t.branch_id);
       });
       let sSrp = 0, sDisc = 0, sNet = 0, sCost = 0, sProf = 0;
+      for (const t of txs) {
+        const net = Number(t.amount) || 0;
+        const disc = Number(t.discount) || 0;
+        const srp = Number(t.srp) || net + disc;
+        const cost = Number(t.unit_cost) || 0;
+        const prof = cost > 0 ? net - cost : 0;
+        sSrp += srp; sDisc += disc; sNet += net; sCost += cost; sProf += prof;
+      }
       thead.innerHTML = '<tr><th>Date</th><th>Order #</th><th>Branch</th><th>Gross SRP</th><th>Discount</th><th>Net Amount</th><th>FIFO Cost</th><th>Profit</th></tr>';
-      tbody.innerHTML =
-        (txs.length
-          ? txs
-              .map((t) => {
-                const net = Number(t.amount) || 0;
-                const disc = Number(t.discount) || 0;
-                const srp = Number(t.srp) || net + disc;
-                const cost = Number(t.unit_cost) || 0;
-                const prof = cost > 0 ? net - cost : 0;
-                sSrp += srp; sDisc += disc; sNet += net; sCost += cost; sProf += prof;
-                return `<tr><td>${t.tx_date}</td><td><strong>${t.order_no}</strong></td><td>${bNames[t.branch_id] || t.branch_id}</td><td>${fmtCurrency(srp)}</td><td>${fmtCurrency(disc)}</td><td><strong>${fmtCurrency(net)}</strong></td><td>${fmtCurrency(cost)}</td><td style="color:${prof >= 0 ? 'var(--green)' : 'var(--danger)'};"><strong>${fmtCurrency(prof)}</strong></td></tr>`;
-              })
-              .join('')
-          : '<tr><td colspan="8" class="muted">No cash sales transactions in this period.</td></tr>') +
-        `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="3">TOTAL (${txs.length} tx)</td><td>${fmtCurrency(sSrp)}</td><td>${fmtCurrency(sDisc)}</td><td>${fmtCurrency(sNet)}</td><td>${fmtCurrency(sCost)}</td><td style="color:var(--green);">${fmtCurrency(sProf)}</td></tr>`;
+      const totHtml = `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="3">TOTAL (${txs.length} tx)</td><td>${fmtCurrency(sSrp)}</td><td>${fmtCurrency(sDisc)}</td><td>${fmtCurrency(sNet)}</td><td>${fmtCurrency(sCost)}</td><td style="color:var(--green);">${fmtCurrency(sProf)}</td></tr>`;
+      renderChunked(
+        txs,
+        8,
+        (t) => {
+          const net = Number(t.amount) || 0;
+          const disc = Number(t.discount) || 0;
+          const srp = Number(t.srp) || net + disc;
+          const cost = Number(t.unit_cost) || 0;
+          const prof = cost > 0 ? net - cost : 0;
+          return `<tr><td>${t.tx_date}</td><td><strong>${t.order_no}</strong></td><td>${bNames[t.branch_id] || t.branch_id}</td><td>${fmtCurrency(srp)}</td><td>${fmtCurrency(disc)}</td><td><strong>${fmtCurrency(net)}</strong></td><td>${fmtCurrency(cost)}</td><td style="color:${prof >= 0 ? 'var(--green)' : 'var(--danger)'};"><strong>${fmtCurrency(prof)}</strong></td></tr>`;
+        },
+        totHtml
+      );
       formulaEl.innerHTML = `<strong>Formula:</strong> Net Cash Sales (<code>${fmtCurrency(sNet)}</code>) = Gross SRP (<code>${fmtCurrency(sSrp)}</code>) − Discount (<code>${fmtCurrency(sDisc)}</code>). True Cash Profit = Net − FIFO Cost = <strong>${fmtCurrency(sProf)}</strong>.`;
     } else {
       const moves = (sd.allMovements || []).filter((m) => {
@@ -9700,20 +9767,24 @@ function openSalesDrilldown(kind, branchId, label, periodFilter = '', modeOverri
         return matchDate(dt) && matchBranch(m.branch_id);
       });
       let sQty = 0, sSrp = 0, sDisc = 0, sNet = 0;
+      for (const m of moves) {
+        const qty = Math.abs(Number(m.delta_qty) || 0);
+        const { net, gross, disc } = getCashSaleAmount(m);
+        sQty += qty; sSrp += gross; sDisc += disc; sNet += net;
+      }
       thead.innerHTML = '<tr><th>Date</th><th>Model</th><th>Branch</th><th>Qty</th><th>Gross SRP</th><th>Cash Disc.</th><th>Net Sales</th></tr>';
-      tbody.innerHTML =
-        (moves.length
-          ? moves
-              .map((m) => {
-                const dt = String(m.recorded_at || '').slice(0, 10);
-                const qty = Math.abs(Number(m.delta_qty) || 0);
-                const { net, gross, disc } = getCashSaleAmount(m);
-                sQty += qty; sSrp += gross; sDisc += disc; sNet += net;
-                return `<tr><td>${dt}</td><td><strong>${m.model || m.product_name || ''}</strong></td><td>${bNames[m.branch_id] || m.branch_id}</td><td>${fmtNum(qty)}</td><td>${fmtCurrency(gross)}</td><td>${fmtCurrency(disc)}</td><td><strong>${fmtCurrency(net)}</strong></td></tr>`;
-              })
-              .join('')
-          : '<tr><td colspan="7" class="muted">No cash sales movements in this period.</td></tr>') +
-        `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="3">TOTAL (${fmtNum(sQty)} units)</td><td>${fmtNum(sQty)}</td><td>${fmtCurrency(sSrp)}</td><td>${fmtCurrency(sDisc)}</td><td style="color:var(--green);">${fmtCurrency(sNet)}</td></tr>`;
+      const totHtml = `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="3">TOTAL (${fmtNum(sQty)} units)</td><td>${fmtNum(sQty)}</td><td>${fmtCurrency(sSrp)}</td><td>${fmtCurrency(sDisc)}</td><td style="color:var(--green);">${fmtCurrency(sNet)}</td></tr>`;
+      renderChunked(
+        moves,
+        7,
+        (m) => {
+          const dt = String(m.recorded_at || '').slice(0, 10);
+          const qty = Math.abs(Number(m.delta_qty) || 0);
+          const { net, gross, disc } = getCashSaleAmount(m);
+          return `<tr><td>${dt}</td><td><strong>${m.model || m.product_name || ''}</strong></td><td>${bNames[m.branch_id] || m.branch_id}</td><td>${fmtNum(qty)}</td><td>${fmtCurrency(gross)}</td><td>${fmtCurrency(disc)}</td><td><strong>${fmtCurrency(net)}</strong></td></tr>`;
+        },
+        totHtml
+      );
       formulaEl.innerHTML = `<strong>Formula (${typeFilter}):</strong> Net Cash Sales (<code>${fmtCurrency(sNet)}</code>) = Gross SRP (<code>${fmtCurrency(sSrp)}</code>) − Cash Discount (<code>${fmtCurrency(sDisc)}</code>).`;
     }
   } else if (kind === 'installment') {

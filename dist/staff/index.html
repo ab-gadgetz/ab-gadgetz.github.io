@@ -11,7 +11,7 @@
   <link rel="icon" href="../ab-logo-square.png" type="image/png" />
   <link rel="apple-touch-icon" href="../ab-logo-square.png" />
   <title>Staff Portal — AB Gadgetz</title>
-  <link rel="stylesheet" href="../styles.css?v=1795614650257" />
+  <link rel="stylesheet" href="../styles.css?v=1795614974376" />
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
@@ -816,38 +816,64 @@
         </div>
 
         <div id="salesTool-summary" class="hidden">
-          <div class="summary-grid" id="salesKpiGrid" style="margin-bottom:14px;"></div>
+          <div class="sales-big-grid" id="salesKpiGrid" style="margin-bottom:14px;"></div>
 
-          <h4 style="margin:0 0 8px;color:var(--gold-bright);">Daily Cash Sales by Branch</h4>
-          <div class="table-wrap" style="margin-bottom:16px;">
-            <table class="data-table" id="salesDailyTable">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Molave</th>
-                  <th>Tambulig</th>
-                  <th>Bonifacio</th>
-                  <th>Daily Total</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
+          <div class="sub-panel restock-section" style="margin-bottom:12px;">
+            <div id="salesDailyToggle" class="restock-section-head">
+              <div class="restock-section-title">
+                <h4 style="margin:0;color:var(--gold-bright);">Daily Cash Sales by Branch</h4>
+                <span id="salesDailyCountBadge" class="badge badge-ok" style="font-size:10px;">0 days</span>
+              </div>
+              <div class="restock-section-meta">
+                <span class="small muted">Click any amount for details</span>
+                <span id="salesDailyCaret" class="restock-caret">−</span>
+              </div>
+            </div>
+            <div id="salesDailyBody" style="margin-top:10px;">
+              <div class="table-wrap">
+                <table class="data-table" id="salesDailyTable">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Molave</th>
+                      <th>Tambulig</th>
+                      <th>Bonifacio</th>
+                      <th>Daily Total</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
           </div>
 
-          <h4 style="margin:0 0 8px;color:var(--gold-bright);">Monthly Accumulated Cash Sales by Branch</h4>
-          <div class="table-wrap">
-            <table class="data-table" id="salesMonthlyTable">
-              <thead>
-                <tr>
-                  <th>Month</th>
-                  <th>Molave</th>
-                  <th>Tambulig</th>
-                  <th>Bonifacio</th>
-                  <th>Monthly Total</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
+          <div class="sub-panel restock-section">
+            <div id="salesMonthlyToggle" class="restock-section-head">
+              <div class="restock-section-title">
+                <h4 style="margin:0;color:var(--gold-bright);">Monthly Accumulated Cash Sales by Branch</h4>
+                <span id="salesMonthlyCountBadge" class="badge badge-ok" style="font-size:10px;">0 months</span>
+              </div>
+              <div class="restock-section-meta">
+                <span class="small muted">Click any amount for details</span>
+                <span id="salesMonthlyCaret" class="restock-caret">−</span>
+              </div>
+            </div>
+            <div id="salesMonthlyBody" style="margin-top:10px;">
+              <div class="table-wrap">
+                <table class="data-table" id="salesMonthlyTable">
+                  <thead>
+                    <tr>
+                      <th>Month</th>
+                      <th>Molave</th>
+                      <th>Tambulig</th>
+                      <th>Bonifacio</th>
+                      <th>Monthly Total</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1740,6 +1766,6 @@
     </div>
   </div>
 
-  <script src="../app.js?v=1795614650257"></script>
+  <script src="../app.js?v=1795614974376"></script>
 </body>
 </html>

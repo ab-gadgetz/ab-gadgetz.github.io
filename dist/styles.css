@@ -2029,3 +2029,92 @@ body.role-cashier input[type="date"] {
     flex-shrink: 0;
   }
 }
+.sales-big-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.sales-big-box {
+  padding: 12px !important;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sales-big-main {
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+.sales-big-main:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.sales-big-title {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--muted);
+  letter-spacing: 0.4px;
+}
+.sales-big-val {
+  display: block;
+  font-size: 22px !important;
+  margin: 4px 0 2px !important;
+}
+.sales-branch-subgrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.sales-branch-chip {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 6px;
+  text-align: center;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.sales-branch-chip:hover {
+  border-color: var(--gold);
+  background: rgba(231, 197, 95, 0.08);
+}
+.sales-chip-name {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.sales-chip-val {
+  font-size: 12.5px !important;
+  margin: 0 !important;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sales-chip-sub {
+  font-size: 9.5px;
+  color: var(--muted);
+}
+.sales-cash-cell {
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+.sales-cash-cell:hover {
+  background: rgba(231, 197, 95, 0.08);
+}
+@media (max-width: 780px) {
+  .sales-big-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .sales-big-val {
+    font-size: 19px !important;
+  }
+  .sales-chip-val {
+    font-size: 11.5px !important;
+  }
+}
