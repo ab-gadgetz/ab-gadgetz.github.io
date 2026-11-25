@@ -11,7 +11,7 @@
   <link rel="icon" href="../ab-logo-square.png" type="image/png" />
   <link rel="apple-touch-icon" href="../ab-logo-square.png" />
   <title>Staff Portal — AB Gadgetz</title>
-  <link rel="stylesheet" href="../styles.css?v=1795613731562" />
+  <link rel="stylesheet" href="../styles.css?v=1795614065926" />
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
@@ -803,15 +803,15 @@
         </div>
 
         <div id="salesToolsBar" class="sales-tools-bar">
-          <button type="button" class="sales-tool-btn active" data-salestool="summary">DAILY &amp; MONTHLY CASH</button>
+          <button type="button" class="sales-tool-btn active" data-salestool="consolidated">CONSOLIDATED P&amp;L (REAL NET INCOME)</button>
+          <button type="button" class="secondary sales-tool-btn" data-salestool="summary">DAILY &amp; MONTHLY CASH</button>
           <button type="button" class="secondary sales-tool-btn" data-salestool="cashpnl">CASH SALES P&amp;L</button>
           <button type="button" class="secondary sales-tool-btn" data-salestool="installment">INSTALLMENT (ACCRUAL)</button>
-          <button type="button" class="secondary sales-tool-btn" data-salestool="consolidated" style="border-color:var(--gold);color:var(--gold-bright);">CONSOLIDATED P&amp;L (REAL NET INCOME)</button>
           <button type="button" class="secondary sales-tool-btn" data-salestool="rebates">REBATES &amp; PENALTIES</button>
           <button type="button" class="secondary sales-tool-btn" data-salestool="charts">CHARTS (MONTHLY &amp; YEARLY)</button>
         </div>
 
-        <div id="salesTool-summary">
+        <div id="salesTool-summary" class="hidden">
           <div class="summary-grid" id="salesKpiGrid" style="margin-bottom:14px;"></div>
 
           <h4 style="margin:0 0 8px;color:var(--gold-bright);">Daily Cash Sales by Branch</h4>
@@ -898,7 +898,7 @@
         </div>
 
         <!-- SALES TOOL 4: CONSOLIDATED CASH + INSTALLMENT P&L (REAL NET INCOME, EXPENSES DEDUCTED ONCE) -->
-        <div id="salesTool-consolidated" class="hidden">
+        <div id="salesTool-consolidated">
           <div id="consolidatedPnlBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--gold);"></div>
           <div class="table-wrap" style="margin-bottom:16px;">
             <table class="data-table" id="salesConsolidatedTable">
@@ -1736,6 +1736,6 @@
     </div>
   </div>
 
-  <script src="../app.js?v=1795613731562"></script>
+  <script src="../app.js?v=1795614065926"></script>
 </body>
 </html>
