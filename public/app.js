@@ -8668,7 +8668,7 @@ function renderSalesCashPnlTool() {
   const banner = document.getElementById('cashPnlAuditBanner');
   if (!sd || !tbody) return;
 
-  const branchIds = ['br-bonifacio', 'br-molave', 'br-tambulig'];
+  const branchIds = ['br-molave', 'br-tambulig', 'br-bonifacio'];
   const finByBranch = new Map((sd.finance?.byBranch || []).map((b) => [b.branchId, b]));
   const stats = {};
   for (const bid of branchIds) {
@@ -8711,7 +8711,7 @@ function renderSalesCashPnlTool() {
     tot.netIncome += s.netIncome;
   }
 
-  const colBranches = ['br-bonifacio', 'br-molave', 'br-tambulig', 'ALL'];
+  const colBranches = ['br-molave', 'br-tambulig', 'br-bonifacio', 'ALL'];
   const cols = [stats['br-bonifacio'], stats['br-molave'], stats['br-tambulig'], tot];
   const row = (label, fn, opts = {}) => {
     const bg = opts.bold ? 'background:rgba(255,255,255,0.03);font-weight:700;' : '';
@@ -8776,7 +8776,7 @@ function renderSalesInstallmentAccrualTool() {
   if (!sd || !tbody) return;
 
   const badDebtPct = Math.max(0, Math.min(30, Number(document.getElementById('accrualBadDebtPct')?.value) || 3)) / 100;
-  const branchIds = ['br-bonifacio', 'br-molave', 'br-tambulig'];
+  const branchIds = ['br-molave', 'br-tambulig', 'br-bonifacio'];
   const finByBranch = new Map((sd.finance?.byBranch || []).map((b) => [b.branchId, b]));
   const allInst = sd.receivables?.installments || [];
   const allPastDues = sd.receivables?.pastDues || [];
@@ -8858,7 +8858,7 @@ function renderSalesInstallmentAccrualTool() {
     for (const k of Object.keys(tot)) tot[k] += s[k];
   }
 
-  const colBranches = ['br-bonifacio', 'br-molave', 'br-tambulig', 'ALL'];
+  const colBranches = ['br-molave', 'br-tambulig', 'br-bonifacio', 'ALL'];
   const cols = [stats['br-bonifacio'], stats['br-molave'], stats['br-tambulig'], tot];
   const row = (label, fn, opts = {}) => {
     const bg = opts.bold ? 'background:rgba(255,255,255,0.03);font-weight:700;' : '';
@@ -8913,7 +8913,7 @@ function renderSalesConsolidatedTool() {
   const banner = document.getElementById('consolidatedPnlBanner');
   if (!sd || !cashData || !instData || !tbody) return;
 
-  const branchIds = ['br-bonifacio', 'br-molave', 'br-tambulig'];
+  const branchIds = ['br-molave', 'br-tambulig', 'br-bonifacio'];
   const finByBranch = new Map((sd.finance?.byBranch || []).map((b) => [b.branchId, b]));
 
   const buildCol = (c, i, exp) => {
@@ -8952,7 +8952,7 @@ function renderSalesConsolidatedTool() {
   const totExp = cols.reduce((s, x) => s + x.expenses, 0);
   cols.push(buildCol(cashData.tot, instData.tot, totExp));
 
-  const colBranches = ['br-bonifacio', 'br-molave', 'br-tambulig', 'ALL'];
+  const colBranches = ['br-molave', 'br-tambulig', 'br-bonifacio', 'ALL'];
   const row = (label, fn, opts = {}) => {
     const bg = opts.bold ? 'background:rgba(255,255,255,0.04);font-weight:700;' : '';
     const drill = opts.drill || 'cash';
