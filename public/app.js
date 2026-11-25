@@ -8585,6 +8585,38 @@ function renderSalesSummary() {
   const rangeAll = sumAll(rangeTotals);
   const unitLabel = useExactWebTx ? 'tx' : 'units';
 
+  // Compute Cash P&L Net Cash Income (Gross Profit - Operating Expenses) for Today and Range per branch
+  const finByBranch = new Map((sd.finance?.byBranch || []).map((b) => [b.branchId, b]));
+  const todayExpByBranch = { 'br-molave': 0, 'br-tambulig': 0, 'br-bonifacio': 0 };
+  for (const e of sd.finance?.recentExpenses || []) {
+    if (String(e.expense_date || '').slice(0, 10) === todayStr && todayExpByBranch[e.branch_id] !== undefined) {
+      todayExpByBranch[e.branch_id] += Number(e.amount) || 0;
+    }
+  }
+  const todayGpByBranch = { 'br-molave': 0, 'br-tambulig': 0, 'br-bonifacio': 0 };
+  const rangeGpByBranch = { 'br-molave': 0, 'br-tambulig': 0, 'br-bonifacio': 0 };
+  for (const tx of sd.transactions || []) {
+    const dt = String(tx.tx_date || '').slice(0, 10);
+    if (!branchIds.includes(tx.branch_id)) continue;
+    const net = Number(tx.amount) || 0;
+    const cogs = Number(tx.unit_cost) || 0;
+    const gp = cogs > 0 ? net - cogs : 0;
+    if (dt === todayStr) todayGpByBranch[tx.branch_id] += gp;
+    if (dt >= sd.start && dt <= sd.end) rangeGpByBranch[tx.branch_id] += gp;
+  }
+  const todayCashIncByBranch = {};
+  const rangeCashIncByBranch = {};
+  let todayCashIncAll = 0;
+  let rangeCashIncAll = 0;
+  for (const b of branchIds) {
+    const tInc = todayGpByBranch[b] - (todayExpByBranch[b] || 0);
+    const rInc = rangeGpByBranch[b] - (Number(finByBranch.get(b)?.expenses) || 0);
+    todayCashIncByBranch[b] = tInc;
+    rangeCashIncByBranch[b] = rInc;
+    todayCashIncAll += tInc;
+    rangeCashIncAll += rInc;
+  }
+
   const kpiGrid = document.getElementById('salesKpiGrid');
   if (kpiGrid) {
     const renderBigBox = (title, totals, dateFilter, labelPrefix, accentColor, borderGold) => `
@@ -8592,16 +8624,18 @@ function renderSalesSummary() {
         <div class="sales-big-main sales-kpi-drill" data-branch="ALL" data-date="${dateFilter}" data-label="${labelPrefix} (All Branches)" title="Click to view detailed computation">
           <div class="sales-big-title">${title}</div>
           <strong class="sales-big-val" style="color:${accentColor};">${fmtCurrency(totals.all.a)}</strong>
-          <div class="summary-note">Gross: ${fmtCurrency(totals.all.g)}${totals.all.d > 0 ? ` • Disc: ${fmtCurrency(totals.all.d)}` : ''} • ${fmtNum(totals.all.u)} ${unitLabel} • 🔎</div>
+          <div class="summary-note">Gross: ${fmtCurrency(totals.all.g)}${totals.all.d > 0 ? ` • Disc: ${fmtCurrency(totals.all.d)}` : ''} • ${fmtNum(totals.all.u)} ${unitLabel} • Net Cash Inc: <strong style="color:${totals.allInc >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(totals.allInc)}</strong> • 🔎</div>
         </div>
         <div class="sales-branch-subgrid">
           ${branchIds
             .map((b) => {
               const c = totals.byBranch[b];
+              const inc = totals.incByBranch[b] || 0;
               return `
               <div class="sales-branch-chip sales-kpi-drill" data-branch="${b}" data-date="${dateFilter}" data-label="${branchNames[b]} ${labelPrefix}" title="Click for ${branchNames[b]} computation">
                 <span class="sales-chip-name">${branchNames[b]}</span>
                 <strong class="sales-chip-val">${fmtCurrency(c.a)}</strong>
+                <span class="sales-chip-sub" style="color:${inc >= 0 ? 'var(--green)' : 'var(--danger)'};font-weight:700;">Net Inc: ${fmtCurrency(inc)}</span>
                 <span class="sales-chip-sub">${fmtNum(c.u)} ${unitLabel}</span>
               </div>`;
             })
@@ -8610,8 +8644,8 @@ function renderSalesSummary() {
       </div>`;
 
     kpiGrid.innerHTML =
-      renderBigBox(`TODAY'S NET SALES (${todayStr})`, { all: todayAll, byBranch: todayTotals }, todayStr, "Today's Net Cash Sales", 'var(--gold-bright)', true) +
-      renderBigBox(`RANGE NET SALES (${sd.start} → ${sd.end})`, { all: rangeAll, byBranch: rangeTotals }, '', 'Range Net Cash Sales', 'var(--green)', false);
+      renderBigBox(`TODAY'S NET SALES (${todayStr})`, { all: todayAll, byBranch: todayTotals, allInc: todayCashIncAll, incByBranch: todayCashIncByBranch }, todayStr, "Today's Net Cash Sales", 'var(--gold-bright)', true) +
+      renderBigBox(`RANGE NET SALES (${sd.start} → ${sd.end})`, { all: rangeAll, byBranch: rangeTotals, allInc: rangeCashIncAll, incByBranch: rangeCashIncByBranch }, '', 'Range Net Cash Sales', 'var(--green)', false);
 
     kpiGrid.querySelectorAll('.sales-kpi-drill').forEach((box) => {
       box.addEventListener('click', (e) => {
@@ -9648,13 +9682,40 @@ document.querySelectorAll('.sales-tool-btn').forEach((btn) => {
       b.classList.toggle('active', isAct);
       b.classList.toggle('secondary', !isAct);
     });
-    ['summary', 'cashpnl', 'installment', 'consolidated', 'rebates', 'charts'].forEach((t) => {
+    ['consolidated', 'summary', 'rebates', 'charts'].forEach((t) => {
       document.getElementById(`salesTool-${t}`)?.classList.toggle('hidden', t !== target);
     });
     if (target === 'charts') renderSalesChartsTool();
     if (target === 'rebates') renderSalesRebatesTool();
   });
 });
+
+function updateConsolidatedViewMode(changedEl) {
+  const cashChk = document.getElementById('consShowCashChk');
+  const instChk = document.getElementById('consShowInstChk');
+  if (!cashChk || !instChk) return;
+  if (!cashChk.checked && !instChk.checked) {
+    if (changedEl === cashChk) instChk.checked = true;
+    else cashChk.checked = true;
+  }
+  const showCash = cashChk.checked;
+  const showInst = instChk.checked;
+  const both = showCash && showInst;
+  document.getElementById('salesConsolidatedBody')?.classList.toggle('hidden', !both);
+  document.getElementById('salesTool-cashpnl')?.classList.toggle('hidden', !(showCash && !showInst));
+  document.getElementById('salesTool-installment')?.classList.toggle('hidden', !(!showCash && showInst));
+  const hint = document.getElementById('consModeHint');
+  if (hint) {
+    hint.textContent = both
+      ? 'Showing Consolidated P&L (Cash + Installment)'
+      : showCash
+        ? 'Showing Cash Sales P&L only'
+        : 'Showing Installment (Accrual) P&L only';
+  }
+}
+
+document.getElementById('consShowCashChk')?.addEventListener('change', (e) => updateConsolidatedViewMode(e.target));
+document.getElementById('consShowInstChk')?.addEventListener('change', (e) => updateConsolidatedViewMode(e.target));
 document.getElementById('salesDailyToggle')?.addEventListener('click', () => {
   const body = document.getElementById('salesDailyBody');
   const caret = document.getElementById('salesDailyCaret');

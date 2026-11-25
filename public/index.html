@@ -807,8 +807,6 @@
         <div id="salesToolsBar" class="sales-tools-bar">
           <button type="button" class="sales-tool-btn active" data-salestool="consolidated">CONSOLIDATED P&amp;L (REAL NET INCOME)</button>
           <button type="button" class="secondary sales-tool-btn" data-salestool="summary">DAILY &amp; MONTHLY CASH</button>
-          <button type="button" class="secondary sales-tool-btn" data-salestool="cashpnl">CASH SALES P&amp;L</button>
-          <button type="button" class="secondary sales-tool-btn" data-salestool="installment">INSTALLMENT (ACCRUAL)</button>
           <button type="button" class="secondary sales-tool-btn" data-salestool="rebates">REBATES &amp; PENALTIES</button>
           <button type="button" class="secondary sales-tool-btn" data-salestool="charts">CHARTS (MONTHLY &amp; YEARLY)</button>
         </div>
@@ -875,73 +873,87 @@
           </div>
         </div>
 
-        <!-- SALES TOOL 2: CASH SALES P&L (GROSS CASH SALES -> NET INCOME PER BRANCH) -->
-        <div id="salesTool-cashpnl" class="hidden">
-          <div id="cashPnlAuditBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--green);"></div>
-          <div class="table-wrap">
-            <table class="data-table" id="salesCashPnlTable">
-              <thead>
-                <tr>
-                  <th>Cash Sales Income Statement</th>
-                  <th>Molave</th>
-                  <th>Tambulig</th>
-                  <th>Bonifacio</th>
-                  <th>Total (All Branches)</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-
-        <!-- SALES TOOL 3: INSTALLMENT SALES (ACCRUAL METHOD P&L vs CASH-PAYMENT BASIS) -->
-        <div id="salesTool-installment" class="hidden">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
-            <div>
-              <h4 style="margin:0;color:var(--gold-bright);">Installment Sales Income Statement — Accrual Method (PFRS 15 / Effective Interest)</h4>
-              <p class="muted small" style="margin:2px 0 0;">Recognizes merchandising profit at release and accrues interest monthly as earned (not when cash is collected), minus a bad-debt provision.</p>
-            </div>
-            <div style="display:flex;align-items:center;gap:6px;">
-              <label for="accrualBadDebtPct" style="margin:0;font-size:11px;color:var(--muted);">MONTHLY BAD DEBT (% of New Principal):</label>
-              <input type="number" id="accrualBadDebtPct" value="3" min="0" max="30" step="0.5" style="width:60px;padding:4px 6px;font-size:12px;text-align:center;" />
-            </div>
-          </div>
-
-          <div class="table-wrap" style="margin-bottom:12px;">
-            <table class="data-table" id="salesInstallmentAccrualTable">
-              <thead>
-                <tr>
-                  <th>Installment Accrual P&amp;L Line Item</th>
-                  <th>Molave</th>
-                  <th>Tambulig</th>
-                  <th>Bonifacio</th>
-                  <th>Total (All Branches)</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-
-          <div id="installmentAccrualGuide" class="sub-panel" style="padding:12px;font-size:12px;border-left:3px solid var(--gold);line-height:1.55;"></div>
-        </div>
-
-        <!-- SALES TOOL 4: CONSOLIDATED CASH + INSTALLMENT P&L (REAL NET INCOME, EXPENSES DEDUCTED ONCE) -->
+        <!-- SALES TOOL: CONSOLIDATED CASH + INSTALLMENT P&L (WITH CASH / INSTALLMENT CHECKBOXES) -->
         <div id="salesTool-consolidated">
-          <div id="consolidatedPnlBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--gold);"></div>
-          <div class="table-wrap" style="margin-bottom:16px;">
-            <table class="data-table" id="salesConsolidatedTable">
-              <thead>
-                <tr>
-                  <th>Consolidated Income Statement (Cash + Installment)</th>
-                  <th>Molave</th>
-                  <th>Tambulig</th>
-                  <th>Bonifacio</th>
-                  <th>Total (All Branches)</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
+          <div class="sub-panel" style="padding:10px 12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <strong style="font-size:11.5px;color:var(--gold-bright);letter-spacing:0.5px;">P&amp;L VIEW:</strong>
+              <label class="restock-check-chip">
+                <input type="checkbox" id="consShowCashChk" checked />
+                <span>Cash Sales P&amp;L</span>
+              </label>
+              <label class="restock-check-chip">
+                <input type="checkbox" id="consShowInstChk" checked />
+                <span>Installment (Accrual)</span>
+              </label>
+            </div>
+            <span id="consModeHint" class="small muted">Showing Consolidated P&amp;L (Cash + Installment)</span>
           </div>
+
+          <div id="salesTool-cashpnl" class="hidden">
+            <div id="cashPnlAuditBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--green);"></div>
+            <div class="table-wrap">
+              <table class="data-table" id="salesCashPnlTable">
+                <thead>
+                  <tr>
+                    <th>Cash Sales Income Statement</th>
+                    <th>Molave</th>
+                    <th>Tambulig</th>
+                    <th>Bonifacio</th>
+                    <th>Total (All Branches)</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="salesTool-installment" class="hidden">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+              <div>
+                <h4 style="margin:0;color:var(--gold-bright);">Installment Sales Income Statement — Accrual Method (PFRS 15 / Effective Interest)</h4>
+                <p class="muted small" style="margin:2px 0 0;">Recognizes merchandising profit at release and accrues interest monthly as earned (not when cash is collected), minus a bad-debt provision.</p>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <label for="accrualBadDebtPct" style="margin:0;font-size:11px;color:var(--muted);">MONTHLY BAD DEBT (% of New Principal):</label>
+                <input type="number" id="accrualBadDebtPct" value="3" min="0" max="30" step="0.5" style="width:60px;padding:4px 6px;font-size:12px;text-align:center;" />
+              </div>
+            </div>
+
+            <div class="table-wrap" style="margin-bottom:12px;">
+              <table class="data-table" id="salesInstallmentAccrualTable">
+                <thead>
+                  <tr>
+                    <th>Installment Accrual P&amp;L Line Item</th>
+                    <th>Molave</th>
+                    <th>Tambulig</th>
+                    <th>Bonifacio</th>
+                    <th>Total (All Branches)</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+
+            <div id="installmentAccrualGuide" class="sub-panel" style="padding:12px;font-size:12px;border-left:3px solid var(--gold);line-height:1.55;"></div>
+          </div>
+
+          <div id="salesConsolidatedBody">
+            <div id="consolidatedPnlBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--gold);"></div>
+            <div class="table-wrap" style="margin-bottom:16px;">
+              <table class="data-table" id="salesConsolidatedTable">
+                <thead>
+                  <tr>
+                    <th>Consolidated Income Statement (Cash + Installment)</th>
+                    <th>Molave</th>
+                    <th>Tambulig</th>
+                    <th>Bonifacio</th>
+                    <th>Total (All Branches)</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
 
           <div class="sub-panel" style="padding:12px;">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
@@ -982,6 +994,7 @@
                 <tbody></tbody>
               </table>
             </div>
+          </div>
           </div>
         </div>
 
