@@ -1965,3 +1965,10 @@ body.role-cashier input[type="date"] {
     font-size: 14px !important;
   }
 }
+.sales-kpi-drill {
+  transition: border-color 0.15s ease, transform 0.12s ease;
+}
+.sales-kpi-drill:hover {
+  border-color: var(--gold) !important;
+  transform: translateY(-1px);
+}
