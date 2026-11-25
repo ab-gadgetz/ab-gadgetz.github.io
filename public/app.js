@@ -2938,7 +2938,11 @@ function schedulePhoneOrdersPush() {
 async function pushPhoneOrdersToGh() {
   const token = localStorage.getItem('bs_gh_pub_token');
   if (!token) return false;
-  const phoneOrders = getLocalSavedOrders().filter((o) => String(o.id || '').startsWith('PO-PH-'));
+  const seeded = state.ghSeededOrderIds || new Set();
+  const phoneOrders = getLocalSavedOrders().filter((o) => {
+    const id = String(o.id || '');
+    return id.startsWith('PO-PH-') || (!id.startsWith('PO-AB-') && !seeded.has(id));
+  });
   const payload = JSON.stringify({ updatedAt: new Date().toISOString(), orders: phoneOrders }, null, 1);
   const repo = 'ab-gadgetz/ab-gadgetz.github.io';
   const apiUrl = `https://api.github.com/repos/${repo}/contents/public/phone-orders.json`;
@@ -3015,6 +3019,7 @@ async function loadSavedPurchaseOrders() {
       const b = await getGhBundle();
       const deleted = getDeletedLocalPoIds();
       const seeded = Array.isArray(b?.purchaseOrders) ? b.purchaseOrders : [];
+      state.ghSeededOrderIds = new Set(seeded.map((s) => s.id));
       const haveIds = new Set(local.map((o) => o.id));
       let added = false;
       for (const s of seeded) {
@@ -3041,6 +3046,12 @@ async function loadSavedPurchaseOrders() {
         }
       }
       if (added) setLocalSavedOrders(local);
+      else if (local.some((o) => {
+        const id = String(o.id || '');
+        return id.startsWith('PO-PH-') || (!id.startsWith('PO-AB-') && !state.ghSeededOrderIds.has(id));
+      })) {
+        schedulePhoneOrdersPush();
+      }
     } catch {}
     state.savedOrders = local
       .map((o) => ({ ...o, ...computeOrderSummaryMetrics(o.items, o.status) }))
