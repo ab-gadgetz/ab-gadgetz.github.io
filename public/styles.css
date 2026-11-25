@@ -1972,3 +1972,54 @@ body.role-cashier input[type="date"] {
   border-color: var(--gold) !important;
   transform: translateY(-1px);
 }
+.owner-branch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.owner-icon-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.owner-icon-btn {
+  width: 34px;
+  height: 34px;
+  min-height: 34px !important;
+  padding: 0 !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px !important;
+  line-height: 1;
+  border-radius: 9px;
+}
+@media (max-width: 768px) {
+  .owner-bar {
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+  }
+  .owner-bar-main {
+    flex: 1;
+    min-width: 0;
+  }
+  .owner-branch-row {
+    gap: 6px;
+  }
+  .owner-branch select {
+    min-width: 115px !important;
+    padding: 5px 8px !important;
+    font-size: 12px !important;
+  }
+  .owner-icon-btn {
+    width: 30px !important;
+    height: 30px !important;
+    min-height: 30px !important;
+    font-size: 13.5px !important;
+  }
+  .sync-controls {
+    flex-shrink: 0;
+  }
+}

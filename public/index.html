@@ -64,11 +64,19 @@
     <div class="card owner-bar">
       <div class="owner-bar-main">
         <strong id="portalGreeting">Welcome, Maynard</strong>
-        <div class="owner-branch">
-          <label for="globalBranch">BRANCH</label>
-          <select id="globalBranch">
-            <option value="">All Branches</option>
-          </select>
+        <div class="owner-branch-row">
+          <div class="owner-branch">
+            <label for="globalBranch">BRANCH</label>
+            <select id="globalBranch">
+              <option value="">All Branches</option>
+            </select>
+          </div>
+          <div class="owner-icon-actions">
+            <button type="button" class="secondary owner-icon-btn" id="syncNowBtn" title="Sync Now" aria-label="Sync Now">🔄</button>
+            <button type="button" class="secondary owner-icon-btn publish-github-btn" style="border-color:var(--gold);color:var(--gold-bright);" title="Update Online Website" aria-label="Update Online Website">☁️</button>
+            <button type="button" class="secondary owner-icon-btn" id="toggleSyncBtn" title="Pause Auto-Sync" aria-label="Pause Auto-Sync">⏸️</button>
+            <button type="button" class="secondary owner-icon-btn" id="logoutBtn" title="Log Out" aria-label="Log Out">🚪</button>
+          </div>
         </div>
       </div>
       <div class="sync-controls">
@@ -76,10 +84,6 @@
           <span class="dot" id="syncDot"></span>
           <span id="syncStatusText">Connecting...</span>
         </div>
-        <button class="secondary" id="syncNowBtn">Sync Now</button>
-        <button class="secondary publish-github-btn" style="border-color:var(--gold);color:var(--gold-bright);" title="Upload your PC edits (stocks, prices, photos, PINs, saved orders) to your live online website &amp; phone portal">☁️ Update Online Website</button>
-        <button class="secondary" id="toggleSyncBtn">Pause</button>
-        <button class="secondary" id="logoutBtn">LOG OUT</button>
       </div>
     </div>
 

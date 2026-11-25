@@ -36,7 +36,7 @@ const isFreebieAccessory = (item) => {
 
 const fmtTime = (iso) => {
   if (!iso) return '—';
-  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
 };
 
 const manilaTodayClient = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
@@ -7476,8 +7476,9 @@ document.querySelectorAll('.publish-github-btn').forEach((btn) => {
       return;
     }
     const origText = btn.textContent;
+    const isIconBtn = btn.classList.contains('owner-icon-btn');
     btn.disabled = true;
-    btn.textContent = 'Updating...';
+    btn.textContent = isIconBtn ? '⏳' : 'Updating...';
     const catMsg = document.getElementById('publishCatalogMsg');
     const photoMsg = document.getElementById('photoMsg');
     try {
@@ -7485,7 +7486,7 @@ document.querySelectorAll('.publish-github-btn').forEach((btn) => {
       const res = await api(publishStaffOnly ? '/api/staff-pins/publish' : '/api/catalog/publish-github', { method: 'POST', body: '{}' });
       if (catMsg) catMsg.textContent = res.message;
       if (photoMsg) photoMsg.textContent = res.message;
-      btn.textContent = '✓ Updated!';
+      btn.textContent = isIconBtn ? '✓' : '✓ Updated!';
       setTimeout(() => { btn.textContent = origText; }, 3000);
     } catch (err) {
       const errText = `Publish failed: ${err.message}`;
@@ -7745,16 +7746,11 @@ function updateSyncPill(s) {
   const toggleBtn = document.getElementById('toggleSyncBtn');
 
   dot.className = 'dot' + (s.paused ? ' paused' : s.lastStatus === 'ERROR' ? ' error' : '');
-  if (state.userRole !== 'ADMIN') {
-    if (s.isSyncing) txt.textContent = 'Syncing...';
-    else if (s.paused) txt.textContent = `Paused • ${fmtTime(s.lastSyncAt)}`;
-    else txt.textContent = `LIVE • ${fmtTime(s.lastSyncAt)}`;
-  } else {
-    if (s.isSyncing) txt.textContent = 'Syncing portal...';
-    else if (s.paused) txt.textContent = `Paused • ${fmtTime(s.lastSyncAt)}`;
-    else txt.textContent = `${s.adapterMode} • Last: ${fmtTime(s.lastSyncAt)}`;
-  }
-  toggleBtn.textContent = s.paused ? 'Resume' : 'Pause';
+  if (s.isSyncing) txt.textContent = 'Syncing...';
+  else if (s.paused) txt.textContent = `Paused • ${fmtTime(s.lastSyncAt)}`;
+  else txt.textContent = fmtTime(s.lastSyncAt);
+  toggleBtn.textContent = s.paused ? '▶️' : '⏸️';
+  toggleBtn.title = s.paused ? 'Resume Auto-Sync' : 'Pause Auto-Sync';
 }
 
 // Event bindings
@@ -8465,7 +8461,7 @@ async function loadSalesSummary(forceRefresh = false) {
   };
   const liveEl = document.getElementById('salesLiveStatus');
   if (liveEl) {
-    liveEl.textContent = `● LIVE • ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`;
+    liveEl.textContent = `● ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
   }
   renderSalesSummary();
   renderSalesCashPnlTool();
