@@ -11,7 +11,7 @@
   <link rel="icon" href="../ab-logo-square.png" type="image/png" />
   <link rel="apple-touch-icon" href="../ab-logo-square.png" />
   <title>Owner Admin Portal</title>
-  <link rel="stylesheet" href="../styles.css?v=1795613416821" />
+  <link rel="stylesheet" href="../styles.css?v=1795613731562" />
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
@@ -766,7 +766,7 @@
           </div>
         </div>
 
-        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">
+        <div class="sales-controls-bar">
           <div>
             <label for="salesMonthInput">MONTH</label>
             <div style="display:flex;align-items:center;gap:4px;">
@@ -802,13 +802,13 @@
           <button type="button" id="salesApplyBtn" style="padding:7px 14px;font-size:12px;">APPLY RANGE</button>
         </div>
 
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;" id="salesToolsBar">
-          <button type="button" class="sales-tool-btn active" data-salestool="summary" style="padding:7px 12px;font-size:12px;">DAILY &amp; MONTHLY CASH</button>
-          <button type="button" class="secondary sales-tool-btn" data-salestool="cashpnl" style="padding:7px 12px;font-size:12px;">CASH SALES P&amp;L</button>
-          <button type="button" class="secondary sales-tool-btn" data-salestool="installment" style="padding:7px 12px;font-size:12px;">INSTALLMENT (ACCRUAL)</button>
-          <button type="button" class="secondary sales-tool-btn" data-salestool="consolidated" style="padding:7px 12px;font-size:12px;border-color:var(--gold);color:var(--gold-bright);">CONSOLIDATED P&amp;L (REAL NET INCOME)</button>
-          <button type="button" class="secondary sales-tool-btn" data-salestool="rebates" style="padding:7px 12px;font-size:12px;">REBATES &amp; PENALTIES</button>
-          <button type="button" class="secondary sales-tool-btn" data-salestool="charts" style="padding:7px 12px;font-size:12px;">CHARTS (MONTHLY &amp; YEARLY)</button>
+        <div id="salesToolsBar" class="sales-tools-bar">
+          <button type="button" class="sales-tool-btn active" data-salestool="summary">DAILY &amp; MONTHLY CASH</button>
+          <button type="button" class="secondary sales-tool-btn" data-salestool="cashpnl">CASH SALES P&amp;L</button>
+          <button type="button" class="secondary sales-tool-btn" data-salestool="installment">INSTALLMENT (ACCRUAL)</button>
+          <button type="button" class="secondary sales-tool-btn" data-salestool="consolidated" style="border-color:var(--gold);color:var(--gold-bright);">CONSOLIDATED P&amp;L (REAL NET INCOME)</button>
+          <button type="button" class="secondary sales-tool-btn" data-salestool="rebates">REBATES &amp; PENALTIES</button>
+          <button type="button" class="secondary sales-tool-btn" data-salestool="charts">CHARTS (MONTHLY &amp; YEARLY)</button>
         </div>
 
         <div id="salesTool-summary">
@@ -1736,6 +1736,6 @@
     </div>
   </div>
 
-  <script src="../app.js?v=1795613416821"></script>
+  <script src="../app.js?v=1795613731562"></script>
 </body>
 </html>

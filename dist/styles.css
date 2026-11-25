@@ -1882,3 +1882,86 @@ body.role-cashier input[type="date"] {
     font-size: 14px;
   }
 }
+
+/* Finance (#tab-sales) Controls, Tool Boxes & Mobile Fit */
+.sales-controls-bar {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.sales-tools-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.sales-tools-bar .sales-tool-btn {
+  padding: 7px 12px;
+  font-size: 12px;
+}
+@media (max-width: 640px) {
+  .sales-controls-bar {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    align-items: end;
+  }
+  .sales-controls-bar > div {
+    min-width: 0;
+  }
+  .sales-controls-bar input,
+  .sales-controls-bar select {
+    width: 100% !important;
+    min-width: 0 !important;
+    font-size: 11px !important;
+    padding: 6px 6px !important;
+  }
+  .sales-controls-bar label {
+    font-size: 10px;
+    margin-bottom: 3px;
+  }
+  .sales-controls-bar #salesMonthInput {
+    flex: 1;
+    min-width: 0;
+  }
+  .sales-controls-bar #salesYearBtn {
+    flex: 1;
+    min-width: 0 !important;
+  }
+  .sales-controls-bar #salesApplyBtn {
+    width: 100%;
+    min-height: 34px;
+    font-size: 11px !important;
+    padding: 6px 8px !important;
+  }
+  .sales-tools-bar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .sales-tools-bar .sales-tool-btn {
+    width: 100%;
+    padding: 6px 5px;
+    font-size: 10px;
+    line-height: 1.2;
+    text-align: center;
+    min-height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #salesKpiGrid.summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+  }
+  #salesKpiGrid .summary-box {
+    padding: 8px 6px !important;
+    font-size: 10px !important;
+  }
+  #salesKpiGrid .summary-box strong {
+    font-size: 14px !important;
+  }
+}
