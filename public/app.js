@@ -7937,13 +7937,13 @@ async function loadFinance() {
 
     const cols = branchId
       ? [byId.get(branchId) || tot]
-      : [bon, mol, tam, tot];
+      : [mol, tam, bon, tot];
 
     const theadRow = document.querySelector('#financeIncomeStmtTable thead tr');
     if (theadRow) {
       theadRow.innerHTML = branchId
         ? `<th>Income Statement Line Item</th><th>${(byId.get(branchId)?.branchName || 'Selected Branch')}</th>`
-        : `<th>Income Statement Line Item</th><th>Bonifacio</th><th>Molave</th><th>Tambulig</th><th>Total (All Branches)</th>`;
+        : `<th>Income Statement Line Item</th><th>Molave</th><th>Tambulig</th><th>Bonifacio</th><th>Total (All Branches)</th>`;
     }
 
     const rowHtml = (label, getter, opts = {}) => {
@@ -8721,7 +8721,7 @@ function renderSalesCashPnlTool() {
   }
 
   const colBranches = ['br-molave', 'br-tambulig', 'br-bonifacio', 'ALL'];
-  const cols = [stats['br-bonifacio'], stats['br-molave'], stats['br-tambulig'], tot];
+  const cols = [stats['br-molave'], stats['br-tambulig'], stats['br-bonifacio'], tot];
   const row = (label, fn, opts = {}) => {
     const bg = opts.bold ? 'background:rgba(255,255,255,0.03);font-weight:700;' : '';
     const drill = opts.drill || 'cash';
@@ -8868,7 +8868,7 @@ function renderSalesInstallmentAccrualTool() {
   }
 
   const colBranches = ['br-molave', 'br-tambulig', 'br-bonifacio', 'ALL'];
-  const cols = [stats['br-bonifacio'], stats['br-molave'], stats['br-tambulig'], tot];
+  const cols = [stats['br-molave'], stats['br-tambulig'], stats['br-bonifacio'], tot];
   const row = (label, fn, opts = {}) => {
     const bg = opts.bold ? 'background:rgba(255,255,255,0.03);font-weight:700;' : '';
     const drill = opts.drill || 'installment';
@@ -9481,7 +9481,7 @@ function renderSalesRebatesTool() {
   if (periodHdr) periodHdr.textContent = groupMode === 'ANNUAL' ? 'Year' : 'Month';
 
   const bNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
-  const branchIds = branchFilter === 'ALL' ? ['br-bonifacio', 'br-molave', 'br-tambulig'] : [branchFilter];
+  const branchIds = branchFilter === 'ALL' ? ['br-molave', 'br-tambulig', 'br-bonifacio'] : [branchFilter];
 
   const keyOf = (dStr) => {
     const s = String(dStr || '');
@@ -9975,7 +9975,7 @@ function openReceivablesAllowanceModal(bucketKey = 'ALL', branchFilter = 'ALL') 
 
   let sBal = 0;
   let sAllow = 0;
-  const branchBtns = ['ALL', 'br-bonifacio', 'br-molave', 'br-tambulig']
+  const branchBtns = ['ALL', 'br-molave', 'br-tambulig', 'br-bonifacio']
     .map(
       (bid) =>
         `<button type="button" class="${bid === activeBranch ? '' : 'secondary'} rec-modal-br-btn" data-bid="${bid}" style="padding:3px 9px;font-size:11px;min-height:0;">${bNames[bid]}</button>`
