@@ -8785,7 +8785,8 @@ const shiftCfMonth = (delta) => {
 document.getElementById('cfPrevMonthBtn')?.addEventListener('click', () => shiftCfMonth(-1));
 document.getElementById('cfNextMonthBtn')?.addEventListener('click', () => shiftCfMonth(1));
 document.getElementById('cfMonthInput')?.addEventListener('change', () => shiftCfMonth(0));
-document.getElementById('cfApplyBtn')?.addEventListener('click', renderCashFlow);
+document.getElementById('cfStart')?.addEventListener('change', renderCashFlow);
+document.getElementById('cfEnd')?.addEventListener('change', renderCashFlow);
 document.getElementById('cfRefreshBtn')?.addEventListener('click', () => loadCashFlow(true));
 document.getElementById('cfBranchFilter')?.addEventListener('change', renderCashFlow);
 document.getElementById('cfIncludeStockChk')?.addEventListener('change', renderCashFlow);
