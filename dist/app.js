@@ -546,7 +546,11 @@ async function staticGhApi(url, opts = {}) {
       const d = String(t.tx_date || '').slice(0, 10);
       return (!start || d >= start) && (!end || d <= end);
     });
-    return { start, end, transactions };
+    const onlinePayments = (bundle.portal_online_payments || []).filter((o) => {
+      const d = String(o.pay_date || '').slice(0, 10);
+      return (!start || d >= start) && (!end || d <= end);
+    });
+    return { start, end, transactions, onlinePayments };
   }
   if (pathname === '/api/finance/summary') {
     const start = u.searchParams.get('start') || '';
@@ -8473,6 +8477,7 @@ async function loadSalesSummary(forceRefresh = false) {
     state.salesFullCache = {
       ts: Date.now(),
       transactions: txRes?.transactions || [],
+      onlinePayments: txRes?.onlinePayments || [],
       allMovements: actRes?.allMovements || [],
       histFinance: histFinRes,
       receivables: recRes,
@@ -8550,6 +8555,12 @@ function buildCashFlowEntries() {
     if (!dt || !bNames[e.branch_id] || amt <= 0) continue;
     entries.push({ date: dt, branchId: e.branch_id, kind: 'expense', label: `${e.expense_type || 'Expense'}${e.particular ? ` — ${e.particular}` : ''}`, amount: amt });
   }
+  for (const o of c.onlinePayments || []) {
+    const dt = String(o.pay_date || '').slice(0, 10);
+    const amt = Number(o.online_amount) || 0;
+    if (!dt || !bNames[o.branch_id] || amt <= 0) continue;
+    entries.push({ date: dt, branchId: o.branch_id, kind: 'online_out', label: 'Online Payments (GCash / Bank — Not Cash on Hand)', amount: amt });
+  }
   if (includeStock) {
     for (const o of state.savedOrders || []) {
       if (o.status === 'Cancelled' || o.status === 'Draft') continue;
@@ -8586,14 +8597,15 @@ function renderCashFlow() {
   const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
   const entries = buildCashFlowEntries();
 
-  const mkBucket = () => ({ cashSale: 0, downpayment: 0, collection: 0, cashIn: 0, expense: 0, stock: 0, cashOut: 0, net: 0 });
+  const mkBucket = () => ({ cashSale: 0, downpayment: 0, collection: 0, cashIn: 0, online: 0, expense: 0, stock: 0, cashOut: 0, net: 0 });
   const addEntry = (b, e) => {
     if (e.kind === 'cash_sale') { b.cashSale += e.amount; b.cashIn += e.amount; }
     else if (e.kind === 'downpayment') { b.downpayment += e.amount; b.cashIn += e.amount; }
     else if (e.kind === 'collection') { b.collection += e.amount; b.cashIn += e.amount; }
+    else if (e.kind === 'online_out') { b.online += e.amount; }
     else if (e.kind === 'expense') { b.expense += e.amount; b.cashOut += e.amount; }
     else if (e.kind === 'stock') { b.stock += e.amount; b.cashOut += e.amount; }
-    b.net = b.cashIn - b.cashOut;
+    b.net = b.cashIn - b.online - b.cashOut;
   };
 
   const todayAll = mkBucket();
@@ -8628,9 +8640,9 @@ function renderCashFlow() {
     const renderBigCfBox = (title, allB, byBr, periodFilter, labelPrefix, borderGold) => `
       <div class="summary-box sales-big-box"${borderGold ? ' style="border-color:var(--gold);"' : ''}>
         <div class="sales-big-main cf-kpi-drill" data-branch="${branchFilter}" data-period="${periodFilter}" data-label="${labelPrefix}" title="Click for supporting cash flow breakdown">
-          <div class="sales-big-title">${title}</div>
+          <div class="sales-big-title">${title} <span style="color:var(--gold-bright);">(Cash Money Only)</span></div>
           <strong class="sales-big-val" style="color:${allB.net >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(allB.net)}</strong>
-          <div class="summary-note">In: <strong style="color:var(--green);">${fmtCurrency(allB.cashIn)}</strong> • Out: <strong style="color:var(--danger);">${fmtCurrency(allB.cashOut)}</strong> • <span style="color:var(--gold-bright);">incl. Online Payments</span> • 🔎</div>
+          <div class="summary-note">In: <strong style="color:var(--green);">${fmtCurrency(allB.cashIn)}</strong> • Online: <strong style="color:#60a5fa;">−${fmtCurrency(allB.online)}</strong> • Out: <strong style="color:var(--danger);">−${fmtCurrency(allB.cashOut)}</strong> • 🔎</div>
         </div>
         <div class="sales-branch-subgrid">
           ${branchIds
@@ -8640,9 +8652,9 @@ function renderCashFlow() {
               <div class="sales-branch-chip cf-kpi-drill" data-branch="${bid}" data-period="${periodFilter}" data-label="${branchNames[bid]} ${labelPrefix}" title="Click for ${branchNames[bid]} cash flow breakdown">
                 <span class="sales-chip-name">${branchNames[bid]}</span>
                 <strong class="sales-chip-val" style="color:${b.net >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(b.net)}</strong>
-                <span class="sales-chip-sub">In ${fmtCurrency(b.cashIn)}</span>
+                <span class="sales-chip-sub">Cash ${fmtCurrency(b.cashIn - b.online)}</span>
+                <span class="sales-chip-sub" style="color:#60a5fa;">Online ${fmtCurrency(b.online)}</span>
                 <span class="sales-chip-sub">Out ${fmtCurrency(b.cashOut)}</span>
-                <span class="sales-chip-sub" style="color:var(--gold-bright);">incl. Online</span>
               </div>`;
             })
             .join('')}
@@ -8676,13 +8688,14 @@ function renderCashFlow() {
               <td>${fmtCurrency(b.downpayment)}</td>
               <td>${fmtCurrency(b.collection)}</td>
               <td style="color:var(--green);"><strong>${fmtCurrency(b.cashIn)}</strong></td>
+              <td style="color:#60a5fa;">${fmtCurrency(b.online)}</td>
               <td style="color:var(--danger);">${fmtCurrency(b.expense)}</td>
               <td style="color:#f59e0b;">${fmtCurrency(b.stock)}</td>
-              <td style="color:${b.net >= 0 ? 'var(--green)' : 'var(--danger)'};"><strong>${fmtCurrency(b.net)}</strong>${showOnlineNote ? '<div class="small muted">incl. Online Payments</div>' : ''}</td>
+              <td style="color:${b.net >= 0 ? 'var(--green)' : 'var(--danger)'};"><strong>${fmtCurrency(b.net)}</strong>${showOnlineNote ? `<div class="small muted">${b.online > 0 ? 'Cash Only (Online excl.)' : 'No Online synced'}</div>` : ''}</td>
             </tr>`
           )
           .join('')
-      : '<tr><td colspan="8" class="muted">No cash flow entries recorded in this period.</td></tr>';
+      : '<tr><td colspan="9" class="muted">No cash flow entries recorded in this period.</td></tr>';
   };
 
   renderRows([...dailyMap.entries()].sort((a, b) => b[0].localeCompare(a[0])), '#cfDailyTable', 'cfDailyCountBadge', 'day', true);
@@ -8709,16 +8722,16 @@ function openCashFlowDrilldown(branchId, periodFilter, label) {
 
   let tIn = 0, tOut = 0;
   for (const r of rows) {
-    if (r.kind === 'expense' || r.kind === 'stock') tOut += r.amount;
+    if (r.kind === 'expense' || r.kind === 'stock' || r.kind === 'online_out') tOut += r.amount;
     else tIn += r.amount;
   }
   const tNet = tIn - tOut;
-  const kindLabels = { cash_sale: 'Cash Sale', downpayment: 'Downpayment', collection: 'Installment Coll.', expense: 'Op. Expense', stock: 'Stock Paid' };
+  const kindLabels = { cash_sale: 'Cash Sale', downpayment: 'Downpayment', collection: 'Installment Coll.', online_out: 'Online (Not Cash)', expense: 'Op. Expense', stock: 'Stock Paid' };
 
   document.getElementById('salesDrilldownTitle').textContent = `${label} — ${bNames[branchId] || branchId}`;
   document.getElementById('salesDrilldownSub').textContent = periodFilter ? `Period: ${periodFilter}` : `Period: ${start} → ${end}`;
-  document.getElementById('salesDrilldownFormula').innerHTML = `<strong>Cash Flow Formula:</strong> Total Cash In (<code>${fmtCurrency(tIn)}</code>) − Total Cash Out (<code>${fmtCurrency(tOut)}</code>) = <strong style="color:${tNet >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(tNet)}</strong> (${rows.length} entries).`;
-  document.querySelector('#salesDrilldownTable thead').innerHTML = '<tr><th>Date</th><th>Branch</th><th>Type</th><th>Description</th><th>Cash In</th><th>Cash Out</th></tr>';
+  document.getElementById('salesDrilldownFormula').innerHTML = `<strong>Cash Flow Formula (Cash Money Only):</strong> Total In (<code>${fmtCurrency(tIn)}</code>) − Online &amp; Outflows (<code>${fmtCurrency(tOut)}</code>) = <strong style="color:${tNet >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(tNet)}</strong> (${rows.length} entries).`;
+  document.querySelector('#salesDrilldownTable thead').innerHTML = '<tr><th>Date</th><th>Branch</th><th>Type</th><th>Description</th><th>Cash In</th><th>Online / Out</th></tr>';
   const tbody = document.querySelector('#salesDrilldownTable tbody');
   const CHUNK = 120;
   let shown = Math.min(CHUNK, rows.length);
@@ -8727,8 +8740,9 @@ function openCashFlowDrilldown(branchId, periodFilter, label) {
       ? rows
           .slice(0, shown)
           .map((r) => {
-            const isOut = r.kind === 'expense' || r.kind === 'stock';
-            return `<tr><td>${r.date}</td><td>${bNames[r.branchId] || r.branchId}</td><td>${kindLabels[r.kind] || r.kind}</td><td>${r.label}</td><td style="color:var(--green);">${isOut ? '—' : fmtCurrency(r.amount)}</td><td style="color:var(--danger);">${isOut ? fmtCurrency(r.amount) : '—'}</td></tr>`;
+            const isOut = r.kind === 'expense' || r.kind === 'stock' || r.kind === 'online_out';
+            const outClr = r.kind === 'online_out' ? '#60a5fa' : 'var(--danger)';
+            return `<tr><td>${r.date}</td><td>${bNames[r.branchId] || r.branchId}</td><td>${kindLabels[r.kind] || r.kind}</td><td>${r.label}</td><td style="color:var(--green);">${isOut ? '—' : fmtCurrency(r.amount)}</td><td style="color:${outClr};">${isOut ? fmtCurrency(r.amount) : '—'}</td></tr>`;
           })
           .join('')
       : '<tr><td colspan="6" class="muted">No cash flow entries in this period.</td></tr>';

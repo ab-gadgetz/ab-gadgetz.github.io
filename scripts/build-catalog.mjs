@@ -914,6 +914,7 @@ async function main() {
     allMovements: allMovements.slice(0, 6000),
     allInstallments,
     portal_transactions: allTransactions,
+    portal_online_payments: seedSnapshot.portal_online_payments || [],
     allPayments,
     allExpenses,
     allPastDues,
