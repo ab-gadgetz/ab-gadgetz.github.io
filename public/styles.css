@@ -2169,6 +2169,59 @@ body.role-cashier input[type="date"] {
   border-color: var(--gold);
   background: rgba(231, 197, 95, 0.14);
 }
+.cf-apply-icon-btn {
+  width: 34px;
+  height: 34px;
+  min-height: 34px !important;
+  padding: 0 !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px !important;
+  font-weight: 900;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+@media (max-width: 640px) {
+  .cf-controls-bar {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 6px !important;
+    align-items: end;
+    margin-bottom: 10px !important;
+  }
+  .cf-controls-bar .cf-ctrl-month {
+    grid-column: 1 / 3;
+  }
+  .cf-controls-bar .cf-ctrl-branch {
+    grid-column: 3 / 4;
+    min-width: 96px;
+  }
+  .cf-controls-bar .cf-ctrl-from {
+    grid-column: 1 / 2;
+  }
+  .cf-controls-bar .cf-ctrl-to {
+    grid-column: 2 / 3;
+  }
+  .cf-controls-bar .cf-apply-icon-btn {
+    grid-column: 3 / 4;
+    justify-self: end;
+    width: 36px;
+    height: 32px;
+    min-height: 32px !important;
+  }
+  .cf-controls-bar input,
+  .cf-controls-bar select {
+    padding: 4px 5px !important;
+    font-size: 10.5px !important;
+    min-height: 30px;
+  }
+  .cf-controls-bar #cfPrevMonthBtn,
+  .cf-controls-bar #cfNextMonthBtn {
+    padding: 4px 7px !important;
+    min-height: 30px !important;
+  }
+}
 @media (max-width: 780px) {
   .sales-big-grid {
     grid-template-columns: 1fr;
