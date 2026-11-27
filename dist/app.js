@@ -8514,11 +8514,13 @@ async function loadSalesSummary(forceRefresh = false) {
   if (liveEl) {
     liveEl.textContent = `● ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
   }
-  renderSalesSummary();
-  renderSalesCashPnlTool();
-  renderSalesInstallmentAccrualTool();
-  renderSalesChartsTool();
-  renderSalesRebatesTool();
+  if (state.activeTab === 'sales') {
+    renderSalesSummary();
+    renderSalesCashPnlTool();
+    renderSalesInstallmentAccrualTool();
+    renderSalesChartsTool();
+    renderSalesRebatesTool();
+  }
 }
 
 function initCashFlowDateInputs() {
@@ -8536,9 +8538,10 @@ function initCashFlowDateInputs() {
 
 async function loadCashFlow(forceRefresh = false) {
   initCashFlowDateInputs();
+  const needSavedOrders = Boolean(document.getElementById('cfIncludeStockChk')?.checked) && !state.savedOrders;
   await Promise.all([
     loadSalesSummary(forceRefresh),
-    state.savedOrders ? Promise.resolve() : loadSavedOrders().catch(() => {}),
+    needSavedOrders ? loadSavedOrders().catch(() => {}) : Promise.resolve(),
   ]);
   renderCashFlow();
 }
@@ -8782,20 +8785,26 @@ function openCashFlowDrilldown(branchId, periodFilter, label) {
   modal.classList.remove('hidden');
 }
 
-const syncCfDaysToRange = () => {
+const syncCfDaysToRange = (normalizeInputs = true) => {
   const ym = document.getElementById('cfMonthInput')?.value || todayStr.slice(0, 7);
   const [y, m] = ym.split('-').map(Number);
   const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
   const fdEl = document.getElementById('cfFromDay');
   const tdEl = document.getElementById('cfToDay');
-  let d1 = Math.max(1, Math.min(lastDay, parseInt(fdEl?.value || '1', 10) || 1));
-  let d2 = Math.max(1, Math.min(lastDay, parseInt(tdEl?.value || String(lastDay), 10) || lastDay));
+  const raw1 = fdEl?.value ?? '';
+  const raw2 = tdEl?.value ?? '';
+  if (!normalizeInputs && (!raw1 || !raw2)) return;
+  let d1 = Math.max(1, Math.min(lastDay, parseInt(raw1 || '1', 10) || 1));
+  let d2 = Math.max(1, Math.min(lastDay, parseInt(raw2 || String(lastDay), 10) || lastDay));
   if (d1 > d2) d2 = d1;
-  if (fdEl) fdEl.value = String(d1);
-  if (tdEl) tdEl.value = String(d2);
+  if (normalizeInputs) {
+    if (fdEl) fdEl.value = String(d1);
+    if (tdEl) tdEl.value = String(d2);
+  }
   document.getElementById('cfStart').value = `${ym}-${String(d1).padStart(2, '0')}`;
   document.getElementById('cfEnd').value = `${ym}-${String(d2).padStart(2, '0')}`;
-  renderCashFlow();
+  if (!state.salesFullCache) loadCashFlow();
+  else renderCashFlow();
 };
 
 const shiftCfMonth = (delta) => {
@@ -8806,23 +8815,35 @@ const shiftCfMonth = (delta) => {
   const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
   if (mEl) mEl.value = ym;
   const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
-  const endDay = ym === todayStr.slice(0, 7) ? Number(todayStr.slice(8, 10)) : lastDay;
+  const isCurMonth = ym === todayStr.slice(0, 7);
+  const startDay = isCurMonth && delta === 0 ? Number(todayStr.slice(8, 10)) : 1;
+  const endDay = isCurMonth ? Number(todayStr.slice(8, 10)) : lastDay;
   const fdEl = document.getElementById('cfFromDay');
   const tdEl = document.getElementById('cfToDay');
-  if (fdEl) fdEl.value = '1';
+  if (fdEl) fdEl.value = String(startDay);
   if (tdEl) tdEl.value = String(endDay);
-  document.getElementById('cfStart').value = `${ym}-01`;
+  document.getElementById('cfStart').value = `${ym}-${String(startDay).padStart(2, '0')}`;
   document.getElementById('cfEnd').value = `${ym}-${String(endDay).padStart(2, '0')}`;
-  renderCashFlow();
+  if (!state.salesFullCache) loadCashFlow();
+  else renderCashFlow();
 };
 document.getElementById('cfPrevMonthBtn')?.addEventListener('click', () => shiftCfMonth(-1));
 document.getElementById('cfNextMonthBtn')?.addEventListener('click', () => shiftCfMonth(1));
 document.getElementById('cfMonthInput')?.addEventListener('change', () => shiftCfMonth(0));
-document.getElementById('cfFromDay')?.addEventListener('change', syncCfDaysToRange);
-document.getElementById('cfToDay')?.addEventListener('change', syncCfDaysToRange);
+document.getElementById('cfMonthInput')?.addEventListener('input', () => shiftCfMonth(0));
+document.getElementById('cfFromDay')?.addEventListener('input', () => syncCfDaysToRange(false));
+document.getElementById('cfToDay')?.addEventListener('input', () => syncCfDaysToRange(false));
+document.getElementById('cfFromDay')?.addEventListener('change', () => syncCfDaysToRange(true));
+document.getElementById('cfToDay')?.addEventListener('change', () => syncCfDaysToRange(true));
 document.getElementById('cfRefreshBtn')?.addEventListener('click', () => loadCashFlow(true));
 document.getElementById('cfBranchFilter')?.addEventListener('change', renderCashFlow);
-document.getElementById('cfIncludeStockChk')?.addEventListener('change', renderCashFlow);
+document.getElementById('cfIncludeStockChk')?.addEventListener('change', () => {
+  if (document.getElementById('cfIncludeStockChk')?.checked && !state.savedOrders) {
+    loadSavedOrders().then(renderCashFlow).catch(() => {});
+  } else {
+    renderCashFlow();
+  }
+});
 document.getElementById('cfSeparateOnlineChk')?.addEventListener('change', renderCashFlow);
 document.getElementById('cfDailyToggle')?.addEventListener('click', () => {
   const body = document.getElementById('cfDailyBody');
@@ -9191,7 +9212,8 @@ function renderSalesInstallmentAccrualTool() {
   const guide = document.getElementById('installmentAccrualGuide');
   if (!sd || !tbody) return;
 
-  const badDebtPct = Math.max(0, Math.min(30, Number(document.getElementById('accrualBadDebtPct')?.value) || 3)) / 100;
+  const rawBd = document.getElementById('accrualBadDebtPct')?.value;
+  const badDebtPct = Math.max(0, Math.min(30, rawBd === '' || rawBd == null ? 5 : Number(rawBd))) / 100;
   const branchIds = ['br-molave', 'br-tambulig', 'br-bonifacio'];
   const finByBranch = new Map((sd.finance?.byBranch || []).map((b) => [b.branchId, b]));
   const allInst = sd.receivables?.installments || [];
@@ -9395,7 +9417,7 @@ function renderSalesConsolidatedTool() {
     row('   Add: Accrued Interest Income (Monthly Earned, Gross)', (c) => c.accruedInt, { color: 'var(--green)', drill: 'accrued_interest' }),
     row('   Add: Late Payment Penalties Collected', (c) => c.penalties, { color: 'var(--green)', drill: 'penalties' }),
     row('   Less: Early-Payment Rebates (2.5% Auto-Deducted Detection)', (c) => -c.detectedRebates, { color: '#f59e0b', drill: 'rebates_detected' }),
-    row(`   Less: Prospective Monthly Bad Debt (${((instData.badDebtPct || 0.03) * 100).toFixed(1)}% of New Principal)`, (c) => -c.badDebt, { color: '#f59e0b', drill: 'installment' }),
+    row(`   Less: Prospective Monthly Bad Debt (${((instData.badDebtPct ?? 0.05) * 100).toFixed(1)}% of New Principal)`, (c) => -c.badDebt, { color: '#f59e0b', drill: 'installment' }),
     row('   = Net Installment & Financing Contribution', (c) => c.instContrib, { bold: true, color: 'var(--green)', drill: 'installment' }),
     row('C. Total Consolidated Gross Contribution (A + B)', (c) => c.totalGrossContrib, { bold: true, drill: 'cash' }),
     row('D. Less: Shared Branch Operating Expenses (Deducted ONCE)', (c) => -c.expenses, { color: 'var(--danger)', drill: 'expenses' }),
@@ -10237,7 +10259,8 @@ function openSalesDrilldown(kind, branchId, label, periodFilter = '', modeOverri
       formulaEl.innerHTML = `<strong>Formula (${typeFilter}):</strong> Net Cash Sales (<code>${fmtCurrency(sNet)}</code>) = Gross SRP (<code>${fmtCurrency(sSrp)}</code>) − Cash Discount (<code>${fmtCurrency(sDisc)}</code>).`;
     }
   } else if (kind === 'installment') {
-    const badDebtPct = Math.max(0, Math.min(30, Number(document.getElementById('accrualBadDebtPct')?.value) || 3)) / 100;
+    const rawBd = document.getElementById('accrualBadDebtPct')?.value;
+  const badDebtPct = Math.max(0, Math.min(30, rawBd === '' || rawBd == null ? 5 : Number(rawBd))) / 100;
     const rows = (sd.receivables?.installments || []).filter((i) => {
       const dt = String(i.sale_date || '').slice(0, 10);
       return dt >= sd.start && dt <= sd.end && matchBranch(i.branch_id);
@@ -11425,9 +11448,13 @@ async function bootApp() {
   document.getElementById('appShell').classList.remove('hidden');
   document.getElementById('mobileBottomNav')?.classList.remove('hidden');
   applyRolePermissions();
-  await Promise.all([loadInventory(), loadSyncLogs(), refreshActiveTab()]);
+  await refreshActiveTab();
   applyRolePermissions();
   connectEvents();
+  Promise.all([
+    state.inventory ? Promise.resolve() : loadInventory().catch(() => {}),
+    state.syncState ? Promise.resolve() : loadSyncLogs().catch(() => {}),
+  ]);
 }
 
 async function loadStaffPins() {
