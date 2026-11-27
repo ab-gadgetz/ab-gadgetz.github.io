@@ -2158,6 +2158,17 @@ body.role-cashier input[type="date"] {
 .sales-cash-cell:hover {
   background: rgba(231, 197, 95, 0.08);
 }
+.cf-icon-chip {
+  padding: 5px 8px !important;
+  min-height: 32px !important;
+  gap: 5px !important;
+  font-size: 14px !important;
+  line-height: 1;
+}
+.cf-icon-chip:has(input:checked) {
+  border-color: var(--gold);
+  background: rgba(231, 197, 95, 0.14);
+}
 @media (max-width: 780px) {
   .sales-big-grid {
     grid-template-columns: 1fr;

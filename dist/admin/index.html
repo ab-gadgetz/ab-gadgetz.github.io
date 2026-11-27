@@ -11,7 +11,7 @@
   <link rel="icon" href="../ab-logo-square.png" type="image/png" />
   <link rel="apple-touch-icon" href="../ab-logo-square.png" />
   <title>Owner Admin Portal</title>
-  <link rel="stylesheet" href="../styles.css?v=1795779276184" />
+  <link rel="stylesheet" href="../styles.css?v=1795784127157" />
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
@@ -1088,18 +1088,18 @@
     <!-- TAB: DAILY & MONTHLY CASH FLOW (EMPLOYER PORTAL) -->
     <section id="tab-cashflow" class="tab-panel active card">
       <div class="sub-panel">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
           <h3 style="margin:0;">Daily &amp; Monthly Cash Flow</h3>
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-            <label class="restock-check-chip" title="Checked: show &amp; deduct Online Payments (Cash Money Only). Unchecked: show Total Cash Flow including Online money.">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <label class="restock-check-chip cf-icon-chip" title="Online Cash Flow (Cash Only) — Checked: deduct Online Payments; Unchecked: include Online money" aria-label="Online Cash Flow (Cash Only)">
               <input type="checkbox" id="cfSeparateOnlineChk" checked />
-              <span>Online Cash Flow (Cash Only)</span>
+              <span aria-hidden="true">💳</span>
             </label>
-            <label class="restock-check-chip" title="Deduct recorded supplier/stock deliveries on their received date as cash outflow">
+            <label class="restock-check-chip cf-icon-chip" title="Include Stock Deliveries Outflow" aria-label="Include Stock Deliveries Outflow">
               <input type="checkbox" id="cfIncludeStockChk" />
-              <span>Include Stock Deliveries Outflow</span>
+              <span aria-hidden="true">📦</span>
             </label>
-            <button type="button" id="cfRefreshBtn" class="secondary" style="padding:6px 12px;font-size:12px;">Refresh</button>
+            <button type="button" id="cfRefreshBtn" class="secondary" style="padding:5px 10px;font-size:12px;min-height:32px;">Refresh</button>
           </div>
         </div>
 
@@ -1895,6 +1895,6 @@
     </div>
   </div>
 
-  <script src="../app.js?v=1795779276184"></script>
+  <script src="../app.js?v=1795784127157"></script>
 </body>
 </html>
