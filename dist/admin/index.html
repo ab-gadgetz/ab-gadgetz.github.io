@@ -11,7 +11,7 @@
   <link rel="icon" href="../ab-logo-square.png" type="image/png" />
   <link rel="apple-touch-icon" href="../ab-logo-square.png" />
   <title>Owner Admin Portal</title>
-  <link rel="stylesheet" href="../styles.css?v=1795615794282" />
+  <link rel="stylesheet" href="../styles.css?v=1795749067784" />
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
@@ -109,6 +109,7 @@
       <nav class="tabs hidden" id="mainTabsMenu" role="tablist">
         <button type="button" class="tab active" data-tab="inventory">INVENTORY</button>
         <button type="button" class="tab" data-tab="sales">SALES</button>
+        <button type="button" class="tab" data-tab="cashflow">CASH FLOW</button>
         <button type="button" class="tab" data-tab="receivables">RECEIVABLES</button>
         <button type="button" class="tab" data-tab="finance">FINANCE &amp; P&amp;L</button>
         <button type="button" class="tab" data-tab="websiteStock">WEBSITE STOCK</button>
@@ -1084,6 +1085,117 @@
       </div>
     </section>
 
+    <!-- TAB: DAILY & MONTHLY CASH FLOW (EMPLOYER PORTAL) -->
+    <section id="tab-cashflow" class="tab-panel card">
+      <div class="sub-panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+          <h3 style="margin:0;">Daily &amp; Monthly Cash Flow</h3>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <label class="restock-check-chip" title="Deduct recorded supplier/stock deliveries on their received date as cash outflow">
+              <input type="checkbox" id="cfIncludeStockChk" />
+              <span>Include Stock Deliveries Outflow</span>
+            </label>
+            <button type="button" id="cfRefreshBtn" class="secondary" style="padding:6px 12px;font-size:12px;">Refresh</button>
+          </div>
+        </div>
+
+        <div class="sales-controls-bar">
+          <div>
+            <label for="cfMonthInput">MONTH</label>
+            <div style="display:flex;align-items:center;gap:4px;">
+              <button type="button" id="cfPrevMonthBtn" class="secondary" style="padding:6px 9px;font-size:13px;" title="Previous Month">‹</button>
+              <input type="month" id="cfMonthInput" style="width:auto;padding:6px 8px;font-size:12px;" />
+              <button type="button" id="cfNextMonthBtn" class="secondary" style="padding:6px 9px;font-size:13px;" title="Next Month">›</button>
+            </div>
+          </div>
+          <div>
+            <label for="cfStart">FROM</label>
+            <input type="date" id="cfStart" style="width:auto;padding:6px 10px;font-size:12px;" />
+          </div>
+          <div>
+            <label for="cfEnd">TO</label>
+            <input type="date" id="cfEnd" style="width:auto;padding:6px 10px;font-size:12px;" />
+          </div>
+          <div>
+            <label for="cfBranchFilter">BRANCH</label>
+            <select id="cfBranchFilter" style="width:auto;padding:6px 10px;font-size:12px;">
+              <option value="ALL">All Branches</option>
+              <option value="br-molave">Molave</option>
+              <option value="br-tambulig">Tambulig</option>
+              <option value="br-bonifacio">Bonifacio</option>
+            </select>
+          </div>
+          <button type="button" id="cfApplyBtn" style="padding:7px 14px;font-size:12px;">APPLY RANGE</button>
+        </div>
+
+        <div class="sales-big-grid" id="cfKpiGrid" style="margin-bottom:14px;"></div>
+
+        <div class="sub-panel restock-section" style="margin-bottom:12px;">
+          <div id="cfDailyToggle" class="restock-section-head">
+            <div class="restock-section-title">
+              <h4 style="margin:0;color:var(--gold-bright);">Daily Cash Flow</h4>
+              <span id="cfDailyCountBadge" class="badge badge-ok" style="font-size:10px;">0 days</span>
+            </div>
+            <div class="restock-section-meta">
+              <span class="small muted">Click any row/amount for details</span>
+              <span id="cfDailyCaret" class="restock-caret">−</span>
+            </div>
+          </div>
+          <div id="cfDailyBody" style="margin-top:10px;">
+            <div class="table-wrap">
+              <table class="data-table" id="cfDailyTable">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Cash Sales</th>
+                    <th>Downpayments</th>
+                    <th>Collections</th>
+                    <th>Total Cash In</th>
+                    <th>Op. Expenses</th>
+                    <th>Stock Paid</th>
+                    <th>Net Cash Flow</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="sub-panel restock-section">
+          <div id="cfMonthlyToggle" class="restock-section-head">
+            <div class="restock-section-title">
+              <h4 style="margin:0;color:var(--gold-bright);">Monthly Accumulated Cash Flow</h4>
+              <span id="cfMonthlyCountBadge" class="badge badge-ok" style="font-size:10px;">0 months</span>
+            </div>
+            <div class="restock-section-meta">
+              <span class="small muted">Click any row/amount for details</span>
+              <span id="cfMonthlyCaret" class="restock-caret">−</span>
+            </div>
+          </div>
+          <div id="cfMonthlyBody" style="margin-top:10px;">
+            <div class="table-wrap">
+              <table class="data-table" id="cfMonthlyTable">
+                <thead>
+                  <tr>
+                    <th>Month</th>
+                    <th>Cash Sales</th>
+                    <th>Downpayments</th>
+                    <th>Collections</th>
+                    <th>Total Cash In</th>
+                    <th>Op. Expenses</th>
+                    <th>Stock Paid</th>
+                    <th>Net Cash Flow</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- TAB: RECEIVABLES & PAST DUES -->
     <section id="tab-receivables" class="tab-panel card">
       <div class="sub-panel">
@@ -1777,6 +1889,6 @@
     </div>
   </div>
 
-  <script src="../app.js?v=1795615794282"></script>
+  <script src="../app.js?v=1795749067784"></script>
 </body>
 </html>

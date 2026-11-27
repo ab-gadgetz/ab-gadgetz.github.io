@@ -127,6 +127,8 @@ async function refreshActiveTab() {
     if (state.activeInvTool === 'restock') await loadPlanning();
   } else if (tab === 'sales') {
     await loadSalesSummary();
+  } else if (tab === 'cashflow') {
+    await loadCashFlow();
   } else if (tab === 'receivables') {
     await loadReceivables();
   } else if (tab === 'finance') {
@@ -8480,6 +8482,275 @@ async function loadSalesSummary(forceRefresh = false) {
   renderSalesChartsTool();
   renderSalesRebatesTool();
 }
+
+function initCashFlowDateInputs() {
+  const mEl = document.getElementById('cfMonthInput');
+  const sEl = document.getElementById('cfStart');
+  const eEl = document.getElementById('cfEnd');
+  if (mEl && !mEl.value) mEl.value = todayStr.slice(0, 7);
+  if (sEl && !sEl.value) sEl.value = `${todayStr.slice(0, 7)}-01`;
+  if (eEl && !eEl.value) eEl.value = todayStr;
+}
+
+async function loadCashFlow(forceRefresh = false) {
+  initCashFlowDateInputs();
+  await Promise.all([
+    loadSalesSummary(forceRefresh),
+    state.savedOrders ? Promise.resolve() : loadSavedOrders().catch(() => {}),
+  ]);
+  renderCashFlow();
+}
+
+function buildCashFlowEntries() {
+  const c = state.salesFullCache;
+  if (!c) return [];
+  const includeStock = Boolean(document.getElementById('cfIncludeStockChk')?.checked);
+  const entries = [];
+  const bNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
+
+  for (const tx of c.transactions || []) {
+    const dt = String(tx.tx_date || '').slice(0, 10);
+    const amt = Number(tx.amount) || 0;
+    if (!dt || !bNames[tx.branch_id] || amt <= 0) continue;
+    entries.push({ date: dt, branchId: tx.branch_id, kind: 'cash_sale', label: `Cash Sale • ${tx.order_no || ''}`, amount: amt });
+  }
+  for (const inst of c.receivables?.installments || []) {
+    const dt = String(inst.sale_date || '').slice(0, 10);
+    const amt = Number(inst.deposit) || 0;
+    if (!dt || !bNames[inst.branch_id] || amt <= 0) continue;
+    entries.push({ date: dt, branchId: inst.branch_id, kind: 'downpayment', label: `Downpayment • ${inst.customer_name || inst.unit || ''}`, amount: amt });
+  }
+  for (const p of c.histFinance?.recentPayments || []) {
+    const dt = String(p.payment_date || '').slice(0, 10);
+    const amt = Number(p.amount) || 0;
+    if (!dt || !bNames[p.branch_id] || amt <= 0) continue;
+    entries.push({ date: dt, branchId: p.branch_id, kind: 'collection', label: `Installment Payment • ${p.customer_name || p.account_no || ''}`, amount: amt });
+  }
+  for (const e of c.histFinance?.recentExpenses || []) {
+    const dt = String(e.expense_date || '').slice(0, 10);
+    const amt = Number(e.amount) || 0;
+    if (!dt || !bNames[e.branch_id] || amt <= 0) continue;
+    entries.push({ date: dt, branchId: e.branch_id, kind: 'expense', label: `${e.expense_type || 'Expense'}${e.particular ? ` — ${e.particular}` : ''}`, amount: amt });
+  }
+  if (includeStock) {
+    for (const o of state.savedOrders || []) {
+      if (o.status === 'Cancelled' || o.status === 'Draft') continue;
+      for (const it of o.items || []) {
+        if (it.approved === false) continue;
+        const qty = Number(it.receivedQty) || 0;
+        const cost = Number(it.receivedCost) > 0 ? Number(it.receivedCost) : Number(it.unitCost) || 0;
+        const dt = String(it.receivedDate || o.updatedAt || '').slice(0, 10);
+        const amt = qty * cost;
+        if (!dt || !bNames[it.branchId] || amt <= 0) continue;
+        entries.push({ date: dt, branchId: it.branchId, kind: 'stock', label: `Stock Receipt • ${it.displayModel || it.model || ''} (${qty} pcs)`, amount: amt });
+      }
+    }
+  }
+  return entries;
+}
+
+function renderCashFlow() {
+  const start = document.getElementById('cfStart')?.value || `${todayStr.slice(0, 7)}-01`;
+  const end = document.getElementById('cfEnd')?.value || todayStr;
+  const branchFilter = document.getElementById('cfBranchFilter')?.value || 'ALL';
+  const branchIds = ['br-molave', 'br-tambulig', 'br-bonifacio'];
+  const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
+  const entries = buildCashFlowEntries();
+
+  const mkBucket = () => ({ cashSale: 0, downpayment: 0, collection: 0, cashIn: 0, expense: 0, stock: 0, cashOut: 0, net: 0 });
+  const addEntry = (b, e) => {
+    if (e.kind === 'cash_sale') { b.cashSale += e.amount; b.cashIn += e.amount; }
+    else if (e.kind === 'downpayment') { b.downpayment += e.amount; b.cashIn += e.amount; }
+    else if (e.kind === 'collection') { b.collection += e.amount; b.cashIn += e.amount; }
+    else if (e.kind === 'expense') { b.expense += e.amount; b.cashOut += e.amount; }
+    else if (e.kind === 'stock') { b.stock += e.amount; b.cashOut += e.amount; }
+    b.net = b.cashIn - b.cashOut;
+  };
+
+  const todayAll = mkBucket();
+  const rangeAll = mkBucket();
+  const todayByBranch = { 'br-molave': mkBucket(), 'br-tambulig': mkBucket(), 'br-bonifacio': mkBucket() };
+  const rangeByBranch = { 'br-molave': mkBucket(), 'br-tambulig': mkBucket(), 'br-bonifacio': mkBucket() };
+  const dailyMap = new Map();
+  const monthlyMap = new Map();
+
+  for (const e of entries) {
+    if (e.date === todayStr) {
+      addEntry(todayByBranch[e.branchId], e);
+      if (branchFilter === 'ALL' || e.branchId === branchFilter) addEntry(todayAll, e);
+    }
+    if (e.date >= start && e.date <= end) {
+      addEntry(rangeByBranch[e.branchId], e);
+      if (branchFilter === 'ALL' || e.branchId === branchFilter) {
+        addEntry(rangeAll, e);
+        if (!dailyMap.has(e.date)) dailyMap.set(e.date, mkBucket());
+        addEntry(dailyMap.get(e.date), e);
+      }
+    }
+    if (branchFilter === 'ALL' || e.branchId === branchFilter) {
+      const mo = e.date.slice(0, 7);
+      if (!monthlyMap.has(mo)) monthlyMap.set(mo, mkBucket());
+      addEntry(monthlyMap.get(mo), e);
+    }
+  }
+
+  const kpiGrid = document.getElementById('cfKpiGrid');
+  if (kpiGrid) {
+    const renderBigCfBox = (title, allB, byBr, periodFilter, labelPrefix, borderGold) => `
+      <div class="summary-box sales-big-box"${borderGold ? ' style="border-color:var(--gold);"' : ''}>
+        <div class="sales-big-main cf-kpi-drill" data-branch="${branchFilter}" data-period="${periodFilter}" data-label="${labelPrefix}" title="Click for supporting cash flow breakdown">
+          <div class="sales-big-title">${title}</div>
+          <strong class="sales-big-val" style="color:${allB.net >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(allB.net)}</strong>
+          <div class="summary-note">In: <strong style="color:var(--green);">${fmtCurrency(allB.cashIn)}</strong> • Out: <strong style="color:var(--danger);">${fmtCurrency(allB.cashOut)}</strong> • 🔎</div>
+        </div>
+        <div class="sales-branch-subgrid">
+          ${branchIds
+            .map((bid) => {
+              const b = byBr[bid];
+              return `
+              <div class="sales-branch-chip cf-kpi-drill" data-branch="${bid}" data-period="${periodFilter}" data-label="${branchNames[bid]} ${labelPrefix}" title="Click for ${branchNames[bid]} cash flow breakdown">
+                <span class="sales-chip-name">${branchNames[bid]}</span>
+                <strong class="sales-chip-val" style="color:${b.net >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(b.net)}</strong>
+                <span class="sales-chip-sub">In ${fmtCurrency(b.cashIn)}</span>
+                <span class="sales-chip-sub">Out ${fmtCurrency(b.cashOut)}</span>
+              </div>`;
+            })
+            .join('')}
+        </div>
+      </div>`;
+
+    kpiGrid.innerHTML =
+      renderBigCfBox(`TODAY'S NET CASH FLOW (${todayStr})`, todayAll, todayByBranch, todayStr, "Today's Cash Flow", true) +
+      renderBigCfBox(`RANGE NET CASH FLOW (${start} → ${end})`, rangeAll, rangeByBranch, '', 'Range Cash Flow', false);
+
+    kpiGrid.querySelectorAll('.cf-kpi-drill').forEach((el) => {
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        openCashFlowDrilldown(el.dataset.branch || 'ALL', el.dataset.period || '', el.dataset.label || 'Cash Flow');
+      });
+    });
+  }
+
+  const renderRows = (rows, tbodySel, badgeSel, unitWord) => {
+    const badge = document.getElementById(badgeSel);
+    if (badge) badge.textContent = `${rows.length} ${unitWord}${rows.length === 1 ? '' : 's'}`;
+    const tbody = document.querySelector(`${tbodySel} tbody`);
+    if (!tbody) return;
+    tbody.innerHTML = rows.length
+      ? rows
+          .map(
+            ([per, b]) => `
+            <tr class="sales-cash-cell" data-period="${per}" data-label="Cash Flow (${per})" title="Click for supporting inflows & outflows">
+              <td><strong>${per}</strong></td>
+              <td>${fmtCurrency(b.cashSale)}</td>
+              <td>${fmtCurrency(b.downpayment)}</td>
+              <td>${fmtCurrency(b.collection)}</td>
+              <td style="color:var(--green);"><strong>${fmtCurrency(b.cashIn)}</strong></td>
+              <td style="color:var(--danger);">${fmtCurrency(b.expense)}</td>
+              <td style="color:#f59e0b;">${fmtCurrency(b.stock)}</td>
+              <td style="color:${b.net >= 0 ? 'var(--green)' : 'var(--danger)'};"><strong>${fmtCurrency(b.net)}</strong></td>
+            </tr>`
+          )
+          .join('')
+      : '<tr><td colspan="8" class="muted">No cash flow entries recorded in this period.</td></tr>';
+  };
+
+  renderRows([...dailyMap.entries()].sort((a, b) => b[0].localeCompare(a[0])), '#cfDailyTable', 'cfDailyCountBadge', 'day');
+  renderRows([...monthlyMap.entries()].sort((a, b) => b[0].localeCompare(a[0])), '#cfMonthlyTable', 'cfMonthlyCountBadge', 'month');
+}
+
+function openCashFlowDrilldown(branchId, periodFilter, label) {
+  const modal = document.getElementById('salesDrilldownModal');
+  if (!modal) return;
+  const start = document.getElementById('cfStart')?.value || `${todayStr.slice(0, 7)}-01`;
+  const end = document.getElementById('cfEnd')?.value || todayStr;
+  const bNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio', ALL: 'All Branches' };
+  const exactDate = /^\d{4}-\d{2}-\d{2}$/.test(periodFilter) ? periodFilter : '';
+  const exactMonth = !exactDate && /^\d{4}-\d{2}$/.test(periodFilter) ? periodFilter : '';
+
+  const rows = buildCashFlowEntries()
+    .filter((e) => {
+      if (branchId !== 'ALL' && e.branchId !== branchId) return false;
+      if (exactDate) return e.date === exactDate;
+      if (exactMonth) return e.date.startsWith(exactMonth);
+      return e.date >= start && e.date <= end;
+    })
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+  let tIn = 0, tOut = 0;
+  for (const r of rows) {
+    if (r.kind === 'expense' || r.kind === 'stock') tOut += r.amount;
+    else tIn += r.amount;
+  }
+  const tNet = tIn - tOut;
+  const kindLabels = { cash_sale: 'Cash Sale', downpayment: 'Downpayment', collection: 'Installment Coll.', expense: 'Op. Expense', stock: 'Stock Paid' };
+
+  document.getElementById('salesDrilldownTitle').textContent = `${label} — ${bNames[branchId] || branchId}`;
+  document.getElementById('salesDrilldownSub').textContent = periodFilter ? `Period: ${periodFilter}` : `Period: ${start} → ${end}`;
+  document.getElementById('salesDrilldownFormula').innerHTML = `<strong>Cash Flow Formula:</strong> Total Cash In (<code>${fmtCurrency(tIn)}</code>) − Total Cash Out (<code>${fmtCurrency(tOut)}</code>) = <strong style="color:${tNet >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(tNet)}</strong> (${rows.length} entries).`;
+  document.querySelector('#salesDrilldownTable thead').innerHTML = '<tr><th>Date</th><th>Branch</th><th>Type</th><th>Description</th><th>Cash In</th><th>Cash Out</th></tr>';
+  const tbody = document.querySelector('#salesDrilldownTable tbody');
+  const CHUNK = 120;
+  let shown = Math.min(CHUNK, rows.length);
+  const draw = () => {
+    const bodyHtml = rows.length
+      ? rows
+          .slice(0, shown)
+          .map((r) => {
+            const isOut = r.kind === 'expense' || r.kind === 'stock';
+            return `<tr><td>${r.date}</td><td>${bNames[r.branchId] || r.branchId}</td><td>${kindLabels[r.kind] || r.kind}</td><td>${r.label}</td><td style="color:var(--green);">${isOut ? '—' : fmtCurrency(r.amount)}</td><td style="color:var(--danger);">${isOut ? fmtCurrency(r.amount) : '—'}</td></tr>`;
+          })
+          .join('')
+      : '<tr><td colspan="6" class="muted">No cash flow entries in this period.</td></tr>';
+    const moreHtml =
+      shown < rows.length
+        ? `<tr><td colspan="6" style="text-align:center;padding:8px;"><button type="button" class="secondary" id="cfDrillMoreBtn" style="padding:5px 10px;font-size:11px;min-height:30px;">Load ${Math.min(CHUNK, rows.length - shown)} more (${shown} / ${rows.length})</button> <button type="button" class="secondary" id="cfDrillAllBtn" style="padding:5px 10px;font-size:11px;min-height:30px;">Show All (${rows.length})</button></td></tr>`
+        : '';
+    tbody.innerHTML = bodyHtml + moreHtml + `<tr style="background:rgba(255,255,255,0.05);font-weight:700;"><td colspan="4">TOTAL (${rows.length} entries) • Net: ${fmtCurrency(tNet)}</td><td style="color:var(--green);">${fmtCurrency(tIn)}</td><td style="color:var(--danger);">${fmtCurrency(tOut)}</td></tr>`;
+    document.getElementById('cfDrillMoreBtn')?.addEventListener('click', () => { shown = Math.min(rows.length, shown + CHUNK); draw(); });
+    document.getElementById('cfDrillAllBtn')?.addEventListener('click', () => { shown = rows.length; draw(); });
+  };
+  draw();
+  modal.classList.remove('hidden');
+}
+
+const shiftCfMonth = (delta) => {
+  const mEl = document.getElementById('cfMonthInput');
+  const cur = mEl?.value || todayStr.slice(0, 7);
+  const [y, m] = cur.split('-').map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + delta, 1));
+  const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  if (mEl) mEl.value = ym;
+  const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  document.getElementById('cfStart').value = `${ym}-01`;
+  document.getElementById('cfEnd').value = ym === todayStr.slice(0, 7) ? todayStr : `${ym}-${String(lastDay).padStart(2, '0')}`;
+  renderCashFlow();
+};
+document.getElementById('cfPrevMonthBtn')?.addEventListener('click', () => shiftCfMonth(-1));
+document.getElementById('cfNextMonthBtn')?.addEventListener('click', () => shiftCfMonth(1));
+document.getElementById('cfMonthInput')?.addEventListener('change', () => shiftCfMonth(0));
+document.getElementById('cfApplyBtn')?.addEventListener('click', renderCashFlow);
+document.getElementById('cfRefreshBtn')?.addEventListener('click', () => loadCashFlow(true));
+document.getElementById('cfBranchFilter')?.addEventListener('change', renderCashFlow);
+document.getElementById('cfIncludeStockChk')?.addEventListener('change', renderCashFlow);
+document.getElementById('cfDailyToggle')?.addEventListener('click', () => {
+  const body = document.getElementById('cfDailyBody');
+  const caret = document.getElementById('cfDailyCaret');
+  if (body && caret) caret.textContent = body.classList.toggle('hidden') ? '+' : '−';
+});
+document.getElementById('cfMonthlyToggle')?.addEventListener('click', () => {
+  const body = document.getElementById('cfMonthlyBody');
+  const caret = document.getElementById('cfMonthlyCaret');
+  if (body && caret) caret.textContent = body.classList.toggle('hidden') ? '+' : '−';
+});
+['cfDailyTable', 'cfMonthlyTable'].forEach((tid) => {
+  document.getElementById(tid)?.addEventListener('click', (e) => {
+    const tr = e.target.closest('tr.sales-cash-cell');
+    if (!tr) return;
+    const bf = document.getElementById('cfBranchFilter')?.value || 'ALL';
+    openCashFlowDrilldown(bf, tr.dataset.period || '', tr.dataset.label || 'Cash Flow');
+  });
+});
 
 function getCashSaleAmount(m) {
   const qty = Math.abs(Number(m.delta_qty) || 0);
