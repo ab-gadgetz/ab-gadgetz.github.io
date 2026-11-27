@@ -652,11 +652,23 @@ async function main() {
   }
 
   const rawHtml = fs.readFileSync(path.join(publicDir, 'catalog.html'), 'utf8');
+  const photoOverridesPath = path.join(publicDir, 'product-photos.json');
+  const photoOverrides = fs.existsSync(photoOverridesPath)
+    ? (JSON.parse(fs.readFileSync(photoOverridesPath, 'utf8'))?.photos || {})
+    : {};
   const pcCatalogPath = path.join(publicDir, 'branch-catalogs.json');
   const pcCatalogSnapshot = fs.existsSync(pcCatalogPath) ? JSON.parse(fs.readFileSync(pcCatalogPath, 'utf8')) : null;
   for (const b of BRANCHES) {
     const pcBranch = pcCatalogSnapshot?.[b.slug];
     if (pcBranch && (!liveSynced || process.env.GITHUB_EVENT_NAME === 'push')) {
+      if (Array.isArray(pcBranch.catalog)) {
+        for (const item of pcBranch.catalog) {
+          if (Array.isArray(photoOverrides[item.productId])) {
+            item.imageUrls = photoOverrides[item.productId];
+            item.imageUrl = item.imageUrls[0] || '';
+          }
+        }
+      }
       fs.writeFileSync(path.join(distDir, 'data', b.slug + '.json'), JSON.stringify(pcBranch));
       fs.mkdirSync(path.join(distDir, b.slug), { recursive: true });
       fs.writeFileSync(path.join(distDir, b.slug, 'index.html'), rawHtml);
@@ -682,7 +694,9 @@ async function main() {
         }
         if (otherBranches.length === 0) continue;
       }
-      const imageUrls = String(p.image_urls || '').split(/[|\r\n]+/).map((u) => u.trim()).filter(Boolean);
+      const imageUrls = Array.isArray(photoOverrides[p.id])
+        ? photoOverrides[p.id]
+        : String(p.image_urls || '').split(/[|\r\n]+/).map((u) => u.trim()).filter(Boolean);
       let price = branchPrice.get(`${b.id}::${p.id}`) ?? p.base_price;
       if ((!price || price <= 0) && otherBranches.length > 0) {
         for (const ob of BRANCHES) {
@@ -771,7 +785,9 @@ async function main() {
         updatedAt: syncedAtIso,
       };
     }
-    const imageUrls = String(p.image_urls || '').split(/[|\r\n]+/).map((u) => u.trim()).filter(Boolean);
+    const imageUrls = Array.isArray(photoOverrides[p.id])
+      ? photoOverrides[p.id]
+      : String(p.image_urls || '').split(/[|\r\n]+/).map((u) => u.trim()).filter(Boolean);
     return {
       ...p,
       base_price: latestPrice,

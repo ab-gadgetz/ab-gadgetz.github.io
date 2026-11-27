@@ -432,6 +432,29 @@ async function staticGhApi(url, opts = {}) {
       }
     }
   }
+  if (pathname === '/api/products/photos' && method === 'PATCH') {
+    const body = JSON.parse(opts.body || '{}');
+    const productId = body.productId;
+    const imageUrls = Array.isArray(body.imageUrls) ? body.imageUrls.map((u) => String(u || '').trim()).filter(Boolean) : [];
+    const prod = state.inventory?.items?.find((i) => i.id === productId);
+    if (prod) {
+      prod.imageUrls = imageUrls;
+      prod.imageUrl = imageUrls[0] || '';
+    }
+    const cachedProd = ghBundleCache?.inventory?.items?.find((i) => i.id === productId);
+    if (cachedProd) {
+      cachedProd.imageUrls = imageUrls;
+      cachedProd.imageUrl = imageUrls[0] || '';
+    }
+    saveLocalPhotoOverride(productId, imageUrls);
+    const token = localStorage.getItem('bs_gh_pub_token');
+    if (!token) {
+      document.getElementById('photoGhTokenWrap')?.classList.remove('hidden');
+      throw new Error('Saved locally. Enter your GitHub Token above once to save photo edits online.');
+    }
+    await pushProductPhotosToGh(productId, imageUrls, token);
+    return { ok: true, syncedToGh: true };
+  }
   if (method !== 'GET') {
     throw new Error('Make edits in your Local Admin Portal (http://localhost:3456), then click ☁️ Update Online Website.');
   }
@@ -890,8 +913,14 @@ async function loadInventory(forceRefresh = false) {
     if (IS_STATIC_GH && state.inventory?.items) {
       const localCosts = getLocalSupplierCostsMap();
       const lcOverrides = (() => { try { return JSON.parse(localStorage.getItem('ab_lifecycle_overrides_v1') || '{}'); } catch { return {}; } })();
+      const photoOverrides = getLocalPhotoOverrides();
       const todayIso = manilaTodayClient();
       for (const item of state.inventory.items) {
+        const pov = photoOverrides[item.id];
+        if (Array.isArray(pov)) {
+          item.imageUrls = pov;
+          item.imageUrl = pov[0] || '';
+        }
         const ov = localCosts[item.id];
         if (ov) {
           item.cost_ab = ov.cost_ab;
@@ -972,6 +1001,110 @@ function syncCostInputs() {
   document.getElementById('costOnline').value = prod.cost_online ?? '';
 }
 
+function getLocalPhotoOverrides() {
+  try {
+    return JSON.parse(localStorage.getItem('ab_photo_overrides_v1') || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function saveLocalPhotoOverride(productId, imageUrls) {
+  const map = getLocalPhotoOverrides();
+  map[productId] = imageUrls;
+  try {
+    localStorage.setItem('ab_photo_overrides_v1', JSON.stringify(map));
+  } catch {}
+}
+
+async function pushProductPhotosToGh(productId, imageUrls, token) {
+  const repo = 'ab-gadgetz/ab-gadgetz.github.io';
+  const apiUrl = `https://api.github.com/repos/${repo}/contents/public/product-photos.json`;
+  const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
+  let sha;
+  let existingPhotos = {};
+  const getRes = await fetch(apiUrl, { headers });
+  if (getRes.ok) {
+    const info = await getRes.json();
+    sha = info.sha;
+    try {
+      const decoded = decodeURIComponent(escape(atob(String(info.content || '').replace(/\n/g, ''))));
+      existingPhotos = JSON.parse(decoded)?.photos || {};
+    } catch {}
+  }
+  existingPhotos[productId] = imageUrls;
+  const payload = JSON.stringify({ updatedAt: new Date().toISOString(), photos: existingPhotos }, null, 2);
+  const putRes = await fetch(apiUrl, {
+    method: 'PUT',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message: `Update product photos (${productId}) from web portal`,
+      content: btoa(unescape(encodeURIComponent(payload))),
+      ...(sha ? { sha } : {}),
+    }),
+  });
+  if (!putRes.ok) {
+    const errData = await putRes.json().catch(() => ({}));
+    throw new Error(errData.message || `GitHub photo sync failed (${putRes.status})`);
+  }
+  // Trigger catalog rebuild in background so customer portals update automatically
+  fetch(`https://api.github.com/repos/${repo}/actions/workflows/deploy-catalog.yml/dispatches`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ref: 'main' }),
+  }).catch(() => {});
+  return true;
+}
+
+async function compressImageFileToBase64(file, maxDim = 1200, quality = 0.85) {
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Failed to read selected photo.'));
+    reader.readAsDataURL(file);
+  });
+  const img = await new Promise((resolve, reject) => {
+    const i = new Image();
+    i.onload = () => resolve(i);
+    i.onerror = () => reject(new Error('Invalid image file.'));
+    i.src = dataUrl;
+  });
+  const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
+  const w = Math.max(1, Math.round((img.width || 1) * scale));
+  const h = Math.max(1, Math.round((img.height || 1) * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+  const jpegUrl = canvas.toDataURL('image/jpeg', quality);
+  return jpegUrl.split(',')[1] || '';
+}
+
+async function uploadProductImageToGh(file, sku, token) {
+  const b64 = await compressImageFileToBase64(file);
+  const safeSku = String(sku || 'product').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'product';
+  const fileName = `${safeSku}-${Date.now()}.jpg`;
+  const repo = 'ab-gadgetz/ab-gadgetz.github.io';
+  const apiUrl = `https://api.github.com/repos/${repo}/contents/public/product-images/${fileName}`;
+  const putRes = await fetch(apiUrl, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      message: `Upload product photo ${fileName} from web portal`,
+      content: b64,
+    }),
+  });
+  if (!putRes.ok) {
+    const errData = await putRes.json().catch(() => ({}));
+    throw new Error(errData.message || `GitHub image upload failed (${putRes.status})`);
+  }
+  return `https://raw.githubusercontent.com/${repo}/main/public/product-images/${fileName}`;
+}
+
 let activeAdminPhotoProductId = '';
 
 function openAdminPhotoModal(productId) {
@@ -982,6 +1115,11 @@ function openAdminPhotoModal(productId) {
   document.getElementById('adminPhotoModalTitle').textContent = `${prod.brand || ''} ${prod.model || prod.name}`.trim();
   document.getElementById('adminPhotoModalSub').textContent = `${prod.website_codes || prod.sku} • ${(prod.imageUrls || []).length} photo(s)`;
   document.getElementById('photoMsg').textContent = '';
+  const tokWrap = document.getElementById('photoGhTokenWrap');
+  const tokInput = document.getElementById('photoGhTokenInput');
+  const savedTok = localStorage.getItem('bs_gh_pub_token') || '';
+  if (tokInput) tokInput.value = savedTok;
+  if (tokWrap) tokWrap.classList.toggle('hidden', !IS_STATIC_GH || Boolean(savedTok));
   const abEl = document.getElementById('modalCostAb');
   const akEl = document.getElementById('modalCostAk');
   const onEl = document.getElementById('modalCostOnline');
@@ -1046,7 +1184,7 @@ function renderPhotoEditor() {
         body: JSON.stringify({ productId: prod.id, imageUrls: nextUrls }),
       });
       if (msg) msg.textContent = statusText;
-      await loadInventory();
+      renderInventory();
       if (state.selectedCustomerId) await loadCustomerCatalog(state.selectedCustomerId);
       renderPhotoEditor();
     } catch (err) {
@@ -1134,11 +1272,58 @@ document.getElementById('addPhotoBtn')?.addEventListener('click', async () => {
     });
     document.getElementById('photoUrlInput').value = '';
     msg.textContent = 'Photo added!';
-    await loadInventory();
+    renderInventory();
     if (state.selectedCustomerId) await loadCustomerCatalog(state.selectedCustomerId);
     renderPhotoEditor();
   } catch (err) {
     msg.textContent = err.message;
+  }
+});
+
+document.getElementById('savePhotoGhTokenBtn')?.addEventListener('click', () => {
+  const val = (document.getElementById('photoGhTokenInput')?.value || '').trim();
+  const msg = document.getElementById('photoMsg');
+  if (!val) {
+    if (msg) msg.textContent = 'Paste a valid GitHub Token first.';
+    return;
+  }
+  localStorage.setItem('bs_gh_pub_token', val);
+  document.getElementById('photoGhTokenWrap')?.classList.add('hidden');
+  if (msg) msg.textContent = 'GitHub Token saved! You can now upload or delete photos from your phone or PC.';
+});
+
+document.getElementById('uploadPhotoFileBtn')?.addEventListener('click', () => {
+  document.getElementById('photoFileInput')?.click();
+});
+
+document.getElementById('photoFileInput')?.addEventListener('change', async (e) => {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  if (!file) return;
+  const pid = activeAdminPhotoProductId || document.getElementById('photoProduct')?.value;
+  const prod = state.inventory?.items?.find((i) => i.id === pid);
+  const msg = document.getElementById('photoMsg');
+  if (!pid || !prod) return;
+  const token = localStorage.getItem('bs_gh_pub_token') || '';
+  if (!token) {
+    document.getElementById('photoGhTokenWrap')?.classList.remove('hidden');
+    if (msg) msg.textContent = 'Enter your GitHub Token above once to upload photos from phone or PC web.';
+    return;
+  }
+  try {
+    if (msg) msg.textContent = 'Uploading photo to GitHub...';
+    const uploadedUrl = await uploadProductImageToGh(file, prod.website_codes || prod.sku || prod.id, token);
+    const nextUrls = [...(prod.imageUrls || []), uploadedUrl];
+    await api('/api/products/photos', {
+      method: 'PATCH',
+      body: JSON.stringify({ productId: pid, imageUrls: nextUrls }),
+    });
+    if (msg) msg.textContent = 'Photo uploaded & saved online!';
+    renderInventory();
+    if (state.selectedCustomerId) await loadCustomerCatalog(state.selectedCustomerId);
+    renderPhotoEditor();
+  } catch (err) {
+    if (msg) msg.textContent = err.message;
   }
 });
 

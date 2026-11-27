@@ -1734,14 +1734,24 @@
         <button type="button" id="closeAdminPhotoModalBtn" class="secondary" style="padding:6px 12px;">✕</button>
       </div>
 
-      <p class="muted small" style="margin:0 0 10px;">Paste an image address (URL) to add photos, remove unwanted photos, or use <strong>◀ / ▶ / Make 1st</strong> to arrange which photo appears first.</p>
+      <p class="muted small" style="margin:0 0 10px;">Upload from your phone/PC, paste an image address (URL), remove unwanted photos (✕), or use <strong>◀ / ▶ / Make 1st</strong> to arrange which photo appears first.</p>
+
+      <div id="photoGhTokenWrap" class="hidden" style="margin-bottom:10px;padding:8px 10px;border:1px solid var(--gold);border-radius:8px;background:rgba(231,197,95,0.08);">
+        <label for="photoGhTokenInput" style="font-size:11px;color:var(--gold-bright);">GitHub Token (Enter once to upload/delete photos from Mobile or PC Web)</label>
+        <div style="display:flex;gap:6px;margin-top:4px;">
+          <input type="password" id="photoGhTokenInput" placeholder="ghp_... or github_pat_..." style="flex:1;padding:6px 8px;font-size:12px;" />
+          <button type="button" id="savePhotoGhTokenBtn" style="padding:6px 12px;font-size:12px;">SAVE TOKEN</button>
+        </div>
+      </div>
 
       <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">
-        <div style="flex:1;min-width:220px;">
+        <div style="flex:1;min-width:200px;">
           <label for="photoUrlInput">Paste Image Address (URL)</label>
           <input type="url" id="photoUrlInput" placeholder="https://..." />
         </div>
-        <button type="button" id="addPhotoBtn">+ ADD PHOTO</button>
+        <button type="button" id="addPhotoBtn">+ ADD URL</button>
+        <input type="file" id="photoFileInput" accept="image/*" class="hidden" />
+        <button type="button" id="uploadPhotoFileBtn" class="secondary" style="border-color:var(--gold);color:var(--gold-bright);">📷 Upload Photo</button>
         <button type="button" class="publish-github-btn secondary" style="border-color:var(--gold);color:var(--gold-bright);" title="Upload your new product photos to your online website">☁️ Save Photos Online</button>
       </div>
 
