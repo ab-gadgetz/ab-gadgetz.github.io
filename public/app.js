@@ -107,7 +107,7 @@ function switchTab(tab) {
   });
 
   setMenuOpen(false);
-  refreshActiveTab();
+  requestAnimationFrame(() => setTimeout(refreshActiveTab, 0));
 }
 
 document.querySelectorAll('.tab').forEach((btn) => {
@@ -209,9 +209,9 @@ let ghBundleFetchedAt = 0;
 let ghBundlePromise = null;
 
 async function getGhBundle(force = false) {
-  if (!force && ghBundleCache && Date.now() - ghBundleFetchedAt < 60000) return ghBundleCache;
+  if (!force && ghBundleCache && Date.now() - ghBundleFetchedAt < 300000) return ghBundleCache;
   if (!force && ghBundlePromise) return ghBundlePromise;
-  ghBundlePromise = fetch(`../data/admin-bundle.json?v=${force ? Date.now() : Math.floor(Date.now() / 60000)}`)
+  ghBundlePromise = fetch(`../data/admin-bundle.json?v=${force ? Date.now() : Math.floor(Date.now() / 300000)}`)
     .then(async (res) => {
       if (!res.ok) throw new Error(`Failed to load cloud bundle (HTTP ${res.status})`);
       ghBundleCache = await res.json();
@@ -882,33 +882,39 @@ async function saveProductSupplierCosts(productId, { costAb, costAk, costOnline 
   return { nextAb, nextAk, nextOn, bestCost, bestSupplier };
 }
 
-async function loadInventory() {
-  state.inventory = await api('/api/inventory');
-  if (IS_STATIC_GH && state.inventory?.items) {
-    const localCosts = getLocalSupplierCostsMap();
-    const lcOverrides = (() => { try { return JSON.parse(localStorage.getItem('ab_lifecycle_overrides_v1') || '{}'); } catch { return {}; } })();
-    const todayIso = manilaTodayClient();
-    for (const item of state.inventory.items) {
-      const ov = localCosts[item.id];
-      if (ov) {
-        item.cost_ab = ov.cost_ab;
-        item.cost_ak = ov.cost_ak;
-        item.cost_online = ov.cost_online;
-      }
-      const lov = lcOverrides[item.id];
-      if (lov) {
-        item.lifecycle_status = lov.lifecycle_status || item.lifecycle_status;
-        item.supplier_missing_since = lov.supplier_missing_since ?? item.supplier_missing_since;
-      }
-      if (item.lifecycle_status === 'Subject to Phaseout' && item.supplier_missing_since && hasThreeMonthsPassedClient(item.supplier_missing_since, todayIso)) {
-        item.lifecycle_status = 'Phaseout / Do Not Reorder';
+async function loadInventory(forceRefresh = false) {
+  const fresh = !forceRefresh && state.inventory && Date.now() - (state._invLoadedAt || 0) < 300000;
+  if (!fresh) {
+    state.inventory = await api('/api/inventory');
+    state._invLoadedAt = Date.now();
+    if (IS_STATIC_GH && state.inventory?.items) {
+      const localCosts = getLocalSupplierCostsMap();
+      const lcOverrides = (() => { try { return JSON.parse(localStorage.getItem('ab_lifecycle_overrides_v1') || '{}'); } catch { return {}; } })();
+      const todayIso = manilaTodayClient();
+      for (const item of state.inventory.items) {
+        const ov = localCosts[item.id];
+        if (ov) {
+          item.cost_ab = ov.cost_ab;
+          item.cost_ak = ov.cost_ak;
+          item.cost_online = ov.cost_online;
+        }
+        const lov = lcOverrides[item.id];
+        if (lov) {
+          item.lifecycle_status = lov.lifecycle_status || item.lifecycle_status;
+          item.supplier_missing_since = lov.supplier_missing_since ?? item.supplier_missing_since;
+        }
+        if (item.lifecycle_status === 'Subject to Phaseout' && item.supplier_missing_since && hasThreeMonthsPassedClient(item.supplier_missing_since, todayIso)) {
+          item.lifecycle_status = 'Phaseout / Do Not Reorder';
+        }
       }
     }
+    populateSelects();
+    loadSupplierCatalog().catch(() => {});
   }
-  populateSelects();
-  renderInventory();
-  renderHealth();
-  loadSupplierCatalog().catch(() => {});
+  if (state.activeTab === 'inventory') {
+    renderInventory();
+    renderHealth();
+  }
 }
 
 function populateSelects() {
@@ -7800,15 +7806,27 @@ function updateSyncPill(s) {
 
 // Event bindings
 document.getElementById('globalBranch').addEventListener('change', () => {
-  renderInventory();
-  renderHealth();
-  renderPlanning();
-  if (state.activeTab === 'cashflow') renderCashFlow();
-  loadActivity();
-  loadFinance();
-  loadReceivables();
+  if (state.activeTab === 'inventory') {
+    renderInventory();
+    renderHealth();
+    if (state.activeInvTool === 'restock') renderPlanning();
+  } else if (state.activeTab === 'cashflow') {
+    renderCashFlow();
+  } else if (state.activeTab === 'sales') {
+    loadSalesSummary(false);
+  } else if (state.activeTab === 'activity') {
+    loadActivity();
+  } else if (state.activeTab === 'finance') {
+    loadFinance();
+  } else if (state.activeTab === 'receivables') {
+    loadReceivables();
+  }
 });
-document.getElementById('invSearch').addEventListener('input', renderInventory);
+let invSearchTimer = null;
+document.getElementById('invSearch').addEventListener('input', () => {
+  clearTimeout(invSearchTimer);
+  invSearchTimer = setTimeout(renderInventory, 120);
+});
 document.getElementById('invCategory').addEventListener('change', renderInventory);
 document.getElementById('stockViewSelect').addEventListener('change', renderInventory);
 
@@ -8482,7 +8500,7 @@ async function loadSalesSummary(forceRefresh = false) {
   const fetchStart = '2020-01-01';
   const fetchEnd = end > todayStr ? end : todayStr;
 
-  const cacheValid = !forceRefresh && state.salesFullCache && Date.now() - state.salesFullCache.ts < 60000;
+  const cacheValid = !forceRefresh && state.salesFullCache && Date.now() - state.salesFullCache.ts < 300000;
   if (!cacheValid) {
     const [txRes, actRes, histFinRes, recRes] = await Promise.all([
       api(`/api/sales/summary?start=${encodeURIComponent(fetchStart)}&end=${encodeURIComponent(fetchEnd)}`).catch(() => ({ transactions: [] })),
@@ -8831,8 +8849,13 @@ document.getElementById('cfPrevMonthBtn')?.addEventListener('click', () => shift
 document.getElementById('cfNextMonthBtn')?.addEventListener('click', () => shiftCfMonth(1));
 document.getElementById('cfMonthInput')?.addEventListener('change', () => shiftCfMonth(0));
 document.getElementById('cfMonthInput')?.addEventListener('input', () => shiftCfMonth(0));
-document.getElementById('cfFromDay')?.addEventListener('input', () => syncCfDaysToRange(false));
-document.getElementById('cfToDay')?.addEventListener('input', () => syncCfDaysToRange(false));
+let cfDayInputTimer = null;
+const scheduleCfDaySync = () => {
+  clearTimeout(cfDayInputTimer);
+  cfDayInputTimer = setTimeout(() => syncCfDaysToRange(false), 80);
+};
+document.getElementById('cfFromDay')?.addEventListener('input', scheduleCfDaySync);
+document.getElementById('cfToDay')?.addEventListener('input', scheduleCfDaySync);
 document.getElementById('cfFromDay')?.addEventListener('change', () => syncCfDaysToRange(true));
 document.getElementById('cfToDay')?.addEventListener('change', () => syncCfDaysToRange(true));
 document.getElementById('cfRefreshBtn')?.addEventListener('click', () => loadCashFlow(true));
