@@ -102,17 +102,38 @@
             </label>
             <button type="button" id="cfRefreshBtn" class="secondary cf-apply-icon-btn" title="Refresh Cash Flow" aria-label="Refresh Cash Flow">🔄</button>
           </div>
+          <div class="nav-type-checks inv-type-icons hidden" id="productTypeFilter">
+            <label class="stock-view-option inv-type-icon selected" title="Cellphones" aria-label="Cellphones">
+              <input type="radio" name="productType" value="Cellphones" checked />
+              <span aria-hidden="true">📱</span>
+            </label>
+            <label class="stock-view-option inv-type-icon" title="Accessories" aria-label="Accessories">
+              <input type="radio" name="productType" value="Accessories" />
+              <span aria-hidden="true">🎧</span>
+            </label>
+          </div>
+          <div class="inv-tools-wrap hidden" style="margin-bottom:0;">
+            <button type="button" id="invToolsMenuBtn" class="grid-menu-btn inv-tools-icon-btn" aria-expanded="false" aria-controls="invToolsMenu" title="Inventory Tools" aria-label="Inventory Tools">
+              <svg width="16" height="16" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true">
+                <rect x="1" y="2" width="4" height="4" rx="1"/>
+                <rect x="7" y="2" width="4" height="4" rx="1"/>
+                <rect x="13" y="2" width="4" height="4" rx="1"/>
+                <rect x="1" y="9" width="4" height="4" rx="1"/>
+                <rect x="7" y="9" width="4" height="4" rx="1"/>
+                <rect x="13" y="9" width="4" height="4" rx="1"/>
+              </svg>
+              <span id="invToolsLabel" class="hidden">INVENTORY TOOLS</span>
+            </button>
+            <div class="inventory-tool-tabs hidden" id="invToolsMenu">
+              <button type="button" class="inv-tool-btn" data-tool="filters" aria-expanded="false">FILTERS &amp; SEARCH</button>
+              <button type="button" class="inv-tool-btn" data-tool="stockswap" aria-expanded="false">STOCK SWAP</button>
+              <button type="button" class="inv-tool-btn" data-tool="restock" aria-expanded="false">RESTOCK</button>
+              <button type="button" class="inv-tool-btn" data-tool="costcompare" aria-expanded="false">COST COMPARE</button>
+              <button type="button" class="inv-tool-btn" data-tool="health" aria-expanded="false">HEALTH</button>
+              <button type="button" class="inv-tool-btn" data-tool="lifecycle" aria-expanded="false">LIFECYCLE</button>
+            </div>
+          </div>
           <div id="cashierHeaderActions" class="hidden"></div>
-        </div>
-        <div class="nav-type-checks hidden" id="productTypeFilter">
-          <label class="stock-view-option selected" style="padding:7px 12px;">
-            <input type="radio" name="productType" value="Cellphones" checked />
-            Cellphones
-          </label>
-          <label class="stock-view-option" style="padding:7px 12px;">
-            <input type="radio" name="productType" value="Accessories" />
-            Accessories
-          </label>
         </div>
         <div class="nav-kpis hidden" id="inventorySummaryGrid"></div>
       </div>
@@ -131,40 +152,16 @@
 
     <!-- TAB 1: INVENTORY -->
     <section id="tab-inventory" class="tab-panel card">
-      <div id="invFilterBar" class="inv-filter-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
-        <div class="inv-tools-wrap" style="margin-bottom:0;">
-          <button type="button" id="invToolsMenuBtn" class="grid-menu-btn" aria-expanded="false" aria-controls="invToolsMenu">
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true">
-              <rect x="1" y="2" width="4" height="4" rx="1"/>
-              <rect x="7" y="2" width="4" height="4" rx="1"/>
-              <rect x="13" y="2" width="4" height="4" rx="1"/>
-              <rect x="1" y="9" width="4" height="4" rx="1"/>
-              <rect x="7" y="9" width="4" height="4" rx="1"/>
-              <rect x="13" y="9" width="4" height="4" rx="1"/>
-            </svg>
-            <span id="invToolsLabel">INVENTORY TOOLS</span>
-          </button>
-          <div class="inventory-tool-tabs hidden" id="invToolsMenu">
-            <button type="button" class="inv-tool-btn" data-tool="filters" aria-expanded="false">FILTERS &amp; SEARCH</button>
-            <button type="button" class="inv-tool-btn" data-tool="stockswap" aria-expanded="false">STOCK SWAP</button>
-            <button type="button" class="inv-tool-btn" data-tool="restock" aria-expanded="false">RESTOCK</button>
-            <button type="button" class="inv-tool-btn" data-tool="costcompare" aria-expanded="false">COST COMPARE</button>
-            <button type="button" class="inv-tool-btn" data-tool="health" aria-expanded="false">HEALTH</button>
-            <button type="button" class="inv-tool-btn" data-tool="lifecycle" aria-expanded="false">LIFECYCLE</button>
-          </div>
-        </div>
-
-        <div class="inv-group-wrap" style="display:flex;align-items:center;gap:6px;">
-          <label for="cardGroupingMode" style="margin:0;color:var(--muted);font-size:11px;">GROUPING</label>
-          <select id="cardGroupingMode" style="width:auto;padding:7px 10px;font-size:12px;">
+      <div id="invFilterBar" class="inv-filter-bar inv-compact-row">
+        <div class="inv-group-wrap">
+          <select id="cardGroupingMode" aria-label="Grouping" title="Grouping">
             <option value="brand">Group by Brand</option>
             <option value="flat">Flat List (No Grouping)</option>
           </select>
         </div>
 
-        <div class="inv-stockview-wrap" style="display:flex;align-items:center;gap:6px;">
-          <label for="stockViewSelect" style="margin:0;color:var(--muted);font-size:11px;">STOCK VIEW</label>
-          <select id="stockViewSelect" style="width:auto;padding:7px 10px;font-size:12px;">
+        <div class="inv-stockview-wrap">
+          <select id="stockViewSelect" aria-label="Stock View" title="Stock View">
             <option value="available">Available phones</option>
             <option value="subject_phaseout">Subject to Phaseout (&lt; 3 mos)</option>
             <option value="phaseout">Phaseout / Do Not Reorder (incl. 0)</option>
@@ -189,35 +186,26 @@
           <button type="button" id="invPriceSortBtn" class="secondary" style="padding:7px 10px;font-size:12px;">Price ↑</button>
         </div>
 
-        <div class="inv-date-pdf-wrap" style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
-          <div style="display:flex;align-items:center;gap:6px;">
-            <label for="inventoryReportDate" style="margin:0;color:var(--muted);font-size:11px;">INVENTORY AS OF DATE</label>
-            <input type="date" id="inventoryReportDate" aria-label="Inventory as of date" style="width:auto;padding:6px 10px;font-size:12px;" />
-          </div>
+        <div class="inv-date-pdf-wrap">
+          <input type="date" id="inventoryReportDate" aria-label="Inventory as of date" title="Inventory as of date" />
           <div class="download-actions" aria-label="Download inventory report">
-            <button type="button" id="inventoryPdfBtn" class="download-icon" title="Download inventory PDF" aria-label="Download inventory PDF">
+            <button type="button" id="inventoryPdfBtn" class="download-icon inv-dl-icon-only" title="Download inventory PDF" aria-label="Download inventory PDF">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path fill="#bd3b32" d="M4 2h11l5 5v15H4z"/>
                 <path fill="#fff" d="M14 2v6h6"/>
-                <text x="5.5" y="17" fill="#fff" font-size="6.5" font-family="Arial" font-weight="700">PDF</text>
               </svg>
-              <span>PDF</span>
             </button>
-            <button type="button" id="inventoryBlankPdfBtn" class="download-icon cashier-only-el hidden" title="Download blank count sheet PDF (no quantities)" aria-label="Download blank count sheet PDF">
+            <button type="button" id="inventoryBlankPdfBtn" class="download-icon inv-dl-icon-only cashier-only-el hidden" title="Download blank count sheet PDF (no quantities)" aria-label="Download blank count sheet PDF">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path fill="#3b5998" d="M4 2h11l5 5v15H4z"/>
                 <path fill="#fff" d="M14 2v6h6"/>
-                <text x="4" y="17" fill="#fff" font-size="5" font-family="Arial" font-weight="700">COUNT</text>
               </svg>
-              <span>BLANK</span>
             </button>
-            <button type="button" id="inventoryExcelBtn" class="download-icon admin-only-el" title="Download inventory Excel" aria-label="Download inventory Excel">
+            <button type="button" id="inventoryExcelBtn" class="download-icon inv-dl-icon-only admin-only-el" title="Download inventory Excel" aria-label="Download inventory Excel">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path fill="#1f7244" d="M4 2h11l5 5v15H4z"/>
                 <path fill="#fff" d="M14 2v6h6"/>
-                <text x="5" y="17" fill="#fff" font-size="6" font-family="Arial" font-weight="700">XLS</text>
               </svg>
-              <span>EXCEL</span>
             </button>
           </div>
         </div>

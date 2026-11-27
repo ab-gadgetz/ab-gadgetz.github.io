@@ -98,6 +98,7 @@ function switchTab(tab) {
   const isInv = tab === 'inventory';
   document.getElementById('productTypeFilter').classList.toggle('hidden', !isInv);
   document.getElementById('inventorySummaryGrid').classList.toggle('hidden', !isInv);
+  document.querySelector('.inv-tools-wrap')?.classList.toggle('hidden', !isInv || state.userRole !== 'ADMIN');
   document.getElementById('cashFlowHeaderActions')?.classList.toggle('hidden', tab !== 'cashflow' || state.userRole !== 'ADMIN');
 
   document.querySelectorAll('.mnav-btn[data-tab]').forEach((mb) => {
@@ -11211,7 +11212,7 @@ function applyRolePermissions() {
   if (showHiddenWrap) showHiddenWrap.classList.toggle('hidden', !isAdmin);
 
   // Cashier Inventory lockdown: hide Inventory Tools, bulk Cellphones/Accessories switcher, and limit Stock View to Available / Unavailable
-  document.querySelector('.inv-tools-wrap')?.classList.toggle('hidden', !isAdmin);
+  document.querySelector('.inv-tools-wrap')?.classList.toggle('hidden', !isAdmin || state.activeTab !== 'inventory');
   document.getElementById('cashierCatalogFilters')?.classList.toggle('hidden', role !== 'CASHIER');
   if (!isAdmin) {
     state.selectedProducts.clear();
