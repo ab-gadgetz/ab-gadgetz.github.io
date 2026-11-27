@@ -8522,9 +8522,10 @@ function buildCashFlowEntries() {
   }
   for (const p of c.histFinance?.recentPayments || []) {
     const dt = String(p.payment_date || '').slice(0, 10);
-    const amt = Number(p.amount) || 0;
+    const pen = Number(p.penalties) || 0;
+    const amt = (Number(p.amount) || 0) + pen;
     if (!dt || !bNames[p.branch_id] || amt <= 0) continue;
-    entries.push({ date: dt, branchId: p.branch_id, kind: 'collection', label: `Installment Payment • ${p.customer_name || p.account_no || ''}`, amount: amt });
+    entries.push({ date: dt, branchId: p.branch_id, kind: 'collection', label: `Installment Payment • ${p.customer_name || p.account_no || ''}${pen > 0 ? ` (incl. ₱${pen} penalty)` : ''}`, amount: amt });
   }
   for (const e of c.histFinance?.recentExpenses || []) {
     const dt = String(e.expense_date || '').slice(0, 10);
