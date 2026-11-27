@@ -144,6 +144,7 @@ async function loginAndFetchPortal(username, password) {
   const livePayments = [];
   const liveExpenses = [];
   const livePastDues = [];
+  const liveTransactions = [];
 
   const prevMonthDate = new Date(year, now.getMonth() - 1, 1);
   const prevY = prevMonthDate.getFullYear();
@@ -276,6 +277,32 @@ async function loginAndFetchPortal(username, password) {
       }
     }
 
+    for (let mOffset = 0; mOffset < 3; mOffset++) {
+      const td = new Date(now.getFullYear(), now.getMonth() - mOffset, 1);
+      const ty = td.getFullYear();
+      const tm = String(td.getMonth() + 1).padStart(2, '0');
+      try {
+        const txRes = await fetch(`${PORTAL_BASE}/panel/franchise/sales/${b.portalId}/${ty}/${tm}`, { headers: { Cookie: cookieHeader(jar) } });
+        if (txRes.ok) {
+          const txHtml = await txRes.text();
+          for (const tr of txHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
+            const tds = extractCells(tr[1]);
+            if (tds.length < 7) continue;
+            const date = tds[1] || '';
+            const orderNo = (tds[2] || '').trim().toUpperCase();
+            if (!/^\d{4}-\d{2}-\d{2}/.test(date) || !orderNo) continue;
+            const amount = parseNum(tds[3]);
+            const discount = parseNum(tds[4]);
+            const srp = parseNum(tds[5]);
+            const unitCost = parseNum(tds[6]);
+            if (unitCost > 0 || amount > 0) {
+              liveTransactions.push({ branch_id: b.id, tx_date: date.slice(0, 10), order_no: orderNo, amount, discount, srp, unit_cost: unitCost });
+            }
+          }
+        }
+      } catch {}
+    }
+
     try {
       const pdRes = await fetch(`${PORTAL_BASE}/panel/pastdues/${b.portalId}/all`, { headers: { Cookie: cookieHeader(jar) } });
       if (pdRes.ok) {
@@ -363,7 +390,7 @@ async function loginAndFetchPortal(username, password) {
     }
   } catch {}
 
-  return { inventoryByBranch: result, stockCardsByBranch, succeededCodesByBranch, liveInstallments, livePayments, liveExpenses, livePastDues, liveDeliveries };
+  return { inventoryByBranch: result, stockCardsByBranch, succeededCodesByBranch, liveInstallments, livePayments, liveExpenses, livePastDues, liveDeliveries, liveTransactions };
 }
 
 const PHONE_CATEGORIES = new Set(['CELLPHONES', 'REPO', 'KEYPAD CELLPHONES']);
@@ -422,6 +449,7 @@ async function main() {
   let allPayments = Array.isArray(seedSnapshot.portal_payments) ? [...seedSnapshot.portal_payments] : [];
   let allExpenses = Array.isArray(seedSnapshot.portal_expenses) ? [...seedSnapshot.portal_expenses] : [];
   let allPastDues = Array.isArray(seedSnapshot.portal_past_dues) ? [...seedSnapshot.portal_past_dues] : [];
+  let allTransactions = Array.isArray(seedSnapshot.portal_transactions) ? [...seedSnapshot.portal_transactions] : [];
   let allDeliveries = Array.isArray(seedSnapshot.portal_deliveries)
     ? seedSnapshot.portal_deliveries.map((d) => ({
         portalDeliveryId: d.portal_delivery_id,
@@ -476,7 +504,15 @@ async function main() {
         liveExpenses: fetchedExpenses,
         livePastDues: fetchedPastDues,
         liveDeliveries: fetchedDeliveries,
+        liveTransactions: fetchedTransactions,
       } = await loginAndFetchPortal(user, pass);
+      if (Array.isArray(fetchedTransactions) && fetchedTransactions.length > 0) {
+        const txMap = new Map(allTransactions.map((t) => [`${t.branch_id}::${t.order_no}`, t]));
+        for (const t of fetchedTransactions) {
+          txMap.set(`${t.branch_id}::${t.order_no}`, t);
+        }
+        allTransactions = [...txMap.values()].sort((a, b) => String(b.tx_date).localeCompare(String(a.tx_date)));
+      }
       if (fetchedDeliveries && fetchedDeliveries.length > 0) {
         allDeliveries = fetchedDeliveries.map((d) => ({
           ...d,
@@ -877,7 +913,7 @@ async function main() {
     catalogViews: { byBranch: catalogViewsByBranch, total: viewsTotal, weekly: viewsWeekly, monthly: viewsMonthly },
     allMovements: allMovements.slice(0, 6000),
     allInstallments,
-    portal_transactions: seedSnapshot.portal_transactions || [],
+    portal_transactions: allTransactions,
     allPayments,
     allExpenses,
     allPastDues,
