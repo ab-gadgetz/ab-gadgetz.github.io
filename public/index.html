@@ -55,8 +55,7 @@
         </div>
       </div>
       <label for="ownerPinInput" id="pinInputLabel">6-DIGIT PIN</label>
-      <input type="password" id="ownerPinInput" inputmode="numeric" maxlength="6" pattern="\d{6}" placeholder="Enter 6-digit PIN" />
-      <button type="button" id="authSubmitBtn" style="width:100%;margin-top:12px;">UNLOCK PORTAL</button>
+      <input type="password" id="ownerPinInput" inputmode="numeric" maxlength="6" pattern="\d{6}" placeholder="Enter 6-digit PIN" autocomplete="one-time-code" />
       <div id="authErrorMsg" class="error-msg"></div>
     </div>
 

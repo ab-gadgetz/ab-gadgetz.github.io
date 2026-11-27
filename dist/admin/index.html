@@ -11,7 +11,7 @@
   <link rel="icon" href="../ab-logo-square.png" type="image/png" />
   <link rel="apple-touch-icon" href="../ab-logo-square.png" />
   <title>Owner Admin Portal</title>
-  <link rel="stylesheet" href="../styles.css?v=1795788497520" />
+  <link rel="stylesheet" href="../styles.css?v=1795788785278" />
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
@@ -55,8 +55,7 @@
         </div>
       </div>
       <label for="ownerPinInput" id="pinInputLabel">6-DIGIT PIN</label>
-      <input type="password" id="ownerPinInput" inputmode="numeric" maxlength="6" pattern="\d{6}" placeholder="Enter 6-digit PIN" />
-      <button type="button" id="authSubmitBtn" style="width:100%;margin-top:12px;">UNLOCK PORTAL</button>
+      <input type="password" id="ownerPinInput" inputmode="numeric" maxlength="6" pattern="\d{6}" placeholder="Enter 6-digit PIN" autocomplete="one-time-code" />
       <div id="authErrorMsg" class="error-msg"></div>
     </div>
 
@@ -1857,6 +1856,6 @@
     </div>
   </div>
 
-  <script src="../app.js?v=1795788497520"></script>
+  <script src="../app.js?v=1795788785278"></script>
 </body>
 </html>

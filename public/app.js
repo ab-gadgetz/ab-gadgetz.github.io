@@ -11659,7 +11659,6 @@ async function checkAuth(reauthNotice = '') {
     : isStaffPath
       ? 'Tap your Role and Branch below, then enter your 6-digit PIN (View & PDF Download Only).'
       : 'Enter your 6-digit Owner PIN to unlock the portal.';
-  document.getElementById('authSubmitBtn').textContent = isSetup ? 'SAVE PIN & UNLOCK' : 'UNLOCK PORTAL';
   document.getElementById('authGate').dataset.mode = isSetup ? 'setup' : 'login';
 
   const roleWrap = document.getElementById('loginRoleWrap');
@@ -11676,13 +11675,17 @@ async function checkAuth(reauthNotice = '') {
   updateAuthRoleUI();
 }
 
-document.getElementById('authSubmitBtn').addEventListener('click', async () => {
-  const pin = document.getElementById('ownerPinInput').value.trim();
+let authSubmitting = false;
+async function submitAuthPin() {
+  if (authSubmitting) return;
+  const pinInput = document.getElementById('ownerPinInput');
+  const pin = (pinInput?.value || '').trim();
   const role = document.getElementById('loginRoleSelect')?.value || 'ADMIN';
   const branchId = document.getElementById('loginBranchSelect')?.value || 'br-molave';
   const mode = document.getElementById('authGate').dataset.mode || 'login';
   const errEl = document.getElementById('authErrorMsg');
-  errEl.textContent = '';
+  if (errEl) errEl.textContent = '';
+  authSubmitting = true;
   try {
     const res = await api(mode === 'setup' ? '/api/auth/setup' : '/api/auth/login', {
       method: 'POST',
@@ -11690,7 +11693,7 @@ document.getElementById('authSubmitBtn').addEventListener('click', async () => {
     });
     state.userRole = res.role || role || 'ADMIN';
     state.userBranchId = res.branchId || (state.userRole === 'ADMIN' ? '' : branchId);
-    document.getElementById('ownerPinInput').value = '';
+    if (pinInput) pinInput.value = '';
     if (state.reauthInPlace && state.inventory) {
       state.reauthInPlace = false;
       const gateEl = document.getElementById('authGate');
@@ -11704,12 +11707,24 @@ document.getElementById('authSubmitBtn').addEventListener('click', async () => {
       await bootApp();
     }
   } catch (err) {
-    errEl.textContent = err.message;
+    if (errEl) errEl.textContent = err.message;
+    if (pinInput) {
+      pinInput.value = '';
+      pinInput.focus();
+    }
+  } finally {
+    authSubmitting = false;
   }
+}
+
+document.getElementById('ownerPinInput')?.addEventListener('input', (e) => {
+  const digits = e.target.value.replace(/\D/g, '').slice(0, 6);
+  if (e.target.value !== digits) e.target.value = digits;
+  if (digits.length === 6) submitAuthPin();
 });
 
-document.getElementById('ownerPinInput').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') document.getElementById('authSubmitBtn').click();
+document.getElementById('ownerPinInput')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') submitAuthPin();
 });
 
 document.getElementById('logoutBtn').addEventListener('click', async () => {
