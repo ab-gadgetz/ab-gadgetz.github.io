@@ -2210,6 +2210,12 @@ body.role-cashier input[type="date"] {
   flex-wrap: wrap;
   margin-bottom: 8px;
 }
+.nav-heading-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .cf-top-actions {
   display: flex;
   align-items: center;

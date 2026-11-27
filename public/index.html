@@ -92,6 +92,17 @@
             <span id="menuHamburgerIcon" aria-hidden="true">☰</span>
             <span id="currentTabLabel">CASH FLOW</span>
           </button>
+          <div id="cashFlowHeaderActions" class="cf-top-actions">
+            <label class="restock-check-chip cf-icon-chip" title="Online Cash Flow (Cash Only) — Active: deduct Online Payments; Inactive: include Online money" aria-label="Online Cash Flow (Cash Only)">
+              <input type="checkbox" id="cfSeparateOnlineChk" checked />
+              <span aria-hidden="true">💳</span>
+            </label>
+            <label class="restock-check-chip cf-icon-chip" title="Include Stock Deliveries Outflow" aria-label="Include Stock Deliveries Outflow">
+              <input type="checkbox" id="cfIncludeStockChk" />
+              <span aria-hidden="true">📦</span>
+            </label>
+            <button type="button" id="cfRefreshBtn" class="secondary cf-apply-icon-btn" title="Refresh Cash Flow" aria-label="Refresh Cash Flow">🔄</button>
+          </div>
           <div id="cashierHeaderActions" class="hidden"></div>
         </div>
         <div class="nav-type-checks hidden" id="productTypeFilter">
@@ -1088,20 +1099,7 @@
     <!-- TAB: DAILY & MONTHLY CASH FLOW (EMPLOYER PORTAL) -->
     <section id="tab-cashflow" class="tab-panel active card">
       <div class="sub-panel">
-        <div class="cf-top-header">
-          <h3 style="margin:0;">Daily &amp; Monthly Cash Flow</h3>
-          <div class="cf-top-actions">
-            <label class="restock-check-chip cf-icon-chip" title="Online Cash Flow (Cash Only) — Checked: deduct Online Payments; Unchecked: include Online money" aria-label="Online Cash Flow (Cash Only)">
-              <input type="checkbox" id="cfSeparateOnlineChk" checked />
-              <span aria-hidden="true">💳</span>
-            </label>
-            <label class="restock-check-chip cf-icon-chip" title="Include Stock Deliveries Outflow" aria-label="Include Stock Deliveries Outflow">
-              <input type="checkbox" id="cfIncludeStockChk" />
-              <span aria-hidden="true">📦</span>
-            </label>
-            <button type="button" id="cfRefreshBtn" class="secondary cf-apply-icon-btn" title="Refresh Cash Flow" aria-label="Refresh Cash Flow">🔄</button>
-          </div>
-        </div>
+        <h3 style="margin:0 0 8px;">Daily &amp; Monthly Cash Flow</h3>
 
         <div class="sales-controls-bar cf-controls-bar">
           <div class="cf-ctrl-month">

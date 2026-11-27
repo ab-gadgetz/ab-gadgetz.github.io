@@ -98,6 +98,7 @@ function switchTab(tab) {
   const isInv = tab === 'inventory';
   document.getElementById('productTypeFilter').classList.toggle('hidden', !isInv);
   document.getElementById('inventorySummaryGrid').classList.toggle('hidden', !isInv);
+  document.getElementById('cashFlowHeaderActions')?.classList.toggle('hidden', tab !== 'cashflow' || state.userRole !== 'ADMIN');
 
   document.querySelectorAll('.mnav-btn[data-tab]').forEach((mb) => {
     mb.classList.toggle('active', mb.dataset.tab === tab);
@@ -11174,6 +11175,7 @@ function applyRolePermissions() {
     el.classList.toggle('hidden', role !== 'CASHIER');
   });
   document.getElementById('toggleSyncBtn')?.classList.toggle('hidden', !isAdmin);
+  document.getElementById('cashFlowHeaderActions')?.classList.toggle('hidden', !isAdmin || state.activeTab !== 'cashflow');
   const catEditWrap = document.getElementById('catEditMode')?.closest('label');
   if (catEditWrap) catEditWrap.classList.toggle('hidden', !isAdmin);
   if (!isAdmin && document.getElementById('catEditMode')) {
