@@ -11,7 +11,7 @@
   <link rel="icon" href="../ab-logo-square.png" type="image/png" />
   <link rel="apple-touch-icon" href="../ab-logo-square.png" />
   <title>Owner Admin Portal</title>
-  <link rel="stylesheet" href="../styles.css?v=1795787811433" />
+  <link rel="stylesheet" href="../styles.css?v=1795787955522" />
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
@@ -73,8 +73,7 @@
       </div>
       <div class="owner-bar-bottom">
         <div class="owner-branch">
-          <label for="globalBranch">BRANCH</label>
-          <select id="globalBranch">
+          <select id="globalBranch" aria-label="Branch" title="Branch">
             <option value="">All Branches</option>
           </select>
         </div>
@@ -1116,14 +1115,6 @@
             <input type="hidden" id="cfStart" />
             <input type="hidden" id="cfEnd" />
           </div>
-          <div class="cf-ctrl-branch">
-            <select id="cfBranchFilter" aria-label="Branch" title="Branch" style="width:auto;padding:3px 6px;font-size:11px;">
-              <option value="ALL">All Branches</option>
-              <option value="br-molave">Molave</option>
-              <option value="br-tambulig">Tambulig</option>
-              <option value="br-bonifacio">Bonifacio</option>
-            </select>
-          </div>
         </div>
 
         <div class="sales-big-grid" id="cfKpiGrid" style="margin-bottom:14px;"></div>
@@ -1889,6 +1880,6 @@
     </div>
   </div>
 
-  <script src="../app.js?v=1795787811433"></script>
+  <script src="../app.js?v=1795787955522"></script>
 </body>
 </html>

@@ -7801,6 +7801,7 @@ document.getElementById('globalBranch').addEventListener('change', () => {
   renderInventory();
   renderHealth();
   renderPlanning();
+  if (state.activeTab === 'cashflow') renderCashFlow();
   loadActivity();
   loadFinance();
   loadReceivables();
@@ -8608,7 +8609,7 @@ function renderCashFlow() {
   const box2Period = isDefaultToday ? monthYm : '';
   const box2Title = isDefaultToday ? `WHOLE MONTH NET CASH FLOW (${box2Start} → ${box2End})` : `RANGE NET CASH FLOW (${box2Start} → ${box2End})`;
   const box2Label = isDefaultToday ? `Whole Month Cash Flow (${monthYm})` : 'Range Cash Flow';
-  const branchFilter = document.getElementById('cfBranchFilter')?.value || 'ALL';
+  const branchFilter = document.getElementById('globalBranch')?.value || 'ALL';
   const branchIds = ['br-molave', 'br-tambulig', 'br-bonifacio'];
   const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
   const entries = buildCashFlowEntries();
@@ -8831,7 +8832,7 @@ document.getElementById('cfMonthlyToggle')?.addEventListener('click', () => {
   document.getElementById(tid)?.addEventListener('click', (e) => {
     const tr = e.target.closest('tr.sales-cash-cell');
     if (!tr) return;
-    const bf = document.getElementById('cfBranchFilter')?.value || 'ALL';
+    const bf = document.getElementById('globalBranch')?.value || 'ALL';
     openCashFlowDrilldown(bf, tr.dataset.period || '', tr.dataset.label || 'Cash Flow');
   });
 });
