@@ -1088,9 +1088,9 @@
     <!-- TAB: DAILY & MONTHLY CASH FLOW (EMPLOYER PORTAL) -->
     <section id="tab-cashflow" class="tab-panel active card">
       <div class="sub-panel">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+        <div class="cf-top-header">
           <h3 style="margin:0;">Daily &amp; Monthly Cash Flow</h3>
-          <div style="display:flex;align-items:center;gap:6px;">
+          <div class="cf-top-actions">
             <label class="restock-check-chip cf-icon-chip" title="Online Cash Flow (Cash Only) — Checked: deduct Online Payments; Unchecked: include Online money" aria-label="Online Cash Flow (Cash Only)">
               <input type="checkbox" id="cfSeparateOnlineChk" checked />
               <span aria-hidden="true">💳</span>
@@ -1099,7 +1099,8 @@
               <input type="checkbox" id="cfIncludeStockChk" />
               <span aria-hidden="true">📦</span>
             </label>
-            <button type="button" id="cfRefreshBtn" class="secondary" style="padding:5px 10px;font-size:12px;min-height:32px;">Refresh</button>
+            <button type="button" id="cfApplyBtn" class="cf-apply-icon-btn" title="Apply Date Range" aria-label="Apply Date Range">✓</button>
+            <button type="button" id="cfRefreshBtn" class="secondary cf-apply-icon-btn" title="Refresh Cash Flow" aria-label="Refresh Cash Flow">🔄</button>
           </div>
         </div>
 
@@ -1125,7 +1126,6 @@
           <div class="cf-ctrl-to">
             <input type="date" id="cfEnd" aria-label="To Date" title="To Date" style="width:auto;padding:4px 6px;font-size:11px;" />
           </div>
-          <button type="button" id="cfApplyBtn" class="cf-apply-icon-btn" title="Apply Date Range" aria-label="Apply Date Range">✓</button>
         </div>
 
         <div class="sales-big-grid" id="cfKpiGrid" style="margin-bottom:14px;"></div>

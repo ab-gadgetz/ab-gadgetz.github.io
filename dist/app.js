@@ -126,9 +126,9 @@ async function refreshActiveTab() {
     await loadInventory();
     if (state.activeInvTool === 'restock') await loadPlanning();
   } else if (tab === 'sales') {
-    await loadSalesSummary(true);
+    await loadSalesSummary();
   } else if (tab === 'cashflow') {
-    await loadCashFlow(true);
+    await loadCashFlow();
   } else if (tab === 'receivables') {
     await loadReceivables();
   } else if (tab === 'finance') {
@@ -203,14 +203,22 @@ const IS_STATIC_GH = window.location.hostname.endsWith('github.io');
 const LOGO_SQUARE_SRC = IS_STATIC_GH ? '../ab-logo-square.png' : '/ab-logo-square.png';
 let ghBundleCache = null;
 let ghBundleFetchedAt = 0;
+let ghBundlePromise = null;
 
 async function getGhBundle(force = false) {
-  if (!force && ghBundleCache && Date.now() - ghBundleFetchedAt < 30000) return ghBundleCache;
-  const res = await fetch(`../data/admin-bundle.json?v=${Date.now()}`);
-  if (!res.ok) throw new Error(`Failed to load cloud bundle (HTTP ${res.status})`);
-  ghBundleCache = await res.json();
-  ghBundleFetchedAt = Date.now();
-  return ghBundleCache;
+  if (!force && ghBundleCache && Date.now() - ghBundleFetchedAt < 60000) return ghBundleCache;
+  if (!force && ghBundlePromise) return ghBundlePromise;
+  ghBundlePromise = fetch(`../data/admin-bundle.json?v=${force ? Date.now() : Math.floor(Date.now() / 60000)}`)
+    .then(async (res) => {
+      if (!res.ok) throw new Error(`Failed to load cloud bundle (HTTP ${res.status})`);
+      ghBundleCache = await res.json();
+      ghBundleFetchedAt = Date.now();
+      return ghBundleCache;
+    })
+    .finally(() => {
+      ghBundlePromise = null;
+    });
+  return ghBundlePromise;
 }
 
 async function verifyGhOwnerPin(pin) {
@@ -11349,9 +11357,8 @@ async function bootApp() {
   document.getElementById('appShell').classList.remove('hidden');
   document.getElementById('mobileBottomNav')?.classList.remove('hidden');
   applyRolePermissions();
-  await Promise.all([loadInventory(), loadSyncLogs()]);
+  await Promise.all([loadInventory(), loadSyncLogs(), refreshActiveTab()]);
   applyRolePermissions();
-  await refreshActiveTab();
   connectEvents();
 }
 
