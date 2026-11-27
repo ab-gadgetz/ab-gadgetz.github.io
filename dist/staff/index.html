@@ -11,7 +11,7 @@
   <link rel="icon" href="../ab-logo-square.png" type="image/png" />
   <link rel="apple-touch-icon" href="../ab-logo-square.png" />
   <title>Staff Portal — AB Gadgetz</title>
-  <link rel="stylesheet" href="../styles.css?v=1795788144769" />
+  <link rel="stylesheet" href="../styles.css?v=1795788324221" />
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
@@ -101,6 +101,10 @@
               <span aria-hidden="true">📦</span>
             </label>
             <button type="button" id="cfRefreshBtn" class="secondary cf-apply-icon-btn" title="Refresh Cash Flow" aria-label="Refresh Cash Flow">🔄</button>
+          </div>
+          <div id="salesHeaderActions" class="cf-top-actions hidden">
+            <button type="button" id="salesApplyBtn" class="cf-apply-icon-btn" title="Apply Date Range" aria-label="Apply Date Range">✓</button>
+            <button type="button" id="salesRefreshBtn" class="secondary cf-apply-icon-btn" title="Refresh Sales" aria-label="Refresh Sales">🔄</button>
           </div>
           <div class="nav-type-checks inv-type-icons hidden" id="productTypeFilter">
             <label class="stock-view-option inv-type-icon selected" title="Cellphones" aria-label="Cellphones">
@@ -757,50 +761,35 @@
     <!-- TAB: ADMIN SALES SUMMARY (DAILY & MONTHLY CASH SALES) -->
     <section id="tab-sales" class="tab-panel card">
       <div class="sub-panel">
-        <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
-          <div>
-            <h3 style="margin:0;">Daily &amp; Accumulated Cash Sales (All Branches)</h3>
-          </div>
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-            <span id="salesLiveStatus" class="badge badge-ok" style="font-size:11px;">● LIVE</span>
-            <button type="button" id="salesRefreshBtn" class="secondary" style="padding:6px 12px;font-size:12px;">Refresh</button>
-          </div>
-        </div>
-
-        <div class="sales-controls-bar">
-          <div>
-            <label for="salesMonthInput">MONTH</label>
-            <div style="display:flex;align-items:center;gap:4px;">
-              <button type="button" id="salesPrevMonthBtn" class="secondary" style="padding:6px 9px;font-size:13px;" title="Previous Month">‹</button>
-              <input type="month" id="salesMonthInput" style="width:auto;padding:6px 8px;font-size:12px;" />
-              <button type="button" id="salesNextMonthBtn" class="secondary" style="padding:6px 9px;font-size:13px;" title="Next Month">›</button>
+        <div class="sales-controls-bar sales-compact-bar">
+          <div class="sales-ctrl-month">
+            <div style="display:flex;align-items:center;gap:2px;">
+              <button type="button" id="salesPrevMonthBtn" class="secondary" style="padding:3px 6px;font-size:12px;" title="Previous Month" aria-label="Previous Month">‹</button>
+              <input type="month" id="salesMonthInput" aria-label="Month" title="Month" style="width:auto;padding:3px 5px;font-size:11px;" />
+              <button type="button" id="salesNextMonthBtn" class="secondary" style="padding:3px 6px;font-size:12px;" title="Next Month" aria-label="Next Month">›</button>
             </div>
           </div>
-          <div>
-            <label>YEAR VIEW</label>
-            <div style="display:flex;align-items:center;gap:4px;">
-              <button type="button" id="salesPrevYearBtn" class="secondary" style="padding:6px 9px;font-size:13px;" title="Previous Year">‹</button>
-              <button type="button" id="salesYearBtn" class="secondary" style="padding:6px 10px;font-size:12px;font-weight:700;min-width:60px;" title="Show full year">2026</button>
-              <button type="button" id="salesNextYearBtn" class="secondary" style="padding:6px 9px;font-size:13px;" title="Next Year">›</button>
+          <div class="sales-ctrl-year">
+            <div style="display:flex;align-items:center;gap:2px;">
+              <button type="button" id="salesPrevYearBtn" class="secondary" style="padding:3px 6px;font-size:12px;" title="Previous Year" aria-label="Previous Year">‹</button>
+              <button type="button" id="salesYearBtn" class="secondary" style="padding:3px 7px;font-size:11px;font-weight:700;" title="Show full year">2026</button>
+              <button type="button" id="salesNextYearBtn" class="secondary" style="padding:3px 6px;font-size:12px;" title="Next Year" aria-label="Next Year">›</button>
             </div>
           </div>
-          <div>
-            <label for="salesStart">FROM</label>
-            <input type="date" id="salesStart" style="width:auto;padding:6px 10px;font-size:12px;" />
+          <div class="cf-ctrl-days sales-ctrl-days" title="Day Range">
+            <input type="number" id="salesFromDay" min="1" max="31" aria-label="From Day" title="From Day" />
+            <span class="muted" style="font-size:11px;">–</span>
+            <input type="number" id="salesToDay" min="1" max="31" aria-label="To Day" title="To Day" />
+            <input type="hidden" id="salesStart" />
+            <input type="hidden" id="salesEnd" />
           </div>
-          <div>
-            <label for="salesEnd">TO</label>
-            <input type="date" id="salesEnd" style="width:auto;padding:6px 10px;font-size:12px;" />
-          </div>
-          <div>
-            <label for="salesTypeFilter">PRODUCT TYPE</label>
-            <select id="salesTypeFilter" style="width:auto;padding:6px 10px;font-size:12px;">
+          <div class="sales-ctrl-type">
+            <select id="salesTypeFilter" aria-label="Product Type" title="Product Type" style="width:auto;padding:3px 6px;font-size:11px;">
               <option value="ALL">All Products</option>
               <option value="Cellphones">Cellphones</option>
               <option value="Accessories">Accessories</option>
             </select>
           </div>
-          <button type="button" id="salesApplyBtn" style="padding:7px 14px;font-size:12px;">APPLY RANGE</button>
         </div>
 
         <div id="salesToolsBar" class="sales-tools-bar">
@@ -1868,6 +1857,6 @@
     </div>
   </div>
 
-  <script src="../app.js?v=1795788144769"></script>
+  <script src="../app.js?v=1795788324221"></script>
 </body>
 </html>

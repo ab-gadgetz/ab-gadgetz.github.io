@@ -2397,6 +2397,56 @@ body.role-cashier input[type="date"] {
     min-height: 28px !important;
   }
 }
+.sales-compact-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px !important;
+  flex-wrap: nowrap;
+  margin-bottom: 10px !important;
+}
+.sales-compact-bar input,
+.sales-compact-bar select,
+.sales-compact-bar button {
+  min-height: 28px;
+}
+@media (max-width: 640px) {
+  .sales-compact-bar {
+    display: flex !important;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px !important;
+    flex-wrap: nowrap !important;
+    margin-bottom: 8px !important;
+  }
+  .sales-compact-bar .sales-ctrl-month {
+    min-width: 0;
+    flex: 1.25;
+  }
+  .sales-compact-bar .sales-ctrl-month input[type="month"] {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+  .sales-compact-bar .sales-ctrl-year {
+    flex-shrink: 0;
+  }
+  .sales-compact-bar .sales-ctrl-days {
+    flex-shrink: 0;
+  }
+  .sales-compact-bar .sales-ctrl-type {
+    min-width: 0;
+    flex: 1;
+  }
+  .sales-compact-bar .sales-ctrl-type select {
+    width: 100% !important;
+  }
+  .sales-compact-bar input,
+  .sales-compact-bar select,
+  .sales-compact-bar button {
+    padding: 3px 4px !important;
+    font-size: 10px !important;
+    min-height: 26px !important;
+  }
+}
 @media (max-width: 780px) {
   .sales-big-grid {
     grid-template-columns: 1fr;

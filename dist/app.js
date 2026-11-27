@@ -100,6 +100,7 @@ function switchTab(tab) {
   document.getElementById('inventorySummaryGrid').classList.toggle('hidden', !isInv);
   document.querySelector('.inv-tools-wrap')?.classList.toggle('hidden', !isInv || state.userRole !== 'ADMIN');
   document.getElementById('cashFlowHeaderActions')?.classList.toggle('hidden', tab !== 'cashflow' || state.userRole !== 'ADMIN');
+  document.getElementById('salesHeaderActions')?.classList.toggle('hidden', tab !== 'sales' || state.userRole !== 'ADMIN');
 
   document.querySelectorAll('.mnav-btn[data-tab]').forEach((mb) => {
     mb.classList.toggle('active', mb.dataset.tab === tab);
@@ -8251,11 +8252,15 @@ function initSalesDateInputs() {
   const monthInp = document.getElementById('salesMonthInput');
   const startInp = document.getElementById('salesStart');
   const endInp = document.getElementById('salesEnd');
+  const fdInp = document.getElementById('salesFromDay');
+  const tdInp = document.getElementById('salesToDay');
   const yearBtn = document.getElementById('salesYearBtn');
   const curMonth = todayStr.slice(0, 7);
   if (monthInp && !monthInp.value) monthInp.value = curMonth;
   if (startInp && !startInp.value) startInp.value = `${curMonth}-01`;
   if (endInp && !endInp.value) endInp.value = todayStr;
+  if (fdInp && !fdInp.value) fdInp.value = String(Number((startInp?.value || `${curMonth}-01`).slice(8, 10)));
+  if (tdInp && !tdInp.value) tdInp.value = String(Number((endInp?.value || todayStr).slice(8, 10)));
   if (yearBtn && !yearBtn.dataset.year) {
     yearBtn.dataset.year = todayStr.slice(0, 4);
     yearBtn.textContent = todayStr.slice(0, 4);
@@ -9819,10 +9824,14 @@ function setSalesMonthRange(ym) {
   const mEl = document.getElementById('salesMonthInput');
   const startEl = document.getElementById('salesStart');
   const endEl = document.getElementById('salesEnd');
+  const fdEl = document.getElementById('salesFromDay');
+  const tdEl = document.getElementById('salesToDay');
   const yrBtn = document.getElementById('salesYearBtn');
   if (mEl) mEl.value = ym;
   if (startEl) startEl.value = s;
   if (endEl) endEl.value = eDate;
+  if (fdEl) fdEl.value = '1';
+  if (tdEl) tdEl.value = String(Number(eDate.slice(8, 10)));
   if (yrBtn) {
     yrBtn.dataset.year = String(y);
     yrBtn.textContent = String(y);
@@ -10472,7 +10481,24 @@ document.getElementById('salesMonthInput')?.addEventListener('change', (e) => {
   if (endEl) endEl.value = eDate;
   loadSalesSummary();
 });
-document.getElementById('salesApplyBtn')?.addEventListener('click', () => loadSalesSummary(false));
+const syncSalesDaysToRange = () => {
+  const ym = document.getElementById('salesMonthInput')?.value || todayStr.slice(0, 7);
+  const [y, m] = ym.split('-').map(Number);
+  const lastDay = new Date(y, m, 0).getDate();
+  const fdEl = document.getElementById('salesFromDay');
+  const tdEl = document.getElementById('salesToDay');
+  let d1 = Math.max(1, Math.min(lastDay, parseInt(fdEl?.value || '1', 10) || 1));
+  let d2 = Math.max(1, Math.min(lastDay, parseInt(tdEl?.value || String(lastDay), 10) || lastDay));
+  if (d1 > d2) d2 = d1;
+  if (fdEl) fdEl.value = String(d1);
+  if (tdEl) tdEl.value = String(d2);
+  document.getElementById('salesStart').value = `${ym}-${String(d1).padStart(2, '0')}`;
+  document.getElementById('salesEnd').value = `${ym}-${String(d2).padStart(2, '0')}`;
+  loadSalesSummary(false);
+};
+document.getElementById('salesFromDay')?.addEventListener('change', syncSalesDaysToRange);
+document.getElementById('salesToDay')?.addEventListener('change', syncSalesDaysToRange);
+document.getElementById('salesApplyBtn')?.addEventListener('click', syncSalesDaysToRange);
 document.getElementById('salesRefreshBtn')?.addEventListener('click', () => loadSalesSummary(true));
 document.getElementById('salesTypeFilter')?.addEventListener('change', renderSalesSummary);
 
@@ -11203,6 +11229,7 @@ function applyRolePermissions() {
   });
   document.getElementById('toggleSyncBtn')?.classList.toggle('hidden', !isAdmin);
   document.getElementById('cashFlowHeaderActions')?.classList.toggle('hidden', !isAdmin || state.activeTab !== 'cashflow');
+  document.getElementById('salesHeaderActions')?.classList.toggle('hidden', !isAdmin || state.activeTab !== 'sales');
   const catEditWrap = document.getElementById('catEditMode')?.closest('label');
   if (catEditWrap) catEditWrap.classList.toggle('hidden', !isAdmin);
   if (!isAdmin && document.getElementById('catEditMode')) {
