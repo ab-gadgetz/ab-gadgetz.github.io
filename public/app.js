@@ -11174,7 +11174,7 @@ function applyRolePermissions() {
       ? ['inventory']
       : role === 'CI'
         ? ['receivables', 'catalogs']
-        : ['inventory', 'sales', 'activity', 'finance', 'receivables', 'catalogs', 'websiteStock', 'staffPins'];
+        : ['inventory', 'sales', 'cashflow', 'activity', 'finance', 'receivables', 'catalogs', 'websiteStock', 'staffPins'];
 
   document.querySelectorAll('.tab[data-tab], .mnav-btn[data-tab]').forEach((btn) => {
     const t = btn.dataset.tab;
