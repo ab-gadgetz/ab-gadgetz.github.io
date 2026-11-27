@@ -10093,6 +10093,17 @@ function updateConsolidatedViewMode(changedEl) {
 
 document.getElementById('consShowCashChk')?.addEventListener('change', (e) => updateConsolidatedViewMode(e.target));
 document.getElementById('consShowInstChk')?.addEventListener('change', (e) => updateConsolidatedViewMode(e.target));
+document.getElementById('consInfoToggleBtn')?.addEventListener('click', () => {
+  const btn = document.getElementById('consInfoToggleBtn');
+  if (!btn) return;
+  const open = btn.getAttribute('aria-expanded') !== 'true';
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  btn.style.borderColor = open ? 'var(--gold-bright)' : '';
+  btn.style.background = open ? 'rgba(231, 197, 95, 0.22)' : '';
+  ['consModeHint', 'cashPnlAuditBanner', 'installmentAccrualGuide', 'consolidatedPnlBanner'].forEach((id) => {
+    document.getElementById(id)?.classList.toggle('hidden', !open);
+  });
+});
 document.getElementById('salesDailyToggle')?.addEventListener('click', () => {
   const body = document.getElementById('salesDailyBody');
   const caret = document.getElementById('salesDailyCaret');

@@ -11,7 +11,7 @@
   <link rel="icon" href="../ab-logo-square.png" type="image/png" />
   <link rel="apple-touch-icon" href="../ab-logo-square.png" />
   <title>Staff Portal — AB Gadgetz</title>
-  <link rel="stylesheet" href="../styles.css?v=1795788324221" />
+  <link rel="stylesheet" href="../styles.css?v=1795788497520" />
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
@@ -861,25 +861,25 @@
           </div>
         </div>
 
-        <!-- SALES TOOL: CONSOLIDATED CASH + INSTALLMENT P&L (WITH CASH / INSTALLMENT CHECKBOXES) -->
+        <!-- SALES TOOL: CONSOLIDATED CASH + INSTALLMENT P&L (WITH CASH / INSTALLMENT ICON TOGGLES) -->
         <div id="salesTool-consolidated">
-          <div class="sub-panel" style="padding:10px 12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+          <div class="sub-panel" style="padding:8px 12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-              <strong style="font-size:11.5px;color:var(--gold-bright);letter-spacing:0.5px;">P&amp;L VIEW:</strong>
-              <label class="restock-check-chip">
+              <label class="restock-check-chip cf-icon-chip" title="Cash Sales P&amp;L" aria-label="Cash Sales P&amp;L">
                 <input type="checkbox" id="consShowCashChk" checked />
-                <span>Cash Sales P&amp;L</span>
+                <span aria-hidden="true">💵</span>
               </label>
-              <label class="restock-check-chip">
+              <label class="restock-check-chip cf-icon-chip" title="Installment (Accrual)" aria-label="Installment (Accrual)">
                 <input type="checkbox" id="consShowInstChk" checked />
-                <span>Installment (Accrual)</span>
+                <span aria-hidden="true">🗓️</span>
               </label>
+              <button type="button" id="consInfoToggleBtn" class="secondary cf-apply-icon-btn" title="Show/Hide P&amp;L Details" aria-label="Show/Hide P&amp;L Details" aria-expanded="false">ℹ️</button>
             </div>
-            <span id="consModeHint" class="small muted">Showing Consolidated P&amp;L (Cash + Installment)</span>
+            <span id="consModeHint" class="small muted hidden">Showing Consolidated P&amp;L (Cash + Installment)</span>
           </div>
 
           <div id="salesTool-cashpnl" class="hidden">
-            <div id="cashPnlAuditBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--green);"></div>
+            <div id="cashPnlAuditBanner" class="sub-panel hidden" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--green);"></div>
             <div class="table-wrap">
               <table class="data-table" id="salesCashPnlTable">
                 <thead>
@@ -923,11 +923,11 @@
               </table>
             </div>
 
-            <div id="installmentAccrualGuide" class="sub-panel" style="padding:12px;font-size:12px;border-left:3px solid var(--gold);line-height:1.55;"></div>
+            <div id="installmentAccrualGuide" class="sub-panel hidden" style="padding:12px;font-size:12px;border-left:3px solid var(--gold);line-height:1.55;"></div>
           </div>
 
           <div id="salesConsolidatedBody">
-            <div id="consolidatedPnlBanner" class="sub-panel" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--gold);"></div>
+            <div id="consolidatedPnlBanner" class="sub-panel hidden" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--gold);"></div>
             <div class="table-wrap" style="margin-bottom:16px;">
               <table class="data-table" id="salesConsolidatedTable">
                 <thead>
@@ -1857,6 +1857,6 @@
     </div>
   </div>
 
-  <script src="../app.js?v=1795788324221"></script>
+  <script src="../app.js?v=1795788497520"></script>
 </body>
 </html>
