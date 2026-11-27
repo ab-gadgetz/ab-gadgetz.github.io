@@ -3022,29 +3022,46 @@ async function loadSavedPurchaseOrders() {
       const deleted = getDeletedLocalPoIds();
       const seeded = Array.isArray(b?.purchaseOrders) ? b.purchaseOrders : [];
       state.ghSeededOrderIds = new Set(seeded.map((s) => s.id));
-      const haveIds = new Set(local.map((o) => o.id));
       let added = false;
+      if (Array.isArray(b?.purchaseOrders)) {
+        const beforeLen = local.length;
+        local = local.filter((o) => {
+          const id = String(o.id || '');
+          const isPhoneOrd = id.startsWith('PO-PH-') || /^PO-\d{8}-\d+$/.test(id);
+          return isPhoneOrd || state.ghSeededOrderIds.has(id);
+        });
+        if (local.length !== beforeLen) added = true;
+      }
+      const byLocalId = new Map(local.map((o, idx) => [o.id, idx]));
       for (const s of seeded) {
-        if (!haveIds.has(s.id) && !deleted.has(s.id)) {
-          let parsedItems = [];
-          try {
-            parsedItems = typeof s.items_json === 'string' ? JSON.parse(s.items_json || '[]') : Array.isArray(s.items) ? s.items : [];
-          } catch {
-            parsedItems = [];
-          }
-          local.push({
-            id: s.id,
-            title: s.title,
-            status: s.status,
-            supplierFilter: s.supplier_filter || s.supplierFilter || 'LOWEST',
-            notes: s.notes || '',
-            expectedDate: s.expected_date || s.expectedDate || '',
-            abDeliveryRefs: s.ab_delivery_refs || s.abDeliveryRefs || '',
-            items: parsedItems,
-            createdAt: s.created_at || s.createdAt || new Date().toISOString(),
-            updatedAt: s.updated_at || s.updatedAt || new Date().toISOString(),
-          });
+        if (deleted.has(s.id)) continue;
+        let parsedItems = [];
+        try {
+          parsedItems = typeof s.items_json === 'string' ? JSON.parse(s.items_json || '[]') : Array.isArray(s.items) ? s.items : [];
+        } catch {
+          parsedItems = [];
+        }
+        const seededObj = {
+          id: s.id,
+          title: s.title,
+          status: s.status,
+          supplierFilter: s.supplier_filter || s.supplierFilter || 'LOWEST',
+          notes: s.notes || '',
+          expectedDate: s.expected_date || s.expectedDate || '',
+          abDeliveryRefs: s.ab_delivery_refs || s.abDeliveryRefs || '',
+          items: parsedItems,
+          createdAt: s.created_at || s.createdAt || new Date().toISOString(),
+          updatedAt: s.updated_at || s.updatedAt || new Date().toISOString(),
+        };
+        if (!byLocalId.has(s.id)) {
+          local.push(seededObj);
           added = true;
+        } else {
+          const idx = byLocalId.get(s.id);
+          if (String(seededObj.updatedAt) > String(local[idx]?.updatedAt || '')) {
+            local[idx] = seededObj;
+            added = true;
+          }
         }
       }
       if (added) setLocalSavedOrders(local);
