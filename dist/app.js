@@ -8568,8 +8568,19 @@ function buildCashFlowEntries() {
 }
 
 function renderCashFlow() {
-  const start = document.getElementById('cfStart')?.value || `${todayStr.slice(0, 7)}-01`;
+  const start = document.getElementById('cfStart')?.value || todayStr;
   const end = document.getElementById('cfEnd')?.value || todayStr;
+  const monthYm = document.getElementById('cfMonthInput')?.value || todayStr.slice(0, 7);
+  const [mY, mM] = monthYm.split('-').map(Number);
+  const mLastDay = new Date(Date.UTC(mY || Number(todayStr.slice(0, 4)), mM || Number(todayStr.slice(5, 7)), 0)).getUTCDate();
+  const monthStart = `${monthYm}-01`;
+  const monthEnd = monthYm === todayStr.slice(0, 7) ? todayStr : `${monthYm}-${String(mLastDay).padStart(2, '0')}`;
+  const isDefaultToday = start === todayStr && end === todayStr;
+  const box2Start = isDefaultToday ? monthStart : start;
+  const box2End = isDefaultToday ? monthEnd : end;
+  const box2Period = isDefaultToday ? monthYm : '';
+  const box2Title = isDefaultToday ? `WHOLE MONTH NET CASH FLOW (${box2Start} → ${box2End})` : `RANGE NET CASH FLOW (${box2Start} → ${box2End})`;
+  const box2Label = isDefaultToday ? `Whole Month Cash Flow (${monthYm})` : 'Range Cash Flow';
   const branchFilter = document.getElementById('cfBranchFilter')?.value || 'ALL';
   const branchIds = ['br-molave', 'br-tambulig', 'br-bonifacio'];
   const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
@@ -8597,13 +8608,13 @@ function renderCashFlow() {
       addEntry(todayByBranch[e.branchId], e);
       if (branchFilter === 'ALL' || e.branchId === branchFilter) addEntry(todayAll, e);
     }
-    if (e.date >= start && e.date <= end) {
+    if (e.date >= box2Start && e.date <= box2End) {
       addEntry(rangeByBranch[e.branchId], e);
-      if (branchFilter === 'ALL' || e.branchId === branchFilter) {
-        addEntry(rangeAll, e);
-        if (!dailyMap.has(e.date)) dailyMap.set(e.date, mkBucket());
-        addEntry(dailyMap.get(e.date), e);
-      }
+      if (branchFilter === 'ALL' || e.branchId === branchFilter) addEntry(rangeAll, e);
+    }
+    if (e.date >= start && e.date <= end && (branchFilter === 'ALL' || e.branchId === branchFilter)) {
+      if (!dailyMap.has(e.date)) dailyMap.set(e.date, mkBucket());
+      addEntry(dailyMap.get(e.date), e);
     }
     if (branchFilter === 'ALL' || e.branchId === branchFilter) {
       const mo = e.date.slice(0, 7);
@@ -8619,7 +8630,7 @@ function renderCashFlow() {
         <div class="sales-big-main cf-kpi-drill" data-branch="${branchFilter}" data-period="${periodFilter}" data-label="${labelPrefix}" title="Click for supporting cash flow breakdown">
           <div class="sales-big-title">${title}</div>
           <strong class="sales-big-val" style="color:${allB.net >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(allB.net)}</strong>
-          <div class="summary-note">In: <strong style="color:var(--green);">${fmtCurrency(allB.cashIn)}</strong> • Out: <strong style="color:var(--danger);">${fmtCurrency(allB.cashOut)}</strong> • 🔎</div>
+          <div class="summary-note">In: <strong style="color:var(--green);">${fmtCurrency(allB.cashIn)}</strong> • Out: <strong style="color:var(--danger);">${fmtCurrency(allB.cashOut)}</strong> • <span style="color:var(--gold-bright);">incl. Online Payments</span> • 🔎</div>
         </div>
         <div class="sales-branch-subgrid">
           ${branchIds
@@ -8631,6 +8642,7 @@ function renderCashFlow() {
                 <strong class="sales-chip-val" style="color:${b.net >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(b.net)}</strong>
                 <span class="sales-chip-sub">In ${fmtCurrency(b.cashIn)}</span>
                 <span class="sales-chip-sub">Out ${fmtCurrency(b.cashOut)}</span>
+                <span class="sales-chip-sub" style="color:var(--gold-bright);">incl. Online</span>
               </div>`;
             })
             .join('')}
@@ -8639,7 +8651,7 @@ function renderCashFlow() {
 
     kpiGrid.innerHTML =
       renderBigCfBox(`TODAY'S NET CASH FLOW (${todayStr})`, todayAll, todayByBranch, todayStr, "Today's Cash Flow", true) +
-      renderBigCfBox(`RANGE NET CASH FLOW (${start} → ${end})`, rangeAll, rangeByBranch, '', 'Range Cash Flow', false);
+      renderBigCfBox(box2Title, rangeAll, rangeByBranch, box2Period, box2Label, false);
 
     kpiGrid.querySelectorAll('.cf-kpi-drill').forEach((el) => {
       el.addEventListener('click', (ev) => {
@@ -8649,7 +8661,7 @@ function renderCashFlow() {
     });
   }
 
-  const renderRows = (rows, tbodySel, badgeSel, unitWord) => {
+  const renderRows = (rows, tbodySel, badgeSel, unitWord, showOnlineNote = false) => {
     const badge = document.getElementById(badgeSel);
     if (badge) badge.textContent = `${rows.length} ${unitWord}${rows.length === 1 ? '' : 's'}`;
     const tbody = document.querySelector(`${tbodySel} tbody`);
@@ -8666,15 +8678,15 @@ function renderCashFlow() {
               <td style="color:var(--green);"><strong>${fmtCurrency(b.cashIn)}</strong></td>
               <td style="color:var(--danger);">${fmtCurrency(b.expense)}</td>
               <td style="color:#f59e0b;">${fmtCurrency(b.stock)}</td>
-              <td style="color:${b.net >= 0 ? 'var(--green)' : 'var(--danger)'};"><strong>${fmtCurrency(b.net)}</strong></td>
+              <td style="color:${b.net >= 0 ? 'var(--green)' : 'var(--danger)'};"><strong>${fmtCurrency(b.net)}</strong>${showOnlineNote ? '<div class="small muted">incl. Online Payments</div>' : ''}</td>
             </tr>`
           )
           .join('')
       : '<tr><td colspan="8" class="muted">No cash flow entries recorded in this period.</td></tr>';
   };
 
-  renderRows([...dailyMap.entries()].sort((a, b) => b[0].localeCompare(a[0])), '#cfDailyTable', 'cfDailyCountBadge', 'day');
-  renderRows([...monthlyMap.entries()].sort((a, b) => b[0].localeCompare(a[0])), '#cfMonthlyTable', 'cfMonthlyCountBadge', 'month');
+  renderRows([...dailyMap.entries()].sort((a, b) => b[0].localeCompare(a[0])), '#cfDailyTable', 'cfDailyCountBadge', 'day', true);
+  renderRows([...monthlyMap.entries()].sort((a, b) => b[0].localeCompare(a[0])), '#cfMonthlyTable', 'cfMonthlyCountBadge', 'month', true);
 }
 
 function openCashFlowDrilldown(branchId, periodFilter, label) {
