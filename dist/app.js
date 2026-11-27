@@ -8518,9 +8518,13 @@ function initCashFlowDateInputs() {
   const mEl = document.getElementById('cfMonthInput');
   const sEl = document.getElementById('cfStart');
   const eEl = document.getElementById('cfEnd');
+  const fdEl = document.getElementById('cfFromDay');
+  const tdEl = document.getElementById('cfToDay');
   if (mEl && !mEl.value) mEl.value = todayStr.slice(0, 7);
   if (sEl && !sEl.value) sEl.value = todayStr;
   if (eEl && !eEl.value) eEl.value = todayStr;
+  if (fdEl && !fdEl.value) fdEl.value = String(Number(todayStr.slice(8, 10)));
+  if (tdEl && !tdEl.value) tdEl.value = String(Number(todayStr.slice(8, 10)));
 }
 
 async function loadCashFlow(forceRefresh = false) {
@@ -8771,6 +8775,22 @@ function openCashFlowDrilldown(branchId, periodFilter, label) {
   modal.classList.remove('hidden');
 }
 
+const syncCfDaysToRange = () => {
+  const ym = document.getElementById('cfMonthInput')?.value || todayStr.slice(0, 7);
+  const [y, m] = ym.split('-').map(Number);
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const fdEl = document.getElementById('cfFromDay');
+  const tdEl = document.getElementById('cfToDay');
+  let d1 = Math.max(1, Math.min(lastDay, parseInt(fdEl?.value || '1', 10) || 1));
+  let d2 = Math.max(1, Math.min(lastDay, parseInt(tdEl?.value || String(lastDay), 10) || lastDay));
+  if (d1 > d2) d2 = d1;
+  if (fdEl) fdEl.value = String(d1);
+  if (tdEl) tdEl.value = String(d2);
+  document.getElementById('cfStart').value = `${ym}-${String(d1).padStart(2, '0')}`;
+  document.getElementById('cfEnd').value = `${ym}-${String(d2).padStart(2, '0')}`;
+  renderCashFlow();
+};
+
 const shiftCfMonth = (delta) => {
   const mEl = document.getElementById('cfMonthInput');
   const cur = mEl?.value || todayStr.slice(0, 7);
@@ -8779,15 +8799,20 @@ const shiftCfMonth = (delta) => {
   const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
   if (mEl) mEl.value = ym;
   const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  const endDay = ym === todayStr.slice(0, 7) ? Number(todayStr.slice(8, 10)) : lastDay;
+  const fdEl = document.getElementById('cfFromDay');
+  const tdEl = document.getElementById('cfToDay');
+  if (fdEl) fdEl.value = '1';
+  if (tdEl) tdEl.value = String(endDay);
   document.getElementById('cfStart').value = `${ym}-01`;
-  document.getElementById('cfEnd').value = ym === todayStr.slice(0, 7) ? todayStr : `${ym}-${String(lastDay).padStart(2, '0')}`;
+  document.getElementById('cfEnd').value = `${ym}-${String(endDay).padStart(2, '0')}`;
   renderCashFlow();
 };
 document.getElementById('cfPrevMonthBtn')?.addEventListener('click', () => shiftCfMonth(-1));
 document.getElementById('cfNextMonthBtn')?.addEventListener('click', () => shiftCfMonth(1));
 document.getElementById('cfMonthInput')?.addEventListener('change', () => shiftCfMonth(0));
-document.getElementById('cfStart')?.addEventListener('change', renderCashFlow);
-document.getElementById('cfEnd')?.addEventListener('change', renderCashFlow);
+document.getElementById('cfFromDay')?.addEventListener('change', syncCfDaysToRange);
+document.getElementById('cfToDay')?.addEventListener('change', syncCfDaysToRange);
 document.getElementById('cfRefreshBtn')?.addEventListener('click', () => loadCashFlow(true));
 document.getElementById('cfBranchFilter')?.addEventListener('change', renderCashFlow);
 document.getElementById('cfIncludeStockChk')?.addEventListener('change', renderCashFlow);
