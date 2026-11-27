@@ -90,11 +90,11 @@
         <div class="nav-heading-row">
           <button type="button" id="menuToggleBtn" class="hamburger-btn" aria-expanded="false" aria-controls="mainTabsMenu">
             <span id="menuHamburgerIcon" aria-hidden="true">☰</span>
-            <span id="currentTabLabel">INVENTORY</span>
+            <span id="currentTabLabel">CASH FLOW</span>
           </button>
           <div id="cashierHeaderActions" class="hidden"></div>
         </div>
-        <div class="nav-type-checks" id="productTypeFilter">
+        <div class="nav-type-checks hidden" id="productTypeFilter">
           <label class="stock-view-option selected" style="padding:7px 12px;">
             <input type="radio" name="productType" value="Cellphones" checked />
             Cellphones
@@ -104,12 +104,12 @@
             Accessories
           </label>
         </div>
-        <div class="nav-kpis" id="inventorySummaryGrid"></div>
+        <div class="nav-kpis hidden" id="inventorySummaryGrid"></div>
       </div>
       <nav class="tabs hidden" id="mainTabsMenu" role="tablist">
-        <button type="button" class="tab active" data-tab="inventory">INVENTORY</button>
+        <button type="button" class="tab active" data-tab="cashflow">CASH FLOW</button>
+        <button type="button" class="tab" data-tab="inventory">INVENTORY</button>
         <button type="button" class="tab" data-tab="sales">SALES</button>
-        <button type="button" class="tab" data-tab="cashflow">CASH FLOW</button>
         <button type="button" class="tab" data-tab="receivables">RECEIVABLES</button>
         <button type="button" class="tab" data-tab="finance">FINANCE &amp; P&amp;L</button>
         <button type="button" class="tab" data-tab="websiteStock">WEBSITE STOCK</button>
@@ -120,7 +120,7 @@
     </div>
 
     <!-- TAB 1: INVENTORY -->
-    <section id="tab-inventory" class="tab-panel active card">
+    <section id="tab-inventory" class="tab-panel card">
       <div id="invFilterBar" class="inv-filter-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
         <div class="inv-tools-wrap" style="margin-bottom:0;">
           <button type="button" id="invToolsMenuBtn" class="grid-menu-btn" aria-expanded="false" aria-controls="invToolsMenu">
@@ -1086,7 +1086,7 @@
     </section>
 
     <!-- TAB: DAILY & MONTHLY CASH FLOW (EMPLOYER PORTAL) -->
-    <section id="tab-cashflow" class="tab-panel card">
+    <section id="tab-cashflow" class="tab-panel active card">
       <div class="sub-panel">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
           <h3 style="margin:0;">Daily &amp; Monthly Cash Flow</h3>

@@ -8,7 +8,7 @@ const state = {
   expandedBrands: new Set(),
   selectedProducts: new Set(),
   activeInvTool: null,
-  activeTab: 'inventory',
+  activeTab: 'cashflow',
   activity: null,
   actBranchFilter: '',
   actProductType: 'ALL',
@@ -8505,7 +8505,7 @@ function initCashFlowDateInputs() {
   const sEl = document.getElementById('cfStart');
   const eEl = document.getElementById('cfEnd');
   if (mEl && !mEl.value) mEl.value = todayStr.slice(0, 7);
-  if (sEl && !sEl.value) sEl.value = `${todayStr.slice(0, 7)}-01`;
+  if (sEl && !sEl.value) sEl.value = todayStr;
   if (eEl && !eEl.value) eEl.value = todayStr;
 }
 
