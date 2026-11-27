@@ -126,9 +126,9 @@ async function refreshActiveTab() {
     await loadInventory();
     if (state.activeInvTool === 'restock') await loadPlanning();
   } else if (tab === 'sales') {
-    await loadSalesSummary();
+    await loadSalesSummary(true);
   } else if (tab === 'cashflow') {
-    await loadCashFlow();
+    await loadCashFlow(true);
   } else if (tab === 'receivables') {
     await loadReceivables();
   } else if (tab === 'finance') {
@@ -11238,6 +11238,23 @@ function connectEvents() {
       running: false, paused: false, lastSyncAt: b.syncedAt,
       lastStatus: b.liveSynced ? 'OK' : 'WARN', adapterMode: 'ABGADGETZ_LIVE (GITHUB)',
     })).catch(() => {});
+    if (!state.ghPollTimer) {
+      state.ghPollTimer = setInterval(async () => {
+        if (document.hidden) return;
+        try {
+          const prevTs = ghBundleCache?.syncedAt || '';
+          const b = await getGhBundle(true);
+          updateSyncPill({
+            running: false, paused: false, lastSyncAt: b.syncedAt,
+            lastStatus: b.liveSynced ? 'OK' : 'WARN', adapterMode: 'ABGADGETZ_LIVE (GITHUB)',
+          });
+          if (b?.syncedAt && b.syncedAt !== prevTs) {
+            state.salesFullCache = null;
+            await refreshActiveTab();
+          }
+        } catch {}
+      }, 60000);
+    }
     return;
   }
   if (eventSource) eventSource.close();
@@ -11246,6 +11263,7 @@ function connectEvents() {
   eventSource.addEventListener('sync', async (e) => {
     const payload = JSON.parse(e.data);
     updateSyncPill(payload);
+    state.salesFullCache = null;
     if (payload.deliveriesUpdated > 0 || payload.ordersUpdated > 0) {
       await Promise.all([loadSavedPurchaseOrders(), loadAbDeliveries()]);
       if (state.activeTab === 'inventory' && state.activeInvTool === 'restock') {
@@ -11263,7 +11281,7 @@ function connectEvents() {
         return;
       }
     }
-    if (payload.updatedCount > 0 || state.activeTab === 'websiteStock') {
+    if (payload.updatedCount > 0 || ['cashflow', 'sales', 'finance', 'receivables', 'activity', 'websiteStock'].includes(state.activeTab)) {
       await refreshActiveTab();
     }
   });
