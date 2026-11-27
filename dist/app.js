@@ -8555,11 +8555,14 @@ function buildCashFlowEntries() {
     if (!dt || !bNames[e.branch_id] || amt <= 0) continue;
     entries.push({ date: dt, branchId: e.branch_id, kind: 'expense', label: `${e.expense_type || 'Expense'}${e.particular ? ` — ${e.particular}` : ''}`, amount: amt });
   }
-  for (const o of c.onlinePayments || []) {
-    const dt = String(o.pay_date || '').slice(0, 10);
-    const amt = Number(o.online_amount) || 0;
-    if (!dt || !bNames[o.branch_id] || amt <= 0) continue;
-    entries.push({ date: dt, branchId: o.branch_id, kind: 'online_out', label: 'Online Payments (GCash / Bank — Not Cash on Hand)', amount: amt });
+  const includeOnline = Boolean(document.getElementById('cfSeparateOnlineChk')?.checked ?? true);
+  if (includeOnline) {
+    for (const o of c.onlinePayments || []) {
+      const dt = String(o.pay_date || '').slice(0, 10);
+      const amt = Number(o.online_amount) || 0;
+      if (!dt || !bNames[o.branch_id] || amt <= 0) continue;
+      entries.push({ date: dt, branchId: o.branch_id, kind: 'online_out', label: 'Online Payments (GCash / Bank — Not Cash on Hand)', amount: amt });
+    }
   }
   if (includeStock) {
     for (const o of state.savedOrders || []) {
@@ -8635,14 +8638,15 @@ function renderCashFlow() {
     }
   }
 
+  const separateOnline = Boolean(document.getElementById('cfSeparateOnlineChk')?.checked ?? true);
   const kpiGrid = document.getElementById('cfKpiGrid');
   if (kpiGrid) {
     const renderBigCfBox = (title, allB, byBr, periodFilter, labelPrefix, borderGold) => `
       <div class="summary-box sales-big-box"${borderGold ? ' style="border-color:var(--gold);"' : ''}>
         <div class="sales-big-main cf-kpi-drill" data-branch="${branchFilter}" data-period="${periodFilter}" data-label="${labelPrefix}" title="Click for supporting cash flow breakdown">
-          <div class="sales-big-title">${title} <span style="color:var(--gold-bright);">(Cash Money Only)</span></div>
+          <div class="sales-big-title">${title} <span style="color:var(--gold-bright);">(${separateOnline ? 'Cash Money Only' : 'incl. Online Payments'})</span></div>
           <strong class="sales-big-val" style="color:${allB.net >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(allB.net)}</strong>
-          <div class="summary-note">In: <strong style="color:var(--green);">${fmtCurrency(allB.cashIn)}</strong> • Online: <strong style="color:#60a5fa;">−${fmtCurrency(allB.online)}</strong> • Out: <strong style="color:var(--danger);">−${fmtCurrency(allB.cashOut)}</strong> • 🔎</div>
+          <div class="summary-note">In: <strong style="color:var(--green);">${fmtCurrency(allB.cashIn)}</strong>${separateOnline ? ` • Online: <strong style="color:#60a5fa;">−${fmtCurrency(allB.online)}</strong>` : ''} • Out: <strong style="color:var(--danger);">−${fmtCurrency(allB.cashOut)}</strong> • 🔎</div>
         </div>
         <div class="sales-branch-subgrid">
           ${branchIds
@@ -8652,8 +8656,8 @@ function renderCashFlow() {
               <div class="sales-branch-chip cf-kpi-drill" data-branch="${bid}" data-period="${periodFilter}" data-label="${branchNames[bid]} ${labelPrefix}" title="Click for ${branchNames[bid]} cash flow breakdown">
                 <span class="sales-chip-name">${branchNames[bid]}</span>
                 <strong class="sales-chip-val" style="color:${b.net >= 0 ? 'var(--green)' : 'var(--danger)'};">${fmtCurrency(b.net)}</strong>
-                <span class="sales-chip-sub">Cash ${fmtCurrency(b.cashIn - b.online)}</span>
-                <span class="sales-chip-sub" style="color:#60a5fa;">Online ${fmtCurrency(b.online)}</span>
+                <span class="sales-chip-sub">${separateOnline ? `Cash ${fmtCurrency(b.cashIn - b.online)}` : `In ${fmtCurrency(b.cashIn)}`}</span>
+                ${separateOnline ? `<span class="sales-chip-sub" style="color:#60a5fa;">Online ${fmtCurrency(b.online)}</span>` : ''}
                 <span class="sales-chip-sub">Out ${fmtCurrency(b.cashOut)}</span>
               </div>`;
             })
@@ -8691,7 +8695,7 @@ function renderCashFlow() {
               <td style="color:#60a5fa;">${fmtCurrency(b.online)}</td>
               <td style="color:var(--danger);">${fmtCurrency(b.expense)}</td>
               <td style="color:#f59e0b;">${fmtCurrency(b.stock)}</td>
-              <td style="color:${b.net >= 0 ? 'var(--green)' : 'var(--danger)'};"><strong>${fmtCurrency(b.net)}</strong>${showOnlineNote ? `<div class="small muted">${b.online > 0 ? 'Cash Only (Online excl.)' : 'No Online synced'}</div>` : ''}</td>
+              <td style="color:${b.net >= 0 ? 'var(--green)' : 'var(--danger)'};"><strong>${fmtCurrency(b.net)}</strong>${showOnlineNote ? `<div class="small muted">${separateOnline ? (b.online > 0 ? 'Cash Only (Online excl.)' : 'Cash Only') : 'incl. Online Payments'}</div>` : ''}</td>
             </tr>`
           )
           .join('')
@@ -8777,6 +8781,7 @@ document.getElementById('cfApplyBtn')?.addEventListener('click', renderCashFlow)
 document.getElementById('cfRefreshBtn')?.addEventListener('click', () => loadCashFlow(true));
 document.getElementById('cfBranchFilter')?.addEventListener('change', renderCashFlow);
 document.getElementById('cfIncludeStockChk')?.addEventListener('change', renderCashFlow);
+document.getElementById('cfSeparateOnlineChk')?.addEventListener('change', renderCashFlow);
 document.getElementById('cfDailyToggle')?.addEventListener('click', () => {
   const body = document.getElementById('cfDailyBody');
   const caret = document.getElementById('cfDailyCaret');

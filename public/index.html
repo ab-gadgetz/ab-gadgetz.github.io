@@ -1091,6 +1091,10 @@
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
           <h3 style="margin:0;">Daily &amp; Monthly Cash Flow</h3>
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <label class="restock-check-chip" title="Checked: show &amp; deduct Online Payments (Cash Money Only). Unchecked: show Total Cash Flow including Online money.">
+              <input type="checkbox" id="cfSeparateOnlineChk" checked />
+              <span>Online Cash Flow (Cash Only)</span>
+            </label>
             <label class="restock-check-chip" title="Deduct recorded supplier/stock deliveries on their received date as cash outflow">
               <input type="checkbox" id="cfIncludeStockChk" />
               <span>Include Stock Deliveries Outflow</span>

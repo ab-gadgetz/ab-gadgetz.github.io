@@ -11,7 +11,7 @@
   <link rel="icon" href="../ab-logo-square.png" type="image/png" />
   <link rel="apple-touch-icon" href="../ab-logo-square.png" />
   <title>Owner Admin Portal</title>
-  <link rel="stylesheet" href="../styles.css?v=1795778707656" />
+  <link rel="stylesheet" href="../styles.css?v=1795779276184" />
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
@@ -1091,6 +1091,10 @@
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
           <h3 style="margin:0;">Daily &amp; Monthly Cash Flow</h3>
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <label class="restock-check-chip" title="Checked: show &amp; deduct Online Payments (Cash Money Only). Unchecked: show Total Cash Flow including Online money.">
+              <input type="checkbox" id="cfSeparateOnlineChk" checked />
+              <span>Online Cash Flow (Cash Only)</span>
+            </label>
             <label class="restock-check-chip" title="Deduct recorded supplier/stock deliveries on their received date as cash outflow">
               <input type="checkbox" id="cfIncludeStockChk" />
               <span>Include Stock Deliveries Outflow</span>
@@ -1891,6 +1895,6 @@
     </div>
   </div>
 
-  <script src="../app.js?v=1795778707656"></script>
+  <script src="../app.js?v=1795779276184"></script>
 </body>
 </html>
