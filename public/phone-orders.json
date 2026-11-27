@@ -1,14 +1,14 @@
 {
- "updatedAt": "2026-11-27T03:13:32.352Z",
+ "updatedAt": "2026-11-27T10:09:40.820Z",
  "orders": [
   {
    "id": "PO-20261124-01",
    "title": "Saved Plan • Nov 24, 2026",
-   "status": "Supplier Approved",
+   "status": "At Warehouse (AB Web INITIAL)",
    "supplierFilter": "AB",
    "notes": "",
    "expectedDate": "",
-   "abDeliveryRefs": "",
+   "abDeliveryRefs": "TNK-MO-2026-2602, TJB-TM-2026-2604",
    "items": [
     {
      "key": "prd-itel-072::br-molave",
@@ -33,10 +33,10 @@
      "receivedQty": null,
      "receivedCost": 5059,
      "receivedDate": "",
-     "abDeliveryNo": "",
-     "abDeliveryStatus": "",
-     "abDeliveryDate": "",
-     "abDeliveredQty": null,
+     "abDeliveryNo": "TNK-MO-2026-2602",
+     "abDeliveryStatus": "DELIVERY",
+     "abDeliveryDate": "2026-11-27",
+     "abDeliveredQty": 10,
      "abReportedQty": null,
      "isExtraItem": false
     },
@@ -183,10 +183,10 @@
      "receivedQty": null,
      "receivedCost": 5059,
      "receivedDate": "",
-     "abDeliveryNo": "",
-     "abDeliveryStatus": "",
-     "abDeliveryDate": "",
-     "abDeliveredQty": null,
+     "abDeliveryNo": "TJB-TM-2026-2604",
+     "abDeliveryStatus": "DELIVERY",
+     "abDeliveryDate": "2026-11-27",
+     "abDeliveredQty": 5,
      "abReportedQty": null,
      "isExtraItem": false
     },
@@ -261,7 +261,7 @@
    "qtyVariance": -22,
    "costVariance": -143534.32,
    "createdAt": "2026-11-24T04:59:28.106Z",
-   "updatedAt": "2026-11-25T14:35:49.614Z"
+   "updatedAt": "2026-11-27T09:03:01.105Z"
   }
  ]
 }
