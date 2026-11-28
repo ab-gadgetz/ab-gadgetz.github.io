@@ -8517,20 +8517,27 @@ function renderQuotas() {
   kpiEl.classList.toggle('hidden', !isAdmin);
   cardsEl.style.gridTemplateColumns = visibleBranches.length <= 1 ? '1fr' : 'repeat(auto-fit,minmax(300px,1fr))';
 
+  const webAbPerBranch = branchRows
+    .filter((r) => Number(r.ws.liveQuota) > 0)
+    .map((r) => `${r.b.name}: <strong>${fmtCurrency(r.ws.liveQuota)}</strong>`)
+    .join(' • ');
+
   kpiEl.innerHTML = `
-    <div class="summary-box sales-big-box">
-      <div class="sales-big-main">
-        <div class="sales-big-title">MONTHLY INSTALLMENT RELEASE ORDERS (${ym})</div>
-        <strong class="sales-big-val" style="color:${totMinRel > 0 && totActRel >= totMinRel ? 'var(--green)' : 'var(--gold-bright)'};">${fmtNum(totActRel)} orders</strong>
-        <div class="summary-note">Principal: <strong>${fmtCurrency(totRelPrincipal)}</strong> • Min: <strong>${totMinRel > 0 ? fmtNum(totMinRel) : 'Not set'}</strong> • Max: <strong>${totMaxRel > 0 ? fmtNum(totMaxRel) : 'Not set'}</strong>${totMinRel > 0 ? ` (${relPctMin.toFixed(1)}% of Min)` : ''}</div>
+    <div class="summary-box" style="padding:10px 12px;">
+      <div style="font-size:10px;font-weight:800;letter-spacing:0.6px;color:var(--muted);">MONTHLY INSTALLMENT RELEASES (${ym})</div>
+      <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-top:2px;">
+        <strong style="font-size:18px;color:${totMinRel > 0 && totActRel >= totMinRel ? 'var(--green)' : 'var(--gold-bright)'};">${fmtNum(totActRel)} orders</strong>
+        <span class="small muted">(${fmtCurrency(totRelPrincipal)})</span>
       </div>
+      <div class="small muted" style="margin-top:2px;">Min: <strong>${totMinRel > 0 ? fmtNum(totMinRel) : '—'}</strong> • Max: <strong>${totMaxRel > 0 ? fmtNum(totMaxRel) : '—'}</strong>${totMinRel > 0 ? ` (${relPctMin.toFixed(0)}% of Min)` : ''}</div>
     </div>
-    <div class="summary-box sales-big-box" style="border-color:var(--gold);">
-      <div class="sales-big-main">
-        <div class="sales-big-title">COLLECTION QUOTA &amp; CI COMMISSION (${ym})</div>
-        <strong class="sales-big-val" style="color:${totBomQuota > 0 && totActColl >= totBomQuota ? 'var(--green)' : '#60a5fa'};">${fmtCurrency(totActColl)}</strong>
-        <div class="summary-note">${bomLabelDate} Target: <strong>${totBomQuota > 0 ? fmtCurrency(totBomQuota) : 'Not set'}</strong>${totBomQuota > 0 ? ` (${collPct.toFixed(1)}%)` : ''} • Total CI Incentives: <strong style="color:${totCommission > 0 ? 'var(--green)' : 'var(--muted)'};">${fmtCurrency(totCommission)}</strong></div>
+    <div class="summary-box" style="padding:10px 12px;border-color:var(--gold);">
+      <div style="font-size:10px;font-weight:800;letter-spacing:0.6px;color:var(--muted);">COLLECTION QUOTA &amp; WEB AB TODAY (${ym})</div>
+      <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-top:2px;">
+        <strong style="font-size:18px;color:${totBomQuota > 0 && totActColl >= totBomQuota ? 'var(--green)' : '#60a5fa'};">${fmtCurrency(totActColl)}</strong>
+        <span class="small muted">/ ${totBomQuota > 0 ? fmtCurrency(totBomQuota) : '—'} (${collPct.toFixed(1)}%) • CI: <strong style="color:${totCommission > 0 ? 'var(--green)' : 'var(--muted)'};">${fmtCurrency(totCommission)}</strong></span>
       </div>
+      <div class="small muted" style="margin-top:2px;">Web AB Today: <strong style="color:var(--gold-bright);">${fmtCurrency(totLiveQuota)}</strong>${webAbPerBranch ? ` (${webAbPerBranch})` : ''}</div>
     </div>
   `;
 
@@ -8867,7 +8874,6 @@ function buildQuotaPosterHtml(ctx, { includeMtd = true } = {}) {
       <div style="background:rgba(59,130,246,0.12);border:1px solid rgba(96,165,250,0.35);border-radius:8px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;font-size:11px;color:#93c5fd;margin-top:9px;">
         <span><strong>MTD Collected:</strong> ${fmtCurrency(ctx.actColl)} (${collPct.toFixed(1)}%)</span>
         <span><strong>MTD Releases:</strong> ${fmtNum(ctx.actRel)} orders</span>
-        ${ctx.liveQuota && state.userRole === 'ADMIN' ? `<span><strong>Web AB Today:</strong> ${fmtCurrency(ctx.liveQuota)}</span>` : ''}
       </div>
     ` : ''}
   `;
