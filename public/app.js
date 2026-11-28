@@ -499,6 +499,7 @@ async function staticGhApi(url, opts = {}) {
       webSummaries: bundle.branchWebSummaries || {},
       installments: bundle.allInstallments || [],
       payments: bundle.allPayments || [],
+      pastDues: bundle.allPastDues || [],
     };
   }
   if (pathname === '/api/inventory') return bundle.inventory;
@@ -8513,6 +8514,9 @@ function renderQuotas() {
   const collPct = totBomQuota > 0 ? Math.min(999, (totActColl / totBomQuota) * 100) : 0;
   const bomLabelDate = `${ym}-01`;
 
+  kpiEl.classList.toggle('hidden', !isAdmin);
+  cardsEl.style.gridTemplateColumns = visibleBranches.length <= 1 ? '1fr' : 'repeat(auto-fit,minmax(300px,1fr))';
+
   kpiEl.innerHTML = `
     <div class="summary-box sales-big-box">
       <div class="sales-big-main">
@@ -8558,6 +8562,36 @@ function renderQuotas() {
         <div class="q-poster-wrap" style="background:#ffffff;color:#111827;border-radius:12px;padding:16px;border:1px solid #e5e7eb;">
           ${posterHtml}
         </div>
+
+        ${(() => {
+          const brPastDues = (data.pastDues || []).filter((pd) => pd.branch_id === b.id && Number(pd.balance) > 0);
+          const pdQuick = brPastDues.filter((pd) => getEffectiveDaysDue(pd) <= 60);
+          const pdQuickSum = pdQuick.reduce((s, pd) => s + (Number(pd.balance) || 0), 0);
+          const needColl = effectiveBomQuota > 0 ? Math.max(0, effectiveBomQuota - a.collAmount) : 0;
+          const needMin = minRel > 0 ? Math.max(0, minRel - a.relCount) : 0;
+          const needMax = maxRel > 0 ? Math.max(0, maxRel - a.relCount) : 0;
+          const releaseTodo = needMin > 0
+            ? `Release <strong>${needMin} more order${needMin > 1 ? 's' : ''}</strong> for Min (0.35%)${needMax > 0 ? ` or <strong>${needMax}</strong> for Max (0.50%)` : ''}.`
+            : needMax > 0
+              ? `✓ Min met! Release <strong>${needMax} more order${needMax > 1 ? 's' : ''}</strong> to upgrade to Max (0.50%).`
+              : (maxRel > 0 ? '✓ Release target fully met (0.50% tier)!' : 'Set Min/Max release target to track orders.');
+          const collTodo = needColl > 0
+            ? `Collect <strong>${fmtCurrency(needColl)}</strong> more to hit Collection Quota.`
+            : (effectiveBomQuota > 0 ? '✓ Collection Quota met!' : 'Set Collection Quota to track collections.');
+          return `
+            <div style="margin-top:10px;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,0.03);border:1px solid var(--border-soft);">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+                <strong style="font-size:12px;color:var(--gold-bright);">📋 Action Plan To Hit Target</strong>
+                ${brPastDues.length ? `<button type="button" class="secondary q-followup-btn" data-branch="${b.id}" style="padding:5px 10px;font-size:11.5px;border-color:var(--gold);color:var(--gold-bright);min-height:0;">📲 Follow-Up Accounts (${brPastDues.length})</button>` : ''}
+              </div>
+              <ul style="margin:0;padding-left:18px;font-size:12px;line-height:1.55;color:var(--text);">
+                <li>${releaseTodo}</li>
+                <li>${collTodo}</li>
+                ${brPastDues.length ? `<li class="muted">Priority receivables: <strong>${pdQuick.length}</strong> accounts (1–60d due) totaling <strong>${fmtCurrency(pdQuickSum)}</strong> — tap Follow-Up Accounts to call/SMS.</li>` : ''}
+              </ul>
+            </div>
+          `;
+        })()}
 
         ${isAdmin ? `
           <div class="q-edit-drawer hidden" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border-soft);">
@@ -8644,6 +8678,12 @@ function renderQuotas() {
       if (!drawer) return;
       const hidden = drawer.classList.toggle('hidden');
       btn.textContent = hidden ? '✏️ Edit' : 'Done';
+    });
+  });
+
+  cardsEl.querySelectorAll('.q-followup-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      openQuotaFollowUpModal(btn.dataset.branch);
     });
   });
 
@@ -8869,6 +8909,132 @@ document.getElementById('closeQuotaPreviewBtn')?.addEventListener('click', () =>
 document.getElementById('quotaPreviewModal')?.addEventListener('click', (e) => {
   if (e.target.id === 'quotaPreviewModal') document.getElementById('quotaPreviewModal').classList.add('hidden');
 });
+let activeFollowUpBranchId = '';
+function getFollowUpLog() {
+  try {
+    return JSON.parse(localStorage.getItem('ab_ci_followup_v1') || '{}');
+  } catch {
+    return {};
+  }
+}
+function toggleFollowUpMark(acctKey) {
+  const log = getFollowUpLog();
+  if (log[acctKey] === todayStr) delete log[acctKey];
+  else log[acctKey] = todayStr;
+  try { localStorage.setItem('ab_ci_followup_v1', JSON.stringify(log)); } catch {}
+}
+
+function renderQuotaFollowUpList() {
+  const listEl = document.getElementById('quotaFollowUpList');
+  const subEl = document.getElementById('quotaFollowUpSub');
+  if (!listEl || !state.quotasData) return;
+  const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
+  const q = (document.getElementById('quotaFollowUpSearch')?.value || '').trim().toLowerCase();
+  const tierFilter = document.getElementById('quotaFollowUpTier')?.value || 'PRIORITY';
+  const log = getFollowUpLog();
+
+  let rows = (state.quotasData.pastDues || []).filter((pd) => pd.branch_id === activeFollowUpBranchId && Number(pd.balance) > 0);
+  rows = rows.map((pd) => {
+    const days = getEffectiveDaysDue(pd);
+    const bal = Number(pd.balance) || 0;
+    // Estimate late penalty (~3% per 30d overdue, capped reasonably) & 2.5% prompt-payment rebate reference
+    const estPenalty = days > 0 ? Math.round(bal * Math.min(0.15, Math.max(0.02, (days / 30) * 0.03))) : 0;
+    const onTimeRebate = Math.round(bal * 0.025);
+    return { ...pd, effDays: days, bal, estPenalty, onTimeRebate };
+  });
+
+  if (tierFilter === '1-30') rows = rows.filter((r) => r.effDays <= 30);
+  else if (tierFilter === '31-60') rows = rows.filter((r) => r.effDays > 30 && r.effDays <= 60);
+  else if (tierFilter === '61+') rows = rows.filter((r) => r.effDays > 60);
+
+  if (q) {
+    rows = rows.filter((r) =>
+      String(r.customer_name || '').toLowerCase().includes(q) ||
+      String(r.barangay || '').toLowerCase().includes(q) ||
+      String(r.account_no || '').toLowerCase().includes(q) ||
+      String(r.unit || '').toLowerCase().includes(q)
+    );
+  }
+
+  if (tierFilter === 'PRIORITY') {
+    rows.sort((a, b) => {
+      const aQuick = a.effDays <= 60 ? 0 : 1;
+      const bQuick = b.effDays <= 60 ? 0 : 1;
+      return aQuick - bQuick || a.effDays - b.effDays || b.bal - a.bal;
+    });
+  } else {
+    rows.sort((a, b) => b.bal - a.bal);
+  }
+
+  const totalBal = rows.reduce((s, r) => s + r.bal, 0);
+  if (subEl) {
+    subEl.textContent = `${branchNames[activeFollowUpBranchId] || ''} • ${rows.length} accounts • Total Due: ${fmtCurrency(totalBal)}`;
+  }
+
+  const displayRows = rows.slice(0, 120);
+  listEl.innerHTML = displayRows.length
+    ? displayRows.map((r) => {
+        const cleanPhone = String(r.contact_no || '').replace(/[^0-9+]/g, '');
+        const acctKey = `${r.branch_id}::${r.account_no || r.customer_name}`;
+        const contactedToday = log[acctKey] === todayStr;
+        const smsText = encodeURIComponent(
+          `Maayong adlaw ${r.customer_name || ''}! Gentle reminder from AB Gadgetz (${branchNames[r.branch_id] || ''}) for Acct ${r.account_no || ''}: Balance Due ${fmtCurrency(r.bal)} (+ est. penalty ${fmtCurrency(r.estPenalty)}; 2.5% rebate applies on current/on-time dues). Thank you!`
+        );
+        const dayColor = r.effDays <= 30 ? 'var(--gold-bright)' : r.effDays <= 60 ? '#fbbf24' : 'var(--danger)';
+        return `
+          <div style="background:${contactedToday ? 'rgba(34,197,94,0.08)' : '#171c23'};border:1px solid ${contactedToday ? 'var(--green)' : 'var(--border-soft)'};border-radius:10px;padding:10px 12px;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+              <div style="min-width:0;">
+                <strong style="font-size:13.5px;color:var(--text);">${r.customer_name || 'Customer'}</strong>
+                <div class="small muted">${r.account_no || ''} • ${r.barangay || '—'}</div>
+                <div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px;">${r.unit || ''}</div>
+              </div>
+              <div style="text-align:right;flex-shrink:0;">
+                <strong style="font-size:14.5px;color:var(--gold-bright);">${fmtCurrency(r.bal)}</strong>
+                <div style="font-size:10.5px;font-weight:700;color:${dayColor};">${r.effDays}d overdue</div>
+              </div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px dashed var(--border-soft);">
+              <div class="small muted">
+                Est. Penalty: <strong style="color:var(--danger);">${fmtCurrency(r.estPenalty)}</strong> • On-Time Rebate (2.5%): <strong style="color:var(--green);">${fmtCurrency(r.onTimeRebate)}</strong>
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                ${cleanPhone ? `<a href="tel:${cleanPhone}" class="secondary" style="display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border-radius:8px;font-size:11.5px;text-decoration:none;border:1px solid var(--border-soft);color:var(--text);">📞 ${r.contact_no}</a>` : '<span class="small muted">No phone</span>'}
+                ${cleanPhone ? `<a href="sms:${cleanPhone}?body=${smsText}" class="secondary" style="display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border-radius:8px;font-size:11.5px;text-decoration:none;border:1px solid var(--gold);color:var(--gold-bright);">💬 SMS</a>` : ''}
+                <button type="button" class="secondary q-mark-followup-btn" data-key="${acctKey}" style="padding:5px 10px;font-size:11.5px;min-height:0;${contactedToday ? 'border-color:var(--green);color:var(--green);' : ''}">${contactedToday ? '✓ Followed Up' : 'Mark Done'}</button>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('')
+    : '<div class="muted small" style="padding:12px;">No matching past-due accounts found.</div>';
+
+  listEl.querySelectorAll('.q-mark-followup-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      toggleFollowUpMark(btn.dataset.key);
+      renderQuotaFollowUpList();
+    });
+  });
+}
+
+function openQuotaFollowUpModal(branchId) {
+  activeFollowUpBranchId = branchId;
+  const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
+  const titleEl = document.getElementById('quotaFollowUpTitle');
+  if (titleEl) titleEl.textContent = `${branchNames[branchId] || ''} — Follow-Up Receivables`;
+  renderQuotaFollowUpList();
+  document.getElementById('quotaFollowUpModal')?.classList.remove('hidden');
+}
+
+document.getElementById('closeQuotaFollowUpBtn')?.addEventListener('click', () => {
+  document.getElementById('quotaFollowUpModal')?.classList.add('hidden');
+});
+document.getElementById('quotaFollowUpModal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'quotaFollowUpModal') document.getElementById('quotaFollowUpModal').classList.add('hidden');
+});
+document.getElementById('quotaFollowUpSearch')?.addEventListener('input', renderQuotaFollowUpList);
+document.getElementById('quotaFollowUpTier')?.addEventListener('change', renderQuotaFollowUpList);
+
 document.getElementById('quotaPreviewCopyBtn')?.addEventListener('click', async () => {
   if (activeQuotaPreviewCtx) {
     await copyQuotaText(activeQuotaPreviewCtx, document.getElementById('quotaPreviewCopyBtn'));
