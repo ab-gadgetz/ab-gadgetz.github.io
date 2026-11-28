@@ -8451,7 +8451,7 @@ function renderQuotas() {
     if (dt !== ym || !actuals[i.branch_id]) continue;
     const a = actuals[i.branch_id];
     const prin = Number(i.principal_amount) || 0;
-    const fin = Math.max(0, (Number(i.amount) || 0) - (Number(i.deposit) || 0));
+    const fin = Number(i.amount) || 0; // amount in portal_installments is already the financed contract balance (monthly * term) after downpayment
     const term = Number(i.term) || 0;
     a.relCount++;
     a.relPrincipal += prin;
