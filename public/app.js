@@ -9358,9 +9358,12 @@ function enrichPastDueRow(pd) {
   const effDays = getEffectiveDaysDue(pd);
   const tier = getAgingTier(effDays);
   const bal = Number(pd.balance) || 0;
-  const monthsDue = Number(pd.months_due) || (effDays >= 30 ? Math.floor(effDays / 30) : (effDays > 0 ? 1 : 0));
-  const monthlyBase = Number(pd.amount_due) || Number(pd.amortization) || 0;
-  const amountDue = monthlyBase > 0 ? Math.min(bal, monthlyBase * Math.max(1, monthsDue)) : bal;
+  // Web AB's months_due column is the loan TERM, not months overdue; its amount_due is what is actually due now.
+  const termMonths = Number(pd.months_due) || 0;
+  let monthsDue = effDays > 0 ? Math.max(1, Math.ceil(effDays / 30)) : 0;
+  if (termMonths > 0) monthsDue = Math.min(monthsDue, termMonths);
+  const webDue = Number(pd.amount_due) || 0;
+  const amountDue = webDue > 0 ? Math.min(bal, webDue) : (Number(pd.amortization) > 0 ? Math.min(bal, Number(pd.amortization) * Math.max(1, monthsDue)) : bal);
   const estPenalty = effDays > 0 ? Math.round(amountDue * Math.min(0.15, Math.max(0.02, (effDays / 30) * 0.03))) : 0;
   const onTimeRebate = Math.round(amountDue * 0.025);
   return { ...pd, effDays, tierKey: tier.key, tierAction: tier.action, bal, monthsDue, amountDue, estPenalty, onTimeRebate };
