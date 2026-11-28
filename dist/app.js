@@ -8531,83 +8531,40 @@ function renderQuotas() {
   `;
 
   cardsEl.innerHTML = branchRows.map(({ b, a, ws, minRel, maxRel, ciCount, savedBomQuota, bom46, bom712, live46, live712, estBom46, estBom712, estBomQ, effectiveBomQuota, isEstBom, hitQuota, hitMax, hitMin, commRate, branchCommission, perCiCommission }) => {
-    const relBarMax = maxRel > 0 ? maxRel : (minRel > 0 ? minRel : Math.max(1, a.relCount));
-    const relBarPct = Math.min(100, (a.relCount / relBarMax) * 100);
-    let relBadge = '<span class="badge" style="font-size:10px;">No Target</span>';
-    if (minRel > 0 || maxRel > 0) {
-      if (maxRel > 0 && a.relCount > maxRel) relBadge = '<span class="badge" style="background:rgba(245,158,11,0.2);color:#fbbf24;font-size:10px;">Over Max</span>';
-      else if (a.relCount >= minRel) relBadge = '<span class="badge badge-ok" style="font-size:10px;">Target Met ✓</span>';
-      else relBadge = '<span class="badge" style="background:rgba(96,165,250,0.2);color:#93c5fd;font-size:10px;">In Progress</span>';
-    }
-
-    const collBarPct = effectiveBomQuota > 0 ? Math.min(100, (a.collAmount / effectiveBomQuota) * 100) : 0;
-    const collRem = effectiveBomQuota > 0 ? Math.max(0, effectiveBomQuota - a.collAmount) : 0;
+    const posterHtml = buildQuotaPosterHtml({
+      branchName: b.name,
+      ym,
+      minRel,
+      maxRel,
+      ciCount,
+      bomQuota: effectiveBomQuota,
+      actRel: a.relCount,
+      actColl: a.collAmount,
+      liveQuota: ws.liveQuota || 0,
+      isEstBom,
+    }, { includeMtd: true });
 
     return `
-      <div class="sub-panel quota-branch-card" data-branch="${b.id}" style="padding:12px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:6px;">
-          <strong style="font-size:15px;color:var(--gold-bright);">${b.name}</strong>
+      <div class="sub-panel quota-branch-card" data-branch="${b.id}" style="padding:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:8px;">
+          <strong style="font-size:13px;color:var(--gold-bright);">${b.name} Branch</strong>
           <div style="display:flex;align-items:center;gap:6px;">
-            ${relBadge}
-            <button type="button" class="secondary q-preview-btn" data-branch="${b.id}" title="Screenshot Preview for Branch GC" aria-label="Screenshot Preview for Branch GC" style="padding:3px 8px;font-size:12px;min-height:0;">📸</button>
+            <button type="button" class="secondary q-copy-btn" data-branch="${b.id}" style="padding:3px 8px;font-size:11px;min-height:0;" title="Copy target summary text">📋 Copy</button>
+            <button type="button" class="secondary q-preview-btn" data-branch="${b.id}" style="padding:3px 8px;font-size:11px;min-height:0;" title="Open clean screenshot modal">📸</button>
+            ${isAdmin ? `<button type="button" class="secondary q-edit-toggle-btn" style="padding:3px 8px;font-size:11px;min-height:0;">✏️ Edit</button>` : ''}
           </div>
         </div>
 
-        <div style="margin-bottom:12px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,0.03);border:1px solid var(--border-soft);">
-          <div style="display:flex;justify-content:space-between;font-size:11.5px;margin-bottom:4px;">
-            <span class="muted">Installment Releases</span>
-            <strong>${fmtNum(a.relCount)} orders <span class="muted">(${fmtCurrency(a.relPrincipal)})</span></strong>
-          </div>
-          <div style="height:6px;background:rgba(255,255,255,0.08);border-radius:99px;overflow:hidden;margin-bottom:5px;">
-            <div style="height:100%;width:${relBarPct.toFixed(1)}%;background:${a.relCount >= minRel && minRel > 0 ? 'var(--green)' : 'var(--gold)'};"></div>
-          </div>
-          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);">
-            <span>Min: <strong style="color:var(--text);">${minRel > 0 ? `${fmtNum(minRel)} orders` : '—'}</strong></span>
-            <span>Max: <strong style="color:var(--text);">${maxRel > 0 ? `${fmtNum(maxRel)} orders` : '—'}</strong></span>
-          </div>
-        </div>
-
-        <div style="margin-bottom:${isAdmin ? '12px' : '0'};padding:8px 10px;border-radius:8px;background:rgba(255,255,255,0.03);border:1px solid var(--border-soft);">
-          <div style="display:flex;justify-content:space-between;font-size:11.5px;margin-bottom:4px;">
-            <span class="muted">Collection vs ${bomLabelDate} Quota</span>
-            <strong style="color:${effectiveBomQuota > 0 && a.collAmount >= effectiveBomQuota ? 'var(--green)' : '#60a5fa'};">${fmtCurrency(a.collAmount)} <span class="muted">(${a.collCount})</span></strong>
-          </div>
-          <div style="height:6px;background:rgba(255,255,255,0.08);border-radius:99px;overflow:hidden;margin-bottom:5px;">
-            <div style="height:100%;width:${collBarPct.toFixed(1)}%;background:${effectiveBomQuota > 0 && a.collAmount >= effectiveBomQuota ? 'var(--green)' : '#60a5fa'};"></div>
-          </div>
-          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px;">
-            <span>${isEstBom ? 'Est. ' : ''}${bomLabelDate} Quota: <strong style="color:var(--text);">${effectiveBomQuota > 0 ? fmtCurrency(effectiveBomQuota) : 'Not set'}</strong></span>
-            <span>${effectiveBomQuota > 0 ? `${collBarPct.toFixed(1)}% • Rem: ${fmtCurrency(collRem)}` : 'Set below'}</span>
-          </div>
-          ${ws.liveQuota ? `
-            <div style="font-size:11px;padding-top:6px;border-top:1px dashed var(--border-soft);color:var(--muted);line-height:1.45;">
-              <div>Today Web AB Live Quota: <strong style="color:var(--gold-bright);">${fmtCurrency(ws.liveQuota)}</strong> (Bal: ${fmtCurrency(ws.currentBalance)})</div>
-              <div>• 4–6 Mos (${ws.acct4to6 || 0}): ${fmtCurrency(live46)} × 27.5% = ${fmtCurrency(live46 * 0.275)}</div>
-              <div>• 7–12 Mos (${ws.acct7to12 || 0}): ${fmtCurrency(live712)} × 11% = ${fmtCurrency(live712 * 0.11)}</div>
-            </div>
-          ` : ''}
-        </div>
-
-        <div style="margin-bottom:${isAdmin ? '12px' : '0'};padding:8px 10px;border-radius:8px;background:${commRate > 0 ? 'rgba(34,197,94,0.08)' : 'rgba(255,255,255,0.03)'};border:1px solid ${commRate > 0 ? 'var(--green)' : 'var(--border-soft)'};">
-          <div style="display:flex;justify-content:space-between;align-items:center;font-size:11.5px;margin-bottom:4px;">
-            <span class="muted">CI Incentive (${ciCount} CI${ciCount > 1 ? 's' : ''})</span>
-            <strong style="color:${commRate > 0 ? 'var(--green)' : 'var(--muted)'};">
-              ${commRate > 0 ? `${(commRate * 100).toFixed(2)}% • ${fmtCurrency(branchCommission)}` : 'No Incentives'}
-            </strong>
-          </div>
-          <div style="font-size:11px;color:var(--muted);line-height:1.45;">
-            ${commRate > 0
-              ? `<div>${hitMax ? 'Quota Hit + Max Release (0.50%)' : 'Quota Hit + Min Release (0.35%)'} • Each CI (${ciCount}): <strong style="color:var(--gold-bright);">${fmtCurrency(perCiCommission)}</strong></div>`
-              : `<div>Need: ${!hitQuota ? 'Hit Collection Quota' : ''}${!hitQuota && !hitMin ? ' + ' : ''}${!hitMin ? 'Hit Min Release' : ''} to unlock 0.35% (${fmtCurrency((a.collAmount * 0.0035) / ciCount)}/CI) or Max for 0.5% (${fmtCurrency((a.collAmount * 0.005) / ciCount)}/CI)</div>`}
-          </div>
+        <div class="q-poster-wrap" style="background:#ffffff;color:#111827;border-radius:12px;padding:16px;border:1px solid #e5e7eb;">
+          ${posterHtml}
         </div>
 
         ${isAdmin ? `
-          <div style="padding-top:8px;border-top:1px solid var(--border-soft);">
+          <div class="q-edit-drawer hidden" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border-soft);">
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px;">
               <div>
                 <label style="font-size:10px;color:var(--muted);">MIN RELEASE (ORDERS)</label>
-                <input type="number" class="q-min-rel" value="${minRel || ''}" min="0" step="1" placeholder="e.g. 50" style="padding:5px 7px;font-size:12px;" />
+                <input type="number" class="q-min-rel" value="${minRel || ''}" min="0" step="1" placeholder="e.g. 55" style="padding:5px 7px;font-size:12px;" />
               </div>
               <div>
                 <label style="font-size:10px;color:var(--muted);">MAX RELEASE (ORDERS)</label>
@@ -8644,25 +8601,49 @@ function renderQuotas() {
     `;
   }).join('');
 
+  const readCardCtx = (btn) => {
+    const card = btn.closest('.quota-branch-card');
+    const row = branchRows.find((r) => r.b.id === btn.dataset.branch);
+    if (!row) return null;
+    const minRel = card?.querySelector('.q-min-rel') ? (Number(card.querySelector('.q-min-rel').value) || row.minRel) : row.minRel;
+    const maxRel = card?.querySelector('.q-max-rel') ? (Number(card.querySelector('.q-max-rel').value) || row.maxRel) : row.maxRel;
+    const ciCount = card?.querySelector('.q-ci-count') ? (Math.max(1, parseInt(card.querySelector('.q-ci-count').value || '1', 10) || 1)) : row.ciCount;
+    const bomQuota = card?.querySelector('.q-bom-quota') ? (Number(card.querySelector('.q-bom-quota').value) || row.effectiveBomQuota) : row.effectiveBomQuota;
+    return {
+      branchName: row.b.name,
+      ym,
+      minRel,
+      maxRel,
+      ciCount,
+      bomQuota,
+      actRel: row.a.relCount,
+      actColl: row.a.collAmount,
+      liveQuota: row.ws.liveQuota || 0,
+      isEstBom: row.isEstBom && !(card?.querySelector('.q-bom-quota')?.value),
+    };
+  };
+
   cardsEl.querySelectorAll('.q-preview-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
-      const card = btn.closest('.quota-branch-card');
-      const row = branchRows.find((r) => r.b.id === btn.dataset.branch);
-      if (!row) return;
-      const minRel = card?.querySelector('.q-min-rel') ? (Number(card.querySelector('.q-min-rel').value) || row.minRel) : row.minRel;
-      const maxRel = card?.querySelector('.q-max-rel') ? (Number(card.querySelector('.q-max-rel').value) || row.maxRel) : row.maxRel;
-      const ciCount = card?.querySelector('.q-ci-count') ? (Math.max(1, parseInt(card.querySelector('.q-ci-count').value || '1', 10) || 1)) : row.ciCount;
-      const bomQuota = card?.querySelector('.q-bom-quota') ? (Number(card.querySelector('.q-bom-quota').value) || row.effectiveBomQuota) : row.effectiveBomQuota;
-      openQuotaPreviewModal({
-        branchName: row.b.name,
-        ym,
-        minRel,
-        maxRel,
-        ciCount,
-        bomQuota,
-        actRel: row.a.relCount,
-        actColl: row.a.collAmount,
-      });
+      const ctx = readCardCtx(btn);
+      if (ctx) openQuotaPreviewModal(ctx);
+    });
+  });
+
+  cardsEl.querySelectorAll('.q-copy-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const ctx = readCardCtx(btn);
+      if (!ctx) return;
+      await copyQuotaText(ctx, btn);
+    });
+  });
+
+  cardsEl.querySelectorAll('.q-edit-toggle-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const drawer = btn.closest('.quota-branch-card')?.querySelector('.q-edit-drawer');
+      if (!drawer) return;
+      const hidden = drawer.classList.toggle('hidden');
+      btn.textContent = hidden ? '✏️ Edit' : 'Done';
     });
   });
 
@@ -8721,11 +8702,7 @@ function renderQuotas() {
 }
 
 let activeQuotaPreviewCtx = null;
-function renderQuotaPreviewPoster() {
-  const poster = document.getElementById('quotaPreviewPoster');
-  const ctx = activeQuotaPreviewCtx;
-  if (!poster || !ctx) return;
-
+function buildQuotaPosterHtml(ctx, { includeMtd = true } = {}) {
   const [y, m] = String(ctx.ym || '').split('-').map(Number);
   const monthLabel = y && m
     ? new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
@@ -8735,97 +8712,122 @@ function renderQuotaPreviewPoster() {
   const maxEach = maxTotal / ctx.ciCount;
   const minEach = minTotal / ctx.ciCount;
   const fmtWhole = (n) => `₱${Math.round(Number(n) || 0).toLocaleString('en-PH')}`;
-  const includeMtd = Boolean(document.getElementById('quotaPreviewMtdChk')?.checked);
   const collPct = ctx.bomQuota > 0 ? Math.min(999, (ctx.actColl / ctx.bomQuota) * 100) : 0;
+  const collRem = ctx.bomQuota > 0 ? Math.max(0, ctx.bomQuota - ctx.actColl) : 0;
 
-  poster.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #eab308;padding-bottom:12px;margin-bottom:14px;">
-      <div style="display:flex;align-items:center;gap:10px;">
-        <img src="${LOGO_SQUARE_SRC}" alt="AB Gadgetz" style="width:36px;height:36px;border-radius:8px;object-fit:cover;" />
+  const hitQuota = ctx.bomQuota > 0 && ctx.actColl >= ctx.bomQuota;
+  const hitMax = ctx.maxRel > 0 && ctx.actRel >= ctx.maxRel;
+  const hitMin = ctx.minRel > 0 && ctx.actRel >= ctx.minRel;
+  const achievedMax = hitQuota && hitMax;
+  const achievedMin = hitQuota && hitMin && !hitMax;
+  const noIncentiveNow = !hitQuota || !hitMin;
+
+  const metPill = '<span style="display:inline-block;background:#16a34a;color:#ffffff;font-size:9.5px;font-weight:800;padding:2px 6px;border-radius:999px;letter-spacing:0.3px;">✓ MET</span>';
+  const progPill = (txt) => `<span style="display:inline-block;background:#e2e8f0;color:#334155;font-size:9.5px;font-weight:700;padding:2px 6px;border-radius:999px;">${txt}</span>`;
+
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #eab308;padding-bottom:10px;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:9px;">
+        <img src="${LOGO_SQUARE_SRC}" alt="AB Gadgetz" style="width:34px;height:34px;border-radius:8px;object-fit:cover;" />
         <div>
-          <div style="font-size:10px;font-weight:800;letter-spacing:1.1px;color:#a16207;text-transform:uppercase;">AB Gadgetz • Monthly Branch Target</div>
-          <div style="font-size:18px;font-weight:800;color:#111827;line-height:1.2;">${ctx.branchName} Branch — ${monthLabel}</div>
+          <div style="font-size:9.5px;font-weight:800;letter-spacing:1px;color:#a16207;text-transform:uppercase;">AB Gadgetz • Monthly Branch Target</div>
+          <div style="font-size:17px;font-weight:800;color:#111827;line-height:1.2;">${ctx.branchName} Branch — ${monthLabel}</div>
         </div>
       </div>
-      <div style="text-align:right;font-size:11px;font-weight:700;color:#4b5563;background:#fef9c3;border:1px solid #fde047;padding:4px 9px;border-radius:999px;">
+      <div style="text-align:right;font-size:10.5px;font-weight:700;color:#4b5563;background:#fef9c3;border:1px solid #fde047;padding:3px 8px;border-radius:999px;white-space:nowrap;">
         ${ctx.ciCount} Collector${ctx.ciCount > 1 ? 's' : ''}
       </div>
     </div>
 
-    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:14px;">
-      <div style="font-size:10.5px;font-weight:800;letter-spacing:0.8px;color:#475569;text-transform:uppercase;margin-bottom:8px;">Monthly Quota &amp; Release Targets</div>
-      <div style="display:grid;grid-template-columns:1.35fr 1fr 1fr;gap:8px;">
-        <div style="background:#ffffff;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;">
-          <div style="font-size:10px;font-weight:700;color:#64748b;">COLLECTION QUOTA</div>
-          <div style="font-size:16px;font-weight:800;color:#0f172a;margin-top:2px;">${ctx.bomQuota > 0 ? fmtCurrency(ctx.bomQuota) : 'Not set'}</div>
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px;margin-bottom:12px;">
+      <div style="font-size:10px;font-weight:800;letter-spacing:0.8px;color:#475569;text-transform:uppercase;margin-bottom:7px;">Monthly Quota &amp; Release Targets</div>
+      <div style="display:grid;grid-template-columns:1.35fr 1fr 1fr;gap:7px;">
+        <div style="background:${hitQuota ? '#f0fdf4' : '#ffffff'};border:${hitQuota ? '2px solid #16a34a' : '1px solid #cbd5e1'};border-radius:8px;padding:7px 9px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
+            <span style="font-size:9.5px;font-weight:700;color:${hitQuota ? '#166534' : '#64748b'};">COLLECTION QUOTA</span>
+            ${hitQuota ? metPill : (ctx.bomQuota > 0 ? progPill(`${collPct.toFixed(0)}%`) : '')}
+          </div>
+          <div style="font-size:14.5px;font-weight:800;color:${hitQuota ? '#15803d' : '#0f172a'};margin-top:2px;">${ctx.bomQuota > 0 ? fmtCurrency(ctx.bomQuota) : 'Not set'}</div>
+          ${includeMtd && ctx.bomQuota > 0 ? `<div style="font-size:10px;color:${hitQuota ? '#166534' : '#64748b'};margin-top:2px;">${hitQuota ? `Collected ${fmtCurrency(ctx.actColl)}` : `Rem: ${fmtCurrency(collRem)}`}</div>` : ''}
         </div>
-        <div style="background:#ffffff;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;">
-          <div style="font-size:10px;font-weight:700;color:#64748b;">MIN RELEASE</div>
-          <div style="font-size:16px;font-weight:800;color:#0f172a;margin-top:2px;">${ctx.minRel > 0 ? `${fmtNum(ctx.minRel)} orders` : '—'}</div>
+        <div style="background:${hitMin ? '#f0fdf4' : '#ffffff'};border:${hitMin ? '2px solid #16a34a' : '1px solid #cbd5e1'};border-radius:8px;padding:7px 9px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
+            <span style="font-size:9.5px;font-weight:700;color:${hitMin ? '#166534' : '#64748b'};">MIN RELEASE</span>
+            ${hitMin ? metPill : (ctx.minRel > 0 ? progPill(`${ctx.actRel}/${ctx.minRel}`) : '')}
+          </div>
+          <div style="font-size:14.5px;font-weight:800;color:${hitMin ? '#15803d' : '#0f172a'};margin-top:2px;">${ctx.minRel > 0 ? `${fmtNum(ctx.minRel)} orders` : '—'}</div>
+          ${includeMtd ? `<div style="font-size:10px;color:${hitMin ? '#166534' : '#64748b'};margin-top:2px;">Actual: ${fmtNum(ctx.actRel)} orders</div>` : ''}
         </div>
-        <div style="background:#ffffff;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;">
-          <div style="font-size:10px;font-weight:700;color:#64748b;">MAX RELEASE</div>
-          <div style="font-size:16px;font-weight:800;color:#0f172a;margin-top:2px;">${ctx.maxRel > 0 ? `${fmtNum(ctx.maxRel)} orders` : '—'}</div>
+        <div style="background:${hitMax ? '#f0fdf4' : '#ffffff'};border:${hitMax ? '2px solid #16a34a' : '1px solid #cbd5e1'};border-radius:8px;padding:7px 9px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
+            <span style="font-size:9.5px;font-weight:700;color:${hitMax ? '#166534' : '#64748b'};">MAX RELEASE</span>
+            ${hitMax ? metPill : (ctx.maxRel > 0 ? progPill(`${ctx.actRel}/${ctx.maxRel}`) : '')}
+          </div>
+          <div style="font-size:14.5px;font-weight:800;color:${hitMax ? '#15803d' : '#0f172a'};margin-top:2px;">${ctx.maxRel > 0 ? `${fmtNum(ctx.maxRel)} orders` : '—'}</div>
+          ${includeMtd && ctx.maxRel > 0 ? `<div style="font-size:10px;color:${hitMax ? '#166534' : '#64748b'};margin-top:2px;">${hitMax ? 'Max reached!' : `${Math.max(0, ctx.maxRel - ctx.actRel)} to go`}</div>` : ''}
         </div>
       </div>
     </div>
 
-    <div style="font-size:10.5px;font-weight:800;letter-spacing:0.8px;color:#475569;text-transform:uppercase;margin-bottom:8px;">CI Incentive Structure</div>
+    <div style="font-size:10px;font-weight:800;letter-spacing:0.8px;color:#475569;text-transform:uppercase;margin-bottom:7px;">CI Incentive Structure</div>
 
-    <div style="display:grid;gap:8px;margin-bottom:12px;">
-      <div style="background:#f0fdf4;border:1px solid #86efac;border-left:4px solid #16a34a;border-radius:8px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+    <div style="display:grid;gap:7px;">
+      <div style="background:#f0fdf4;border:${achievedMax ? '2px solid #16a34a' : '1px solid #86efac'};border-left:4px solid #16a34a;border-radius:8px;padding:9px 11px;display:flex;justify-content:space-between;align-items:center;gap:10px;${!achievedMax && includeMtd && !noIncentiveNow ? 'opacity:0.65;' : ''}">
         <div>
-          <div style="font-size:12.5px;font-weight:800;color:#14532d;">Maximum Target Hit (0.50%)</div>
-          <div style="font-size:11px;color:#166534;">Collection Quota + ${ctx.maxRel > 0 ? `${fmtNum(ctx.maxRel)}+` : 'Max'} Releases</div>
+          <div style="font-size:12px;font-weight:800;color:#14532d;display:flex;align-items:center;gap:6px;">
+            <span>Maximum Target Hit (0.50%)</span>
+            ${achievedMax ? '<span style="background:#16a34a;color:#fff;font-size:9px;padding:1px 6px;border-radius:999px;">✓ ACHIEVED</span>' : ''}
+          </div>
+          <div style="font-size:10.5px;color:#166534;">Collection Quota + ${ctx.maxRel > 0 ? `${fmtNum(ctx.maxRel)}+` : 'Max'} Releases</div>
         </div>
         <div style="text-align:right;">
-          <div style="font-size:16px;font-weight:800;color:#15803d;">${fmtWhole(maxTotal)}</div>
-          ${ctx.ciCount > 1 ? `<div style="font-size:11px;font-weight:700;color:#166534;">${fmtWhole(maxEach)} each CI</div>` : ''}
+          <div style="font-size:15.5px;font-weight:800;color:#15803d;">${fmtWhole(maxTotal)}</div>
+          ${ctx.ciCount > 1 ? `<div style="font-size:10.5px;font-weight:700;color:#166534;">${fmtWhole(maxEach)} each CI</div>` : ''}
         </div>
       </div>
 
-      <div style="background:#fefce8;border:1px solid #fde047;border-left:4px solid #ca8a04;border-radius:8px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+      <div style="background:#fefce8;border:${achievedMin ? '2px solid #ca8a04' : '1px solid #fde047'};border-left:4px solid #ca8a04;border-radius:8px;padding:9px 11px;display:flex;justify-content:space-between;align-items:center;gap:10px;${achievedMax && includeMtd ? 'opacity:0.6;' : ''}">
         <div>
-          <div style="font-size:12.5px;font-weight:800;color:#713f12;">Minimum Target Hit (0.35%)</div>
-          <div style="font-size:11px;color:#854d0e;">Collection Quota + ${ctx.minRel > 0 ? `${fmtNum(ctx.minRel)}` : 'Min'} Releases</div>
+          <div style="font-size:12px;font-weight:800;color:#713f12;display:flex;align-items:center;gap:6px;">
+            <span>Minimum Target Hit (0.35%)</span>
+            ${achievedMin ? '<span style="background:#ca8a04;color:#fff;font-size:9px;padding:1px 6px;border-radius:999px;">✓ ACHIEVED</span>' : ''}
+          </div>
+          <div style="font-size:10.5px;color:#854d0e;">Collection Quota + ${ctx.minRel > 0 ? `${fmtNum(ctx.minRel)}` : 'Min'} Releases</div>
         </div>
         <div style="text-align:right;">
-          <div style="font-size:16px;font-weight:800;color:#a16207;">${fmtWhole(minTotal)}</div>
-          ${ctx.ciCount > 1 ? `<div style="font-size:11px;font-weight:700;color:#854d0e;">${fmtWhole(minEach)} each CI</div>` : ''}
+          <div style="font-size:15.5px;font-weight:800;color:#a16207;">${fmtWhole(minTotal)}</div>
+          ${ctx.ciCount > 1 ? `<div style="font-size:10.5px;font-weight:700;color:#854d0e;">${fmtWhole(minEach)} each CI</div>` : ''}
         </div>
       </div>
 
-      <div style="background:#fef2f2;border:1px solid #fecaca;border-left:4px solid #dc2626;border-radius:8px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;">
-        <div style="font-size:11.5px;font-weight:700;color:#991b1b;">Collection Quota Not Hit OR Release Target Not Hit</div>
-        <div style="font-size:12px;font-weight:800;color:#dc2626;">No Incentives (₱0)</div>
+      <div style="background:#fef2f2;border:${includeMtd && noIncentiveNow ? '2px solid #dc2626' : '1px solid #fecaca'};border-left:4px solid #dc2626;border-radius:8px;padding:8px 11px;display:flex;justify-content:space-between;align-items:center;gap:8px;${includeMtd && !noIncentiveNow ? 'opacity:0.55;' : ''}">
+        <div style="font-size:11px;font-weight:700;color:#991b1b;">
+          Collection Quota Not Hit OR Release Target Not Hit
+          ${includeMtd && noIncentiveNow ? `<div style="font-size:10px;font-weight:600;color:#b91c1c;margin-top:2px;">Status: ${hitMin ? '✓ Min Release Met' : `Need ${Math.max(0, ctx.minRel - ctx.actRel)} more release(s)`} • ${hitQuota ? '✓ Collection Met' : `Need ${fmtCurrency(collRem)} more collection`}</div>` : ''}
+        </div>
+        <div style="font-size:11.5px;font-weight:800;color:#dc2626;white-space:nowrap;">No Incentives (₱0)</div>
       </div>
     </div>
 
     ${includeMtd ? `
-      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:9px 12px;display:flex;justify-content:space-between;align-items:center;font-size:11.5px;color:#1e3a8a;margin-top:8px;">
-        <span><strong>MTD Collections:</strong> ${fmtCurrency(ctx.actColl)} (${collPct.toFixed(1)}%)</span>
+      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;font-size:11px;color:#1e3a8a;margin-top:9px;">
+        <span><strong>MTD Collected:</strong> ${fmtCurrency(ctx.actColl)} (${collPct.toFixed(1)}%)</span>
         <span><strong>MTD Releases:</strong> ${fmtNum(ctx.actRel)} orders</span>
+        ${ctx.liveQuota ? `<span><strong>Web AB Today:</strong> ${fmtCurrency(ctx.liveQuota)}</span>` : ''}
       </div>
     ` : ''}
   `;
 }
 
-function openQuotaPreviewModal(ctx) {
-  activeQuotaPreviewCtx = ctx;
-  renderQuotaPreviewPoster();
-  document.getElementById('quotaPreviewModal')?.classList.remove('hidden');
+function renderQuotaPreviewPoster() {
+  const poster = document.getElementById('quotaPreviewPoster');
+  const ctx = activeQuotaPreviewCtx;
+  if (!poster || !ctx) return;
+  const includeMtd = Boolean(document.getElementById('quotaPreviewMtdChk')?.checked);
+  poster.innerHTML = buildQuotaPosterHtml(ctx, { includeMtd });
 }
 
-document.getElementById('quotaPreviewMtdChk')?.addEventListener('change', renderQuotaPreviewPoster);
-document.getElementById('closeQuotaPreviewBtn')?.addEventListener('click', () => {
-  document.getElementById('quotaPreviewModal')?.classList.add('hidden');
-});
-document.getElementById('quotaPreviewModal')?.addEventListener('click', (e) => {
-  if (e.target.id === 'quotaPreviewModal') document.getElementById('quotaPreviewModal').classList.add('hidden');
-});
-document.getElementById('quotaPreviewCopyBtn')?.addEventListener('click', async () => {
-  const ctx = activeQuotaPreviewCtx;
-  if (!ctx) return;
+async function copyQuotaText(ctx, btn) {
   const [y, m] = String(ctx.ym || '').split('-').map(Number);
   const monthLabel = y && m
     ? new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
@@ -8846,9 +8848,31 @@ document.getElementById('quotaPreviewCopyBtn')?.addEventListener('click', async 
   ].join('\n');
   try {
     await navigator.clipboard.writeText(txt);
-    const btn = document.getElementById('quotaPreviewCopyBtn');
-    if (btn) { btn.textContent = '✓ Copied'; setTimeout(() => { btn.textContent = '📋 Copy Text'; }, 1500); }
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = '✓ Copied';
+      setTimeout(() => { btn.textContent = orig; }, 1500);
+    }
   } catch {}
+}
+
+function openQuotaPreviewModal(ctx) {
+  activeQuotaPreviewCtx = ctx;
+  renderQuotaPreviewPoster();
+  document.getElementById('quotaPreviewModal')?.classList.remove('hidden');
+}
+
+document.getElementById('quotaPreviewMtdChk')?.addEventListener('change', renderQuotaPreviewPoster);
+document.getElementById('closeQuotaPreviewBtn')?.addEventListener('click', () => {
+  document.getElementById('quotaPreviewModal')?.classList.add('hidden');
+});
+document.getElementById('quotaPreviewModal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'quotaPreviewModal') document.getElementById('quotaPreviewModal').classList.add('hidden');
+});
+document.getElementById('quotaPreviewCopyBtn')?.addEventListener('click', async () => {
+  if (activeQuotaPreviewCtx) {
+    await copyQuotaText(activeQuotaPreviewCtx, document.getElementById('quotaPreviewCopyBtn'));
+  }
 });
 
 document.getElementById('quotaInfoToggleBtn')?.addEventListener('click', () => {
