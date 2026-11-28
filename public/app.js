@@ -8774,11 +8774,11 @@ function buildQuotaPosterHtml(ctx, { includeMtd = true } = {}) {
     <div style="display:grid;gap:7px;">
       <div style="background:#f0fdf4;border:${achievedMax ? '2px solid #16a34a' : '1px solid #86efac'};border-left:4px solid #16a34a;border-radius:8px;padding:9px 11px;display:flex;justify-content:space-between;align-items:center;gap:10px;${!achievedMax && includeMtd && !noIncentiveNow ? 'opacity:0.65;' : ''}">
         <div>
-          <div style="font-size:12px;font-weight:800;color:#14532d;display:flex;align-items:center;gap:6px;">
+          <div style="font-size:12px;font-weight:800;color:#14532d;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
             <span>Maximum Target Hit (0.50%)</span>
-            ${achievedMax ? '<span style="background:#16a34a;color:#fff;font-size:9px;padding:1px 6px;border-radius:999px;">✓ ACHIEVED</span>' : ''}
+            ${achievedMax ? '<span style="background:#16a34a;color:#fff;font-size:9px;padding:1px 6px;border-radius:999px;">✓ ACHIEVED</span>' : (includeMtd && hitMax && !hitQuota ? '<span style="background:#15803d;color:#fff;font-size:9px;padding:1px 6px;border-radius:999px;">✓ MAX RELEASE MET</span>' : '')}
           </div>
-          <div style="font-size:10.5px;color:#166534;">Collection Quota + ${ctx.maxRel > 0 ? `${fmtNum(ctx.maxRel)}+` : 'Max'} Releases</div>
+          <div style="font-size:10.5px;color:#166534;">Collection Quota + ${ctx.maxRel > 0 ? `${fmtNum(ctx.maxRel)}+` : 'Max'} Releases${includeMtd && ctx.maxRel > 0 && !hitMax ? ` (${ctx.maxRel - ctx.actRel} more to 0.50%)` : ''}</div>
         </div>
         <div style="text-align:right;">
           <div style="font-size:15.5px;font-weight:800;color:#15803d;">${fmtWhole(maxTotal)}</div>
@@ -8786,13 +8786,13 @@ function buildQuotaPosterHtml(ctx, { includeMtd = true } = {}) {
         </div>
       </div>
 
-      <div style="background:#fefce8;border:${achievedMin ? '2px solid #ca8a04' : '1px solid #fde047'};border-left:4px solid #ca8a04;border-radius:8px;padding:9px 11px;display:flex;justify-content:space-between;align-items:center;gap:10px;${achievedMax && includeMtd ? 'opacity:0.6;' : ''}">
+      <div style="background:#fefce8;border:${achievedMin || (includeMtd && hitMin && !hitMax) ? '2px solid #ca8a04' : '1px solid #fde047'};border-left:4px solid #ca8a04;border-radius:8px;padding:9px 11px;display:flex;justify-content:space-between;align-items:center;gap:10px;${achievedMax && includeMtd ? 'opacity:0.6;' : ''}">
         <div>
-          <div style="font-size:12px;font-weight:800;color:#713f12;display:flex;align-items:center;gap:6px;">
+          <div style="font-size:12px;font-weight:800;color:#713f12;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
             <span>Minimum Target Hit (0.35%)</span>
-            ${achievedMin ? '<span style="background:#ca8a04;color:#fff;font-size:9px;padding:1px 6px;border-radius:999px;">✓ ACHIEVED</span>' : ''}
+            ${achievedMin ? '<span style="background:#ca8a04;color:#fff;font-size:9px;padding:1px 6px;border-radius:999px;">✓ ACHIEVED</span>' : (includeMtd && hitMin && !hitMax ? '<span style="background:#ca8a04;color:#fff;font-size:9px;padding:1px 6px;border-radius:999px;">CURRENT TIER (✓ MIN MET)</span>' : '')}
           </div>
-          <div style="font-size:10.5px;color:#854d0e;">Collection Quota + ${ctx.minRel > 0 ? `${fmtNum(ctx.minRel)}` : 'Min'} Releases</div>
+          <div style="font-size:10.5px;color:#854d0e;">Collection Quota + ${ctx.minRel > 0 ? `${fmtNum(ctx.minRel)}` : 'Min'} Releases${includeMtd && hitMin && !hitMax && !hitQuota ? ' • Need Collection Quota' : ''}</div>
         </div>
         <div style="text-align:right;">
           <div style="font-size:15.5px;font-weight:800;color:#a16207;">${fmtWhole(minTotal)}</div>
@@ -8803,7 +8803,7 @@ function buildQuotaPosterHtml(ctx, { includeMtd = true } = {}) {
       <div style="background:#fef2f2;border:${includeMtd && noIncentiveNow ? '2px solid #dc2626' : '1px solid #fecaca'};border-left:4px solid #dc2626;border-radius:8px;padding:8px 11px;display:flex;justify-content:space-between;align-items:center;gap:8px;${includeMtd && !noIncentiveNow ? 'opacity:0.55;' : ''}">
         <div style="font-size:11px;font-weight:700;color:#991b1b;">
           Collection Quota Not Hit OR Release Target Not Hit
-          ${includeMtd && noIncentiveNow ? `<div style="font-size:10px;font-weight:600;color:#b91c1c;margin-top:2px;">Status: ${hitMin ? '✓ Min Release Met' : `Need ${Math.max(0, ctx.minRel - ctx.actRel)} more release(s)`} • ${hitQuota ? '✓ Collection Met' : `Need ${fmtCurrency(collRem)} more collection`}</div>` : ''}
+          ${includeMtd && noIncentiveNow ? `<div style="font-size:10px;font-weight:600;color:#b91c1c;margin-top:2px;">Status: ${ctx.minRel <= 0 ? 'Release target not set' : (hitMax ? '✓ Max Release Met (0.50% tier)' : hitMin ? '✓ Min Release Met (0.35% tier)' : `Need ${Math.max(0, ctx.minRel - ctx.actRel)} more release(s)`)} • ${hitQuota ? '✓ Collection Met' : `Need ${fmtCurrency(collRem)} more collection`}</div>` : ''}
         </div>
         <div style="font-size:11.5px;font-weight:800;color:#dc2626;white-space:nowrap;">No Incentives (₱0)</div>
       </div>
