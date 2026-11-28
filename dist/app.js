@@ -12609,7 +12609,7 @@ function applyRolePermissions() {
     role === 'CASHIER'
       ? ['inventory']
       : role === 'CI'
-        ? ['quotas', 'receivables', 'catalogs']
+        ? ['quotas', 'catalogs']
         : ['inventory', 'sales', 'cashflow', 'activity', 'finance', 'receivables', 'quotas', 'catalogs', 'websiteStock', 'staffPins'];
 
   document.querySelectorAll('.tab[data-tab], .mnav-btn[data-tab]').forEach((btn) => {
