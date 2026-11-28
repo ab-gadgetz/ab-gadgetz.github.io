@@ -8648,6 +8648,7 @@ function renderQuotas() {
 
   cardsEl.innerHTML = branchRows.map(({ b, a, ws, minRel, maxRel, ciCount, savedBomQuota, bom46, bom712, live46, live712, estBom46, estBom712, estBomQ, rawBomQuota, repoDed, rebateCredit, collForQuota, effectiveBomQuota, isEstBom, hitQuota, hitMax, hitMin, commRate, branchCommission, perCiCommission }) => {
     const posterHtml = buildQuotaPosterHtml({
+      branchId: b.id,
       branchName: b.name,
       ym,
       minRel,
@@ -8859,6 +8860,15 @@ function renderQuotas() {
     });
   });
 
+  cardsEl.querySelectorAll('[data-qdrill]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const bid = el.dataset.branch;
+      const kind = el.dataset.qdrill;
+      const row = branchRows.find((r) => r.b.id === bid);
+      if (bid && kind && row) openQuotaDrillModal(bid, kind, ym, row);
+    });
+  });
+
   if (isAdmin) {
     cardsEl.querySelectorAll('.quota-branch-card').forEach((card) => {
       const bid = card.dataset.branch;
@@ -8967,8 +8977,10 @@ function buildQuotaPosterHtml(ctx, { includeMtd = true } = {}) {
         </div>
         <div style="font-size:13px;font-weight:700;color:#e2e8f0;">${ctx.bomQuota > 0 ? fmtCurrency(ctx.bomQuota) : 'Not set'}</div>
         <div>
-          <div style="font-size:13px;font-weight:700;color:${hitQuota ? '#8ecfb0' : '#dfd09b'};">${includeMtd ? fmtCurrency(collBase) : '—'}</div>
-          ${includeMtd && ctx.rebateCredit > 0 ? `<div style="font-size:9.5px;color:#94a3b8;">Cash ${fmtWhole(ctx.actColl)} + ${fmtWhole(ctx.rebateCredit)} reb.</div>` : ''}
+          <div class="q-drill-cell" ${includeMtd && ctx.branchId ? `data-qdrill="cash" data-branch="${ctx.branchId}" style="cursor:pointer;" title="Click to view cash collection computation"` : ''}>
+            <div style="font-size:13px;font-weight:700;color:${hitQuota ? '#8ecfb0' : '#dfd09b'};">${includeMtd ? `${fmtCurrency(collBase)} 🔎` : '—'}</div>
+            ${includeMtd && ctx.rebateCredit > 0 ? `<div style="font-size:9.5px;color:#94a3b8;">Cash ${fmtWhole(ctx.actColl)} + ${fmtWhole(ctx.rebateCredit)} reb.</div>` : ''}
+          </div>
         </div>
         <div style="text-align:right;">
           ${hitQuota ? metPill : (ctx.bomQuota > 0 && includeMtd ? `<span style="font-size:11px;font-weight:700;color:#dfd09b;">${collPct.toFixed(1)}%</span><div style="font-size:9.5px;color:#94a3b8;">Rem ${fmtWhole(collRem)}</div>` : progPill('—'))}
@@ -9002,27 +9014,27 @@ function buildQuotaPosterHtml(ctx, { includeMtd = true } = {}) {
 
     ${includeMtd ? `
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:7px;margin-bottom:10px;">
-        <div style="background:#151b23;border:1px solid #262f3b;border-left:3px solid #4d9e7a;border-radius:8px;padding:8px 10px;">
+        <div ${ctx.branchId ? `data-qdrill="rebates" data-branch="${ctx.branchId}"` : ''} style="background:#151b23;border:1px solid #262f3b;border-left:3px solid #4d9e7a;border-radius:8px;padding:8px 10px;${ctx.branchId ? 'cursor:pointer;' : ''}" title="Click to inspect 2.5% rebates computation">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
-            <span style="font-size:10px;font-weight:700;color:#8ecfb0;">2.5% REBATES</span>
+            <span style="font-size:10px;font-weight:700;color:#8ecfb0;">2.5% REBATES 🔎</span>
             <span style="font-size:9px;font-weight:700;background:rgba(77,158,122,0.18);color:#9ee0c2;padding:1px 5px;border-radius:999px;">+ QUOTA</span>
           </div>
           <div style="font-size:14px;font-weight:700;color:#e2e8f0;margin-top:2px;">${fmtCurrency(ctx.rebateCredit || 0)}</div>
           <div style="font-size:10px;color:#94a3b8;line-height:1.35;margin-top:2px;">Added to cash collections to hit Final Target Quota (Penalties excluded).</div>
         </div>
 
-        <div style="background:#151b23;border:1px solid #262f3b;border-left:3px solid #b05b5b;border-radius:8px;padding:8px 10px;">
+        <div ${ctx.branchId ? `data-qdrill="penalties" data-branch="${ctx.branchId}"` : ''} style="background:#151b23;border:1px solid #262f3b;border-left:3px solid #b05b5b;border-radius:8px;padding:8px 10px;${ctx.branchId ? 'cursor:pointer;' : ''}" title="Click to inspect penalties collected">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
-            <span style="font-size:10px;font-weight:700;color:#e29a9a;">PENALTIES</span>
+            <span style="font-size:10px;font-weight:700;color:#e29a9a;">PENALTIES 🔎</span>
             <span style="font-size:9px;font-weight:700;background:rgba(176,91,91,0.18);color:#e2b4b4;padding:1px 5px;border-radius:999px;">EXCLUDED</span>
           </div>
           <div style="font-size:14px;font-weight:700;color:#e2e8f0;margin-top:2px;">${fmtCurrency(ctx.actPenalties || 0)}</div>
           <div style="font-size:10px;color:#94a3b8;line-height:1.35;margin-top:2px;">Tracked separately; not counted toward Collection Quota.</div>
         </div>
 
-        <div style="background:#151b23;border:1px solid #262f3b;border-left:3px solid #b89446;border-radius:8px;padding:8px 10px;">
+        <div ${ctx.branchId ? `data-qdrill="repos" data-branch="${ctx.branchId}"` : ''} style="background:#151b23;border:1px solid #262f3b;border-left:3px solid #b89446;border-radius:8px;padding:8px 10px;${ctx.branchId ? 'cursor:pointer;' : ''}" title="Click to inspect repos deducted from Initial Quota">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
-            <span style="font-size:10px;font-weight:700;color:#dfd09b;">REPOS (${ctx.repoCount || 0} UNITS)</span>
+            <span style="font-size:10px;font-weight:700;color:#dfd09b;">REPOS (${ctx.repoCount || 0} UNITS) 🔎</span>
             <span style="font-size:9px;font-weight:700;background:rgba(184,148,70,0.18);color:#ecd899;padding:1px 5px;border-radius:999px;">− TARGET</span>
           </div>
           <div style="font-size:14px;font-weight:700;color:#e2e8f0;margin-top:2px;">−${fmtCurrency(ctx.repoDed || 0)}</div>
@@ -9398,6 +9410,96 @@ function exportFollowUpPdf(branchId) {
 
   doc.save(`AB-Gadgetz-${brName}-CI-FollowUp-${todayStr}.pdf`);
 }
+
+function openQuotaDrillModal(branchId, kind, ym, row) {
+  const modal = document.getElementById('quotaDrillModal');
+  const titleEl = document.getElementById('quotaDrillTitle');
+  const subEl = document.getElementById('quotaDrillSub');
+  const formulaEl = document.getElementById('quotaDrillFormula');
+  const bodyEl = document.getElementById('quotaDrillBody');
+  if (!modal || !state.quotasData || !bodyEl) return;
+
+  const brName = row.b.name;
+  const pays = (state.quotasData.payments || [])
+    .filter((p) => p.branch_id === branchId && String(p.payment_date || '').slice(0, 7) === ym)
+    .sort((a, b) => String(b.payment_date || '').localeCompare(String(a.payment_date || '')));
+  const repos = (state.quotasData.repos || [])
+    .filter((r) => r.branch_id === branchId && String(r.repo_date || '').slice(0, 7) === ym)
+    .sort((a, b) => String(b.repo_date || '').localeCompare(String(a.repo_date || '')));
+
+  const REBATE_FACTOR = 0.025 / 0.975;
+
+  if (kind === 'repos') {
+    if (titleEl) titleEl.textContent = `${brName} — Repos (${ym})`;
+    if (subEl) subEl.textContent = `${repos.length} unit(s) • Total Repo Balance: ${fmtCurrency(row.repoDed)}`;
+    if (formulaEl) {
+      formulaEl.innerHTML = `<strong>Final Target Quota Formula:</strong> Initial Quota (<code>${fmtCurrency(row.rawBomQuota)}</code>) − Repo Total Balance (<code>${fmtCurrency(row.repoDed)}</code>) = <strong style="color:#8ecfb0;">${fmtCurrency(row.effectiveBomQuota)}</strong>`;
+    }
+    bodyEl.innerHTML = repos.length
+      ? `<table class="data-table" style="font-size:11.5px;"><thead><tr><th>Repo Date</th><th>Customer</th><th>Acct #</th><th>Unit</th><th>Repo Balance</th></tr></thead><tbody>${
+          repos.map((r) => `<tr><td>${r.repo_date || ''}</td><td><strong>${r.customer_name || ''}</strong></td><td>${r.account_no || ''}</td><td>${r.item || ''}</td><td style="color:#dfd09b;"><strong>${fmtCurrency(r.amount)}</strong></td></tr>`).join('')
+        }</tbody></table>`
+      : '<div class="muted small" style="padding:12px;">No repos recorded for this month.</div>';
+  } else if (kind === 'penalties') {
+    const penRows = pays.filter((p) => Number(p.penalties) > 0);
+    const totPen = penRows.reduce((s, p) => s + (Number(p.penalties) || 0), 0);
+    if (titleEl) titleEl.textContent = `${brName} — Late Penalties (${ym})`;
+    if (subEl) subEl.textContent = `${penRows.length} payment(s) with penalty • Total: ${fmtCurrency(totPen)}`;
+    if (formulaEl) {
+      formulaEl.innerHTML = `<strong>Treatment:</strong> Late penalties (<code>${fmtCurrency(totPen)}</code>) are tracked separately and <strong style="color:#e29a9a;">excluded</strong> from Cash Collections &amp; Collection Quota.`;
+    }
+    bodyEl.innerHTML = penRows.length
+      ? `<table class="data-table" style="font-size:11.5px;"><thead><tr><th>Date</th><th>Customer</th><th>Acct #</th><th>Cash Paid (P+I)</th><th>Penalty</th></tr></thead><tbody>${
+          penRows.map((p) => `<tr><td>${p.payment_date || ''}</td><td><strong>${p.customer_name || ''}</strong></td><td>${p.account_no || ''}</td><td>${fmtCurrency(p.amount)}</td><td style="color:#e29a9a;"><strong>${fmtCurrency(p.penalties)}</strong></td></tr>`).join('')
+        }</tbody></table>`
+      : '<div class="muted small" style="padding:12px;">No late penalties recorded for this month.</div>';
+  } else if (kind === 'rebates') {
+    const rebRows = [];
+    for (const p of pays) {
+      const amt = Number(p.amount) || 0;
+      const pen = Number(p.penalties) || 0;
+      const expReb = Number(p.rebates) || 0;
+      if (pen > 0) continue;
+      let reb = 0;
+      if (expReb > 0) reb = expReb;
+      else if (amt >= 200 && Math.abs(amt % 5) >= 0.5) reb = amt * REBATE_FACTOR;
+      if (reb > 0) rebRows.push({ ...p, reb, fullAmort: amt + reb });
+    }
+    const totReb = rebRows.reduce((s, r) => s + r.reb, 0);
+    if (titleEl) titleEl.textContent = `${brName} — 2.5% On-Time Rebates (${ym})`;
+    if (subEl) subEl.textContent = `${rebRows.length} rebated payment(s) • Total Rebate Credit: ${fmtCurrency(totReb)}`;
+    if (formulaEl) {
+      formulaEl.innerHTML = `<strong>Formula:</strong> Net Cash Paid (<code>97.5%</code>) × <code>(2.5% ÷ 97.5%)</code> = <strong>2.5% Rebate Credit</strong> (<code>${fmtCurrency(totReb)}</code>), added to Cash Collections to hit Final Target Quota.`;
+    }
+    bodyEl.innerHTML = rebRows.length
+      ? `<table class="data-table" style="font-size:11.5px;"><thead><tr><th>Date</th><th>Customer</th><th>Acct #</th><th>Cash Paid</th><th>2.5% Rebate</th><th>Full Amort</th></tr></thead><tbody>${
+          rebRows.map((r) => `<tr><td>${r.payment_date || ''}</td><td><strong>${r.customer_name || ''}</strong></td><td>${r.account_no || ''}</td><td>${fmtCurrency(r.amount)}</td><td style="color:#8ecfb0;"><strong>+${fmtCurrency(r.reb)}</strong></td><td>${fmtCurrency(r.fullAmort)}</td></tr>`).join('')
+        }</tbody></table>`
+      : '<div class="muted small" style="padding:12px;">No 2.5% rebated payments detected for this month.</div>';
+  } else {
+    const totPrin = pays.reduce((s, p) => s + (Number(p.principal) || 0), 0);
+    const totInt = pays.reduce((s, p) => s + (Number(p.interest) || 0), 0);
+    if (titleEl) titleEl.textContent = `${brName} — Actual Cash Collections (${ym})`;
+    if (subEl) subEl.textContent = `${pays.length} payment(s) • Cash: ${fmtCurrency(row.a.collAmount)} • Quota Progress: ${fmtCurrency(row.collForQuota)}`;
+    if (formulaEl) {
+      formulaEl.innerHTML = `<strong>Computation:</strong> Principal (<code>${fmtCurrency(totPrin)}</code>) + Interest (<code>${fmtCurrency(totInt)}</code>) = <strong>Cash Collections</strong> (<code>${fmtCurrency(row.a.collAmount)}</code>) + 2.5% Rebates (<code>${fmtCurrency(row.rebateCredit)}</code>) = <strong style="color:#8ecfb0;">${fmtCurrency(row.collForQuota)}</strong> vs Final Target Quota (<code>${fmtCurrency(row.effectiveBomQuota)}</code>).`;
+    }
+    bodyEl.innerHTML = pays.length
+      ? `<table class="data-table" style="font-size:11.5px;"><thead><tr><th>Date</th><th>Customer</th><th>Acct #</th><th>Principal</th><th>Interest</th><th>Cash Paid</th></tr></thead><tbody>${
+          pays.slice(0, 250).map((p) => `<tr><td>${p.payment_date || ''}</td><td><strong>${p.customer_name || ''}</strong></td><td>${p.account_no || ''}</td><td>${fmtCurrency(p.principal)}</td><td>${fmtCurrency(p.interest)}</td><td style="color:#dfd09b;"><strong>${fmtCurrency(p.amount)}</strong></td></tr>`).join('')
+        }</tbody></table>`
+      : '<div class="muted small" style="padding:12px;">No payments recorded for this month.</div>';
+  }
+
+  modal.classList.remove('hidden');
+}
+
+document.getElementById('closeQuotaDrillBtn')?.addEventListener('click', () => {
+  document.getElementById('quotaDrillModal')?.classList.add('hidden');
+});
+document.getElementById('quotaDrillModal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'quotaDrillModal') document.getElementById('quotaDrillModal').classList.add('hidden');
+});
 
 document.getElementById('quotaFollowUpPdfBtn')?.addEventListener('click', () => {
   if (activeFollowUpBranchId) exportFollowUpPdf(activeFollowUpBranchId);
