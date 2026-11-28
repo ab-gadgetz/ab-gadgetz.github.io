@@ -322,6 +322,40 @@ async function loginAndFetchPortal(username, password) {
     } catch {}
   }
 
+  // Scrape live Web AB Installment Balance Summary & Collection Quota for each branch
+  const liveBranchWebSummaries = {};
+  for (const b of BRANCHES) {
+    try {
+      const bRes = await fetchWithRetry(`${PORTAL_BASE}/panel/branches/${b.portalId}`, { headers: { Cookie: cookieHeader(jar) } });
+      if (bRes.ok) {
+        const bHtml = await bRes.text();
+        const idx = bHtml.search(/Installment Balance Summary/i);
+        if (idx >= 0) {
+          const txt = bHtml.slice(idx, idx + 3500).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+          const curM = txt.match(/Current Month\s+([\d,]+\.\d{2})/i);
+          const m46 = txt.match(/4-6 Months\s+([\d,]+\.\d{2})\s+(\d+)\s+Accounts?/i);
+          const m712 = txt.match(/7-12 Months\s+([\d,]+\.\d{2})\s+(\d+)\s+Accounts?/i);
+          const mQ = txt.match(/Qo?uta\s+([\d,]+\.\d{2})/i);
+          const bal4to6 = m46 ? parseNum(m46[1]) : 0;
+          const bal7to12 = m712 ? parseNum(m712[1]) : 0;
+          const computedQuota = Number((bal4to6 * 0.275 + bal7to12 * 0.11).toFixed(2));
+          liveBranchWebSummaries[b.id] = {
+            branchId: b.id,
+            branchName: b.name,
+            currentBalance: curM ? parseNum(curM[1]) : Number((bal4to6 + bal7to12).toFixed(2)),
+            bal4to6,
+            acct4to6: m46 ? parseInt(m46[2], 10) : 0,
+            bal7to12,
+            acct7to12: m712 ? parseInt(m712[2], 10) : 0,
+            liveQuota: mQ ? parseNum(mQ[1]) : computedQuota,
+            computedQuota,
+            scrapedAt: new Date().toISOString(),
+          };
+        }
+      }
+    } catch {}
+  }
+
   // Fetch latest deliveries from /panel/deliveries (+ latest 40 delivery views)
   const liveDeliveries = [];
   try {
@@ -390,7 +424,7 @@ async function loginAndFetchPortal(username, password) {
     }
   } catch {}
 
-  return { inventoryByBranch: result, stockCardsByBranch, succeededCodesByBranch, liveInstallments, livePayments, liveExpenses, livePastDues, liveDeliveries, liveTransactions };
+  return { inventoryByBranch: result, stockCardsByBranch, succeededCodesByBranch, liveInstallments, livePayments, liveExpenses, livePastDues, liveDeliveries, liveTransactions, liveBranchWebSummaries };
 }
 
 const PHONE_CATEGORIES = new Set(['CELLPHONES', 'REPO', 'KEYPAD CELLPHONES']);
@@ -493,6 +527,7 @@ async function main() {
     }
   } catch {}
 
+  let liveBranchWebSummaries = {};
   if (user && pass) {
     try {
       const {
@@ -505,7 +540,11 @@ async function main() {
         livePastDues: fetchedPastDues,
         liveDeliveries: fetchedDeliveries,
         liveTransactions: fetchedTransactions,
+        liveBranchWebSummaries: fetchedWebSummaries,
       } = await loginAndFetchPortal(user, pass);
+      if (fetchedWebSummaries && Object.keys(fetchedWebSummaries).length > 0) {
+        liveBranchWebSummaries = fetchedWebSummaries;
+      }
       if (Array.isArray(fetchedTransactions) && fetchedTransactions.length > 0) {
         const txMap = new Map(allTransactions.map((t) => [`${t.branch_id}::${t.order_no}`, t]));
         for (const t of fetchedTransactions) {
@@ -935,6 +974,36 @@ async function main() {
     allExpenses,
     allPastDues,
     allDeliveries,
+    branchWebSummaries: liveBranchWebSummaries,
+    branchQuotas: (() => {
+      const qPath = path.join(publicDir, 'branch-quotas.json');
+      let qData = { updatedAt: null, months: {} };
+      try {
+        if (fs.existsSync(qPath)) qData = JSON.parse(fs.readFileSync(qPath, 'utf8')) || qData;
+      } catch {}
+      if (!qData.months || typeof qData.months !== 'object') qData.months = {};
+      const todayManila = manilaDateDaysAgo(0);
+      const curYm = todayManila.slice(0, 7);
+      if (todayManila.endsWith('-01') && Object.keys(liveBranchWebSummaries).length > 0) {
+        if (!qData.months[curYm]) qData.months[curYm] = {};
+        let changed = false;
+        for (const [bid, ws] of Object.entries(liveBranchWebSummaries)) {
+          if (!qData.months[curYm][bid]) qData.months[curYm][bid] = {};
+          if (!qData.months[curYm][bid].lockedAt && ws.liveQuota > 0) {
+            qData.months[curYm][bid].bomBal4to6 = ws.bal4to6;
+            qData.months[curYm][bid].bomBal7to12 = ws.bal7to12;
+            qData.months[curYm][bid].bomQuota = ws.liveQuota;
+            qData.months[curYm][bid].lockedAt = new Date().toISOString();
+            changed = true;
+          }
+        }
+        if (changed) {
+          qData.updatedAt = new Date().toISOString();
+          try { fs.writeFileSync(qPath, JSON.stringify(qData, null, 2)); } catch {}
+        }
+      }
+      return qData;
+    })(),
     purchaseOrders: (seedSnapshot.purchase_orders || []).map((o) => {
       let parsedItems = [];
       try {

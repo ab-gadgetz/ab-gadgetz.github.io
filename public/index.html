@@ -145,6 +145,7 @@
         <button type="button" class="tab" data-tab="inventory">INVENTORY</button>
         <button type="button" class="tab" data-tab="sales">SALES</button>
         <button type="button" class="tab" data-tab="receivables">RECEIVABLES</button>
+        <button type="button" class="tab" data-tab="quotas">TARGET &amp; QUOTA</button>
         <button type="button" class="tab" data-tab="finance">FINANCE &amp; P&amp;L</button>
         <button type="button" class="tab" data-tab="websiteStock">WEBSITE STOCK</button>
         <button type="button" class="tab" data-tab="catalogs">CUSTOMER CATALOGS</button>
@@ -1160,6 +1161,33 @@
             </div>
           </div>
         </div>
+      </div>
+    </section>
+
+    <!-- TAB: TARGET RELEASE & COLLECTION QUOTA (ADMIN & CI) -->
+    <section id="tab-quotas" class="tab-panel card">
+      <div class="sub-panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <h3 style="margin:0;">Target Release &amp; Collection Quota</h3>
+            <button type="button" id="quotaInfoToggleBtn" class="secondary cf-apply-icon-btn" title="Show/Hide Quota Formula" aria-label="Show/Hide Quota Formula" aria-expanded="false">ℹ️</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+            <button type="button" id="quotaPrevMonthBtn" class="secondary" style="padding:4px 8px;font-size:12px;" title="Previous Month">‹</button>
+            <input type="month" id="quotaMonthInput" aria-label="Target Month" style="width:auto;padding:4px 8px;font-size:12px;" />
+            <button type="button" id="quotaNextMonthBtn" class="secondary" style="padding:4px 8px;font-size:12px;" title="Next Month">›</button>
+            <button type="button" id="quotaRefreshBtn" class="secondary cf-apply-icon-btn" title="Refresh Live Web AB Quota" aria-label="Refresh Live Web AB Quota">🔄</button>
+          </div>
+        </div>
+
+        <div id="quotaFormulaBanner" class="sub-panel hidden" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--gold);line-height:1.55;">
+          <strong>Web AB Collection Quota Formula:</strong>
+          <code>(4–6 Months Balance × 27.5%) + (7–12 Months Balance × 11.0%)</code><br />
+          <span class="muted">Web AB's live Quota updates daily as payments &amp; new releases post. Your monthly Collection Target is locked at the <strong>Beginning of the Month</strong> (before day-1 transactions), and auto-locks on the 1st of each new month.</span>
+        </div>
+
+        <div class="sales-big-grid" id="quotaKpiGrid" style="margin-bottom:14px;"></div>
+        <div id="quotaBranchCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;"></div>
       </div>
     </section>
 

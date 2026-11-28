@@ -134,6 +134,8 @@ async function refreshActiveTab() {
     await loadCashFlow();
   } else if (tab === 'receivables') {
     await loadReceivables();
+  } else if (tab === 'quotas') {
+    await loadQuotas();
   } else if (tab === 'finance') {
     await loadFinance();
   } else if (tab === 'websiteStock') {
@@ -455,11 +457,49 @@ async function staticGhApi(url, opts = {}) {
     await pushProductPhotosToGh(productId, imageUrls, token);
     return { ok: true, syncedToGh: true };
   }
+  if (pathname === '/api/quotas' && method === 'PUT') {
+    const body = JSON.parse(opts.body || '{}');
+    const month = String(body.month || '').slice(0, 7);
+    const branchId = String(body.branchId || '');
+    const cur = getLocalBranchQuotas();
+    if (!cur.months[month]) cur.months[month] = {};
+    cur.months[month][branchId] = {
+      minRelease: Number(body.minRelease) || 0,
+      maxRelease: Number(body.maxRelease) || 0,
+      bomBal4to6: Number(body.bomBal4to6) || 0,
+      bomBal7to12: Number(body.bomBal7to12) || 0,
+      bomQuota: Number(body.bomQuota) || 0,
+      lockedAt: body.lockedAt || new Date().toISOString(),
+      note: String(body.note || '').slice(0, 200),
+    };
+    cur.updatedAt = new Date().toISOString();
+    saveLocalBranchQuotas(cur);
+    const token = localStorage.getItem('bs_gh_pub_token');
+    if (token) {
+      await pushBranchQuotasToGh(cur, token);
+      return { ok: true, quotas: cur, syncedToGh: true };
+    }
+    return { ok: true, quotas: cur, syncedToGh: false };
+  }
   if (method !== 'GET') {
     throw new Error('Make edits in your Local Admin Portal (http://localhost:3456), then click ☁️ Update Online Website.');
   }
 
   const bundle = await getGhBundle();
+  if (pathname === '/api/quotas') {
+    const base = bundle.branchQuotas || { updatedAt: null, months: {} };
+    const local = getLocalBranchQuotas();
+    const mergedMonths = { ...(base.months || {}) };
+    for (const [mo, brMap] of Object.entries(local.months || {})) {
+      mergedMonths[mo] = { ...(mergedMonths[mo] || {}), ...brMap };
+    }
+    return {
+      quotas: { updatedAt: local.updatedAt || base.updatedAt, months: mergedMonths },
+      webSummaries: bundle.branchWebSummaries || {},
+      installments: bundle.allInstallments || [],
+      payments: bundle.allPayments || [],
+    };
+  }
   if (pathname === '/api/inventory') return bundle.inventory;
   if (pathname === '/api/sync/status') {
     return {
@@ -8005,6 +8045,8 @@ document.getElementById('globalBranch').addEventListener('change', () => {
     loadFinance();
   } else if (state.activeTab === 'receivables') {
     loadReceivables();
+  } else if (state.activeTab === 'quotas') {
+    renderQuotas();
   }
 });
 let invSearchTimer = null;
@@ -8295,6 +8337,342 @@ function getEffectiveDaysDue(pd) {
   }
   return days;
 }
+
+function getLocalBranchQuotas() {
+  try {
+    const d = JSON.parse(localStorage.getItem('ab_branch_quotas_v1') || '{}');
+    return { updatedAt: d.updatedAt || null, months: d.months && typeof d.months === 'object' ? d.months : {} };
+  } catch {
+    return { updatedAt: null, months: {} };
+  }
+}
+
+function saveLocalBranchQuotas(qObj) {
+  try {
+    localStorage.setItem('ab_branch_quotas_v1', JSON.stringify(qObj));
+  } catch {}
+}
+
+async function pushBranchQuotasToGh(quotasObj, token) {
+  const repo = 'ab-gadgetz/ab-gadgetz.github.io';
+  const apiUrl = `https://api.github.com/repos/${repo}/contents/public/branch-quotas.json`;
+  const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
+  let sha;
+  let merged = { updatedAt: new Date().toISOString(), months: { ...(quotasObj.months || {}) } };
+  const getRes = await fetch(apiUrl, { headers });
+  if (getRes.ok) {
+    const info = await getRes.json();
+    sha = info.sha;
+    try {
+      const decoded = decodeURIComponent(escape(atob(String(info.content || '').replace(/\n/g, ''))));
+      const existing = JSON.parse(decoded);
+      if (existing?.months) {
+        const m = { ...existing.months };
+        for (const [ym, brMap] of Object.entries(quotasObj.months || {})) {
+          m[ym] = { ...(m[ym] || {}), ...brMap };
+        }
+        merged.months = m;
+      }
+    } catch {}
+  }
+  const putRes = await fetch(apiUrl, {
+    method: 'PUT',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message: 'Update monthly release targets and collection quotas',
+      content: btoa(unescape(encodeURIComponent(JSON.stringify(merged, null, 2)))),
+      ...(sha ? { sha } : {}),
+    }),
+  });
+  if (!putRes.ok) {
+    const errData = await putRes.json().catch(() => ({}));
+    throw new Error(errData.message || `GitHub quota sync failed (${putRes.status})`);
+  }
+  fetch(`https://api.github.com/repos/${repo}/actions/workflows/deploy-catalog.yml/dispatches`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ref: 'main' }),
+  }).catch(() => {});
+  return true;
+}
+
+async function loadQuotas(forceRefresh = false) {
+  const mEl = document.getElementById('quotaMonthInput');
+  if (mEl && !mEl.value) mEl.value = todayStr.slice(0, 7);
+  if (!forceRefresh && state.quotasData && Date.now() - (state._quotasLoadedAt || 0) < 300000) {
+    renderQuotas();
+    return;
+  }
+  state.quotasData = await api(forceRefresh ? '/api/quotas?refresh=1' : '/api/quotas');
+  state._quotasLoadedAt = Date.now();
+  renderQuotas();
+}
+
+function renderQuotas() {
+  const data = state.quotasData;
+  const kpiEl = document.getElementById('quotaKpiGrid');
+  const cardsEl = document.getElementById('quotaBranchCards');
+  if (!data || !kpiEl || !cardsEl) return;
+
+  const ym = document.getElementById('quotaMonthInput')?.value || todayStr.slice(0, 7);
+  const isAdmin = state.userRole === 'ADMIN';
+  const branchDefs = [
+    { id: 'br-molave', name: 'Molave' },
+    { id: 'br-tambulig', name: 'Tambulig' },
+    { id: 'br-bonifacio', name: 'Bonifacio' },
+  ];
+  const scopedBranch = !isAdmin && state.userBranchId
+    ? state.userBranchId
+    : (document.getElementById('globalBranch')?.value || '');
+  const visibleBranches = scopedBranch ? branchDefs.filter((b) => b.id === scopedBranch) : branchDefs;
+
+  const monthTargets = (data.quotas?.months && data.quotas.months[ym]) || {};
+  const webSummaries = data.webSummaries || {};
+
+  // Compute monthly actuals per branch from installments & payments
+  const actuals = {};
+  for (const b of branchDefs) {
+    actuals[b.id] = { relCount: 0, relPrincipal: 0, relFinanced: 0, rel46: 0, rel712: 0, collAmount: 0, collCount: 0 };
+  }
+  for (const i of data.installments || []) {
+    const dt = String(i.sale_date || '').slice(0, 7);
+    if (dt !== ym || !actuals[i.branch_id]) continue;
+    const a = actuals[i.branch_id];
+    const prin = Number(i.principal_amount) || 0;
+    const fin = Math.max(0, (Number(i.amount) || 0) - (Number(i.deposit) || 0));
+    const term = Number(i.term) || 0;
+    a.relCount++;
+    a.relPrincipal += prin;
+    a.relFinanced += fin;
+    if (term >= 4 && term <= 6) a.rel46 += fin;
+    else if (term >= 7 && term <= 12) a.rel712 += fin;
+  }
+  for (const p of data.payments || []) {
+    const dt = String(p.payment_date || '').slice(0, 7);
+    if (dt !== ym || !actuals[p.branch_id]) continue;
+    actuals[p.branch_id].collCount++;
+    actuals[p.branch_id].collAmount += Number(p.amount) || 0;
+  }
+
+  let totMinRel = 0, totMaxRel = 0, totActRel = 0, totRelCount = 0;
+  let totBomQuota = 0, totActColl = 0, totLiveQuota = 0;
+
+  for (const b of visibleBranches) {
+    const t = monthTargets[b.id] || {};
+    const a = actuals[b.id];
+    const ws = webSummaries[b.id] || {};
+    totMinRel += Number(t.minRelease) || 0;
+    totMaxRel += Number(t.maxRelease) || 0;
+    totActRel += a.relPrincipal;
+    totRelCount += a.relCount;
+    totBomQuota += Number(t.bomQuota) || 0;
+    totActColl += a.collAmount;
+    totLiveQuota += Number(ws.liveQuota) || 0;
+  }
+
+  const relPctMin = totMinRel > 0 ? Math.min(999, (totActRel / totMinRel) * 100) : 0;
+  const collPct = totBomQuota > 0 ? Math.min(999, (totActColl / totBomQuota) * 100) : 0;
+
+  kpiEl.innerHTML = `
+    <div class="summary-box sales-big-box">
+      <div class="sales-big-main">
+        <div class="sales-big-title">MONTHLY INSTALLMENT RELEASE (${ym})</div>
+        <strong class="sales-big-val" style="color:${totMinRel > 0 && totActRel >= totMinRel ? 'var(--green)' : 'var(--gold-bright)'};">${fmtCurrency(totActRel)}</strong>
+        <div class="summary-note">${totRelCount} releases • Min: <strong>${totMinRel > 0 ? fmtCurrency(totMinRel) : 'Not set'}</strong> • Max: <strong>${totMaxRel > 0 ? fmtCurrency(totMaxRel) : 'Not set'}</strong>${totMinRel > 0 ? ` (${relPctMin.toFixed(1)}% of Min)` : ''}</div>
+      </div>
+    </div>
+    <div class="summary-box sales-big-box" style="border-color:var(--gold);">
+      <div class="sales-big-main">
+        <div class="sales-big-title">COLLECTION QUOTA VS ACTUAL (${ym})</div>
+        <strong class="sales-big-val" style="color:${totBomQuota > 0 && totActColl >= totBomQuota ? 'var(--green)' : '#60a5fa'};">${fmtCurrency(totActColl)}</strong>
+        <div class="summary-note">BOM Target: <strong>${totBomQuota > 0 ? fmtCurrency(totBomQuota) : 'Not locked'}</strong>${totBomQuota > 0 ? ` (${collPct.toFixed(1)}% • Rem: ${fmtCurrency(Math.max(0, totBomQuota - totActColl))})` : ''} • Live Today: <strong style="color:var(--gold-bright);">${fmtCurrency(totLiveQuota)}</strong></div>
+      </div>
+    </div>
+  `;
+
+  const isCurMonth = ym === todayStr.slice(0, 7);
+  cardsEl.innerHTML = visibleBranches.map((b) => {
+    const t = monthTargets[b.id] || {};
+    const a = actuals[b.id];
+    const ws = webSummaries[b.id] || {};
+    const minRel = Number(t.minRelease) || 0;
+    const maxRel = Number(t.maxRelease) || 0;
+    const bomQuota = Number(t.bomQuota) || 0;
+    const bom46 = Number(t.bomBal4to6) || 0;
+    const bom712 = Number(t.bomBal7to12) || 0;
+
+    // Estimate BOM by reversing current month's collections & releases from live Web AB balances
+    const live46 = Number(ws.bal4to6) || 0;
+    const live712 = Number(ws.bal7to12) || 0;
+    const liveTot = live46 + live712;
+    const share46 = liveTot > 0 ? live46 / liveTot : 0.5;
+    const estBom46 = isCurMonth && liveTot > 0 ? Math.max(0, Math.round(live46 + a.collAmount * share46 - a.rel46)) : 0;
+    const estBom712 = isCurMonth && liveTot > 0 ? Math.max(0, Math.round(live712 + a.collAmount * (1 - share46) - a.rel712)) : 0;
+    const estBomQ = Number((estBom46 * 0.275 + estBom712 * 0.11).toFixed(2));
+
+    const relBarMax = maxRel > 0 ? maxRel : (minRel > 0 ? minRel : Math.max(1, a.relPrincipal));
+    const relBarPct = Math.min(100, (a.relPrincipal / relBarMax) * 100);
+    let relBadge = '<span class="badge" style="font-size:10px;">No Target</span>';
+    if (minRel > 0 || maxRel > 0) {
+      if (maxRel > 0 && a.relPrincipal > maxRel) relBadge = '<span class="badge" style="background:rgba(245,158,11,0.2);color:#fbbf24;font-size:10px;">Over Max</span>';
+      else if (a.relPrincipal >= minRel) relBadge = '<span class="badge badge-ok" style="font-size:10px;">Target Met ✓</span>';
+      else relBadge = '<span class="badge" style="background:rgba(96,165,250,0.2);color:#93c5fd;font-size:10px;">In Progress</span>';
+    }
+
+    const collBarPct = bomQuota > 0 ? Math.min(100, (a.collAmount / bomQuota) * 100) : 0;
+    const collRem = bomQuota > 0 ? Math.max(0, bomQuota - a.collAmount) : 0;
+
+    return `
+      <div class="sub-panel quota-branch-card" data-branch="${b.id}" style="padding:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <strong style="font-size:15px;color:var(--gold-bright);">${b.name}</strong>
+          ${relBadge}
+        </div>
+
+        <div style="margin-bottom:12px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,0.03);border:1px solid var(--border-soft);">
+          <div style="display:flex;justify-content:space-between;font-size:11.5px;margin-bottom:4px;">
+            <span class="muted">Installment Release (Principal)</span>
+            <strong>${fmtCurrency(a.relPrincipal)} <span class="muted">(${a.relCount})</span></strong>
+          </div>
+          <div style="height:6px;background:rgba(255,255,255,0.08);border-radius:99px;overflow:hidden;margin-bottom:5px;">
+            <div style="height:100%;width:${relBarPct.toFixed(1)}%;background:${a.relPrincipal >= minRel && minRel > 0 ? 'var(--green)' : 'var(--gold)'};"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);">
+            <span>Min: <strong style="color:var(--text);">${minRel > 0 ? fmtCurrency(minRel) : '—'}</strong></span>
+            <span>Max: <strong style="color:var(--text);">${maxRel > 0 ? fmtCurrency(maxRel) : '—'}</strong></span>
+          </div>
+        </div>
+
+        <div style="margin-bottom:${isAdmin ? '12px' : '0'};padding:8px 10px;border-radius:8px;background:rgba(255,255,255,0.03);border:1px solid var(--border-soft);">
+          <div style="display:flex;justify-content:space-between;font-size:11.5px;margin-bottom:4px;">
+            <span class="muted">Collection vs BOM Quota</span>
+            <strong style="color:${bomQuota > 0 && a.collAmount >= bomQuota ? 'var(--green)' : '#60a5fa'};">${fmtCurrency(a.collAmount)} <span class="muted">(${a.collCount})</span></strong>
+          </div>
+          <div style="height:6px;background:rgba(255,255,255,0.08);border-radius:99px;overflow:hidden;margin-bottom:5px;">
+            <div style="height:100%;width:${collBarPct.toFixed(1)}%;background:${bomQuota > 0 && a.collAmount >= bomQuota ? 'var(--green)' : '#60a5fa'};"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px;">
+            <span>BOM Target: <strong style="color:var(--text);">${bomQuota > 0 ? fmtCurrency(bomQuota) : 'Not locked'}</strong></span>
+            <span>${bomQuota > 0 ? `${collBarPct.toFixed(1)}% • Rem: ${fmtCurrency(collRem)}` : 'Set BOM below'}</span>
+          </div>
+          ${ws.liveQuota ? `
+            <div style="font-size:11px;padding-top:6px;border-top:1px dashed var(--border-soft);color:var(--muted);line-height:1.45;">
+              <div>Today Web AB Live Quota: <strong style="color:var(--gold-bright);">${fmtCurrency(ws.liveQuota)}</strong> (Bal: ${fmtCurrency(ws.currentBalance)})</div>
+              <div>• 4–6 Mos (${ws.acct4to6 || 0}): ${fmtCurrency(live46)} × 27.5% = ${fmtCurrency(live46 * 0.275)}</div>
+              <div>• 7–12 Mos (${ws.acct7to12 || 0}): ${fmtCurrency(live712)} × 11% = ${fmtCurrency(live712 * 0.11)}</div>
+            </div>
+          ` : ''}
+        </div>
+
+        ${isAdmin ? `
+          <div style="padding-top:8px;border-top:1px solid var(--border-soft);">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px;">
+              <div>
+                <label style="font-size:10px;color:var(--muted);">MIN RELEASE (₱)</label>
+                <input type="number" class="q-min-rel" value="${minRel || ''}" min="0" step="1000" placeholder="e.g. 300000" style="padding:5px 7px;font-size:12px;" />
+              </div>
+              <div>
+                <label style="font-size:10px;color:var(--muted);">MAX RELEASE (₱)</label>
+                <input type="number" class="q-max-rel" value="${maxRel || ''}" min="0" step="1000" placeholder="e.g. 500000" style="padding:5px 7px;font-size:12px;" />
+              </div>
+              <div>
+                <label style="font-size:10px;color:var(--muted);">BOM 4–6 MOS BAL</label>
+                <input type="number" class="q-bom-46" value="${bom46 || ''}" min="0" step="0.01" placeholder="${estBom46 || '0'}" style="padding:5px 7px;font-size:12px;" />
+              </div>
+              <div>
+                <label style="font-size:10px;color:var(--muted);">BOM 7–12 MOS BAL</label>
+                <input type="number" class="q-bom-712" value="${bom712 || ''}" min="0" step="0.01" placeholder="${estBom712 || '0'}" style="padding:5px 7px;font-size:12px;" />
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap;">
+              <div style="flex:1;min-width:130px;">
+                <label style="font-size:10px;color:var(--gold-bright);">BOM COLLECTION QUOTA (₱)</label>
+                <input type="number" class="q-bom-quota" value="${bomQuota || ''}" min="0" step="0.01" placeholder="${estBomQ || '0'}" style="padding:5px 7px;font-size:12px;border-color:var(--gold);" />
+              </div>
+              ${estBomQ > 0 ? `<button type="button" class="secondary q-est-btn" data-b46="${estBom46}" data-b712="${estBom712}" data-bq="${estBomQ}" style="padding:6px 8px;font-size:11px;" title="Estimate Month-Start Balance & Quota from Today's Live Web AB">Est. BOM</button>` : ''}
+              <button type="button" class="q-save-btn" style="padding:6px 12px;font-size:11.5px;">SAVE</button>
+            </div>
+            <div class="q-save-msg small" style="margin-top:4px;color:var(--gold-bright);"></div>
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }).join('');
+
+  if (isAdmin) {
+    cardsEl.querySelectorAll('.quota-branch-card').forEach((card) => {
+      const bid = card.dataset.branch;
+      const b46El = card.querySelector('.q-bom-46');
+      const b712El = card.querySelector('.q-bom-712');
+      const bqEl = card.querySelector('.q-bom-quota');
+      const recomputeBom = () => {
+        const v46 = Number(b46El?.value) || 0;
+        const v712 = Number(b712El?.value) || 0;
+        if (bqEl && (v46 > 0 || v712 > 0)) {
+          bqEl.value = (v46 * 0.275 + v712 * 0.11).toFixed(2);
+        }
+      };
+      b46El?.addEventListener('input', recomputeBom);
+      b712El?.addEventListener('input', recomputeBom);
+
+      card.querySelector('.q-est-btn')?.addEventListener('click', (e) => {
+        const btn = e.currentTarget;
+        if (b46El) b46El.value = btn.dataset.b46 || '';
+        if (b712El) b712El.value = btn.dataset.b712 || '';
+        if (bqEl) bqEl.value = btn.dataset.bq || '';
+      });
+
+      card.querySelector('.q-save-btn')?.addEventListener('click', async () => {
+        const msgEl = card.querySelector('.q-save-msg');
+        try {
+          if (msgEl) msgEl.textContent = 'Saving...';
+          const payload = {
+            month: ym,
+            branchId: bid,
+            minRelease: Number(card.querySelector('.q-min-rel')?.value) || 0,
+            maxRelease: Number(card.querySelector('.q-max-rel')?.value) || 0,
+            bomBal4to6: Number(b46El?.value) || 0,
+            bomBal7to12: Number(b712El?.value) || 0,
+            bomQuota: Number(bqEl?.value) || 0,
+            lockedAt: new Date().toISOString(),
+          };
+          const res = await api('/api/quotas', { method: 'PUT', body: JSON.stringify(payload) });
+          if (res?.quotas) state.quotasData.quotas = res.quotas;
+          if (msgEl) {
+            msgEl.textContent = IS_STATIC_GH && !res?.syncedToGh
+              ? 'Saved on this device (add GitHub Token in Staff Pins/Photos to sync online).'
+              : 'Saved!';
+          }
+          renderQuotas();
+        } catch (err) {
+          if (msgEl) msgEl.textContent = err.message;
+        }
+      });
+    });
+  }
+}
+
+document.getElementById('quotaInfoToggleBtn')?.addEventListener('click', () => {
+  const btn = document.getElementById('quotaInfoToggleBtn');
+  const banner = document.getElementById('quotaFormulaBanner');
+  if (!btn || !banner) return;
+  const open = banner.classList.toggle('hidden') === false;
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  btn.style.borderColor = open ? 'var(--gold-bright)' : '';
+  btn.style.background = open ? 'rgba(231, 197, 95, 0.22)' : '';
+});
+const shiftQuotaMonth = (delta) => {
+  const mEl = document.getElementById('quotaMonthInput');
+  const cur = mEl?.value || todayStr.slice(0, 7);
+  const [y, m] = cur.split('-').map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + delta, 1));
+  if (mEl) mEl.value = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  renderQuotas();
+};
+document.getElementById('quotaPrevMonthBtn')?.addEventListener('click', () => shiftQuotaMonth(-1));
+document.getElementById('quotaNextMonthBtn')?.addEventListener('click', () => shiftQuotaMonth(1));
+document.getElementById('quotaMonthInput')?.addEventListener('change', renderQuotas);
+document.getElementById('quotaRefreshBtn')?.addEventListener('click', () => loadQuotas(true));
 
 function getAgingTier(daysDue) {
   const d = Number(daysDue) || 0;
@@ -11529,8 +11907,8 @@ function applyRolePermissions() {
     role === 'CASHIER'
       ? ['inventory']
       : role === 'CI'
-        ? ['receivables', 'catalogs']
-        : ['inventory', 'sales', 'cashflow', 'activity', 'finance', 'receivables', 'catalogs', 'websiteStock', 'staffPins'];
+        ? ['quotas', 'receivables', 'catalogs']
+        : ['inventory', 'sales', 'cashflow', 'activity', 'finance', 'receivables', 'quotas', 'catalogs', 'websiteStock', 'staffPins'];
 
   document.querySelectorAll('.tab[data-tab], .mnav-btn[data-tab]').forEach((btn) => {
     const t = btn.dataset.tab;
