@@ -10004,28 +10004,19 @@ function initSalesDateInputs() {
   }
 }
 
-// Rebate inference: group split payments by account+date; a round-5 combined total means full amort was paid (no rebate).
+// Rebate inference (Web AB rebates are whole pesos on the main on-time payment; small advance top-ups get none).
+// Web AB's own Rebates column is used when synced; otherwise inferred from the payment.
 function buildRebateMap(payments) {
   const F = 0.025 / 0.975;
-  const groups = new Map();
-  for (const p of payments || []) {
-    const k = p.branch_id + '::' + String(p.account_no || '').trim() + '::' + String(p.payment_date || '').slice(0, 10);
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k).push(p);
-  }
   const map = new Map();
-  for (const list of groups.values()) {
-    const total = list.reduce((s, p) => s + (Number(p.amount) || 0), 0);
-    const pen = list.reduce((s, p) => s + (Number(p.penalties) || 0), 0);
-    const exp = list.reduce((s, p) => s + (Number(p.rebates) || 0), 0);
-    for (const p of list) {
-      let reb = 0;
-      if (pen === 0) {
-        if (exp > 0) reb = Number(p.rebates) || 0;
-        else if (total >= 200 && Math.abs(total % 5) >= 0.5 && (Number(p.amount) || 0) >= 200) reb = (Number(p.amount) || 0) * F;
-      }
-      map.set(p, reb);
+  for (const p of payments || []) {
+    const amt = Number(p.amount) || 0;
+    let reb = 0;
+    if (!(Number(p.penalties) > 0)) {
+      if (Number(p.rebates) > 0) reb = Number(p.rebates);
+      else if (amt >= 200 && Math.abs(amt % 5) >= 0.5) reb = Math.round(amt * F);
     }
+    map.set(p, reb);
   }
   return map;
 }
