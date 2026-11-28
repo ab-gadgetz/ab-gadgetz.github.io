@@ -1011,6 +1011,13 @@ async function main() {
     allPastDues,
     allDeliveries,
     allRepos,
+    branchFollowups: (() => {
+      const fPath = path.join(publicDir, 'branch-followups.json');
+      try {
+        if (fs.existsSync(fPath)) return JSON.parse(fs.readFileSync(fPath, 'utf8'));
+      } catch {}
+      return { updatedAt: null, followups: {}, repoVerified: {}, paymentAudits: {} };
+    })(),
     branchWebSummaries: liveBranchWebSummaries,
     branchQuotas: (() => {
       const qPath = path.join(publicDir, 'branch-quotas.json');

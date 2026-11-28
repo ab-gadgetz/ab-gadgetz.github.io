@@ -242,6 +242,7 @@ const DEFAULT_GH_STAFF_PINS = {
   'CI::br-molave': '221111',
   'CI::br-tambulig': '222222',
   'CI::br-bonifacio': '223333',
+  'AUDITOR::ALL': '331111',
 };
 
 async function getGhStaffPinsPayload() {
@@ -295,7 +296,7 @@ async function encryptGhStaffPins(pinsObj) {
 }
 
 async function verifyGhStaffPin(role, branchId, pin) {
-  const key = `${role}::${branchId}`;
+  const key = role === 'AUDITOR' ? 'AUDITOR::ALL' : `${role}::${branchId}`;
   try {
     const payload = await getGhStaffPinsPayload();
     const hashes = payload?.hashes;
@@ -456,6 +457,50 @@ async function staticGhApi(url, opts = {}) {
     }
     await pushProductPhotosToGh(productId, imageUrls, token);
     return { ok: true, syncedToGh: true };
+  }
+  if (pathname === '/api/followups' && method === 'GET') {
+    const bundle = await getGhBundle();
+    const base = bundle.branchFollowups || { updatedAt: null, followups: {}, repoVerified: {}, paymentAudits: {} };
+    const local = getLocalBranchFollowups();
+    return {
+      updatedAt: local.updatedAt || base.updatedAt,
+      followups: { ...(base.followups || {}), ...(local.followups || {}) },
+      repoVerified: { ...(base.repoVerified || {}), ...(local.repoVerified || {}) },
+      paymentAudits: { ...(base.paymentAudits || {}), ...(local.paymentAudits || {}) },
+    };
+  }
+  if (pathname === '/api/followups/mark' && method === 'POST') {
+    const body = JSON.parse(opts.body || '{}');
+    const acctKey = String(body.acctKey || '').trim();
+    const cur = getLocalBranchFollowups();
+    if (body.clear) delete cur.followups[acctKey];
+    else cur.followups[acctKey] = { date: body.date || todayStr, promiseDate: String(body.promiseDate || '').slice(0, 10), note: String(body.note || '').slice(0, 160), byRole: state.userRole || 'ADMIN', updatedAt: new Date().toISOString() };
+    saveLocalBranchFollowups(cur);
+    const token = localStorage.getItem('bs_gh_pub_token');
+    if (token) pushBranchFollowupsToGh(cur, token).catch(() => {});
+    return { ok: true, ...cur };
+  }
+  if (pathname === '/api/quotas/repo-verify' && method === 'POST') {
+    const body = JSON.parse(opts.body || '{}');
+    const repoKey = String(body.repoKey || '').trim();
+    const cur = getLocalBranchFollowups();
+    if (body.verified === false) delete cur.repoVerified[repoKey];
+    else cur.repoVerified[repoKey] = { verifiedAt: new Date().toISOString(), byRole: state.userRole || 'ADMIN' };
+    saveLocalBranchFollowups(cur);
+    const token = localStorage.getItem('bs_gh_pub_token');
+    if (token) pushBranchFollowupsToGh(cur, token).catch(() => {});
+    return { ok: true, ...cur };
+  }
+  if (pathname === '/api/audits/payment' && method === 'POST') {
+    const body = JSON.parse(opts.body || '{}');
+    const payKey = String(body.payKey || '').trim();
+    const cur = getLocalBranchFollowups();
+    if (body.clear) delete cur.paymentAudits[payKey];
+    else cur.paymentAudits[payKey] = { verifiedAt: new Date().toISOString(), byRole: state.userRole || 'ADMIN' };
+    saveLocalBranchFollowups(cur);
+    const token = localStorage.getItem('bs_gh_pub_token');
+    if (token) pushBranchFollowupsToGh(cur, token).catch(() => {});
+    return { ok: true, ...cur };
   }
   if (pathname === '/api/quotas' && method === 'PUT') {
     const body = JSON.parse(opts.body || '{}');
@@ -8399,6 +8444,70 @@ async function pushBranchQuotasToGh(quotasObj, token) {
   return true;
 }
 
+function getLocalBranchFollowups() {
+  try {
+    const d = JSON.parse(localStorage.getItem('ab_branch_followups_v1') || '{}');
+    return {
+      updatedAt: d.updatedAt || null,
+      followups: d.followups && typeof d.followups === 'object' ? d.followups : {},
+      repoVerified: d.repoVerified && typeof d.repoVerified === 'object' ? d.repoVerified : {},
+      paymentAudits: d.paymentAudits && typeof d.paymentAudits === 'object' ? d.paymentAudits : {},
+    };
+  } catch {
+    return { updatedAt: null, followups: {}, repoVerified: {}, paymentAudits: {} };
+  }
+}
+
+function saveLocalBranchFollowups(fObj) {
+  try {
+    localStorage.setItem('ab_branch_followups_v1', JSON.stringify(fObj));
+  } catch {}
+}
+
+async function pushBranchFollowupsToGh(fObj, token) {
+  const repo = 'ab-gadgetz/ab-gadgetz.github.io';
+  const apiUrl = `https://api.github.com/repos/${repo}/contents/public/branch-followups.json`;
+  const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
+  let sha;
+  const merged = {
+    updatedAt: new Date().toISOString(),
+    followups: { ...(fObj.followups || {}) },
+    repoVerified: { ...(fObj.repoVerified || {}) },
+    paymentAudits: { ...(fObj.paymentAudits || {}) },
+  };
+  const getRes = await fetch(apiUrl, { headers });
+  if (getRes.ok) {
+    const info = await getRes.json();
+    sha = info.sha;
+    try {
+      const decoded = decodeURIComponent(escape(atob(String(info.content || '').replace(/\n/g, ''))));
+      const existing = JSON.parse(decoded);
+      if (existing?.followups) merged.followups = { ...existing.followups, ...merged.followups };
+      if (existing?.repoVerified) merged.repoVerified = { ...existing.repoVerified, ...merged.repoVerified };
+      if (existing?.paymentAudits) merged.paymentAudits = { ...existing.paymentAudits, ...merged.paymentAudits };
+    } catch {}
+  }
+  const putRes = await fetch(apiUrl, {
+    method: 'PUT',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message: 'Update CI follow-ups and audit verifications',
+      content: btoa(unescape(encodeURIComponent(JSON.stringify(merged, null, 2)))),
+      ...(sha ? { sha } : {}),
+    }),
+  });
+  if (!putRes.ok) {
+    const errData = await putRes.json().catch(() => ({}));
+    throw new Error(errData.message || `GitHub follow-up sync failed (${putRes.status})`);
+  }
+  fetch(`https://api.github.com/repos/${repo}/actions/workflows/deploy-catalog.yml/dispatches`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ref: 'main' }),
+  }).catch(() => {});
+  return true;
+}
+
 async function loadQuotas(forceRefresh = false) {
   const mEl = document.getElementById('quotaMonthInput');
   if (mEl && !mEl.value) mEl.value = todayStr.slice(0, 7);
@@ -8411,7 +8520,12 @@ async function loadQuotas(forceRefresh = false) {
     cardsEl.innerHTML = '<div class="muted small" style="padding:12px;">Loading branch targets &amp; Web AB live quota...</div>';
   }
   try {
-    state.quotasData = await api(forceRefresh ? '/api/quotas?refresh=1' : '/api/quotas');
+    const [qRes, fRes] = await Promise.all([
+      api(forceRefresh ? '/api/quotas?refresh=1' : '/api/quotas'),
+      api('/api/followups').catch(() => ({ followups: {}, repoVerified: {}, paymentAudits: {} })),
+    ]);
+    state.quotasData = qRes;
+    state.followupsData = fRes || { followups: {}, repoVerified: {}, paymentAudits: {} };
     state._quotasLoadedAt = Date.now();
     renderQuotas();
   } catch (err) {
@@ -8647,6 +8761,13 @@ function renderQuotas() {
   `;
 
   cardsEl.innerHTML = branchRows.map(({ b, a, ws, minRel, maxRel, ciCount, savedBomQuota, bom46, bom712, live46, live712, estBom46, estBom712, estBomQ, rawBomQuota, repoDed, rebateCredit, collForQuota, effectiveBomQuota, isEstBom, hitQuota, hitMax, hitMin, commRate, branchCommission, perCiCommission }) => {
+    const repoVerifiedMap = state.followupsData?.repoVerified || {};
+    const verifiedRepoCount = (data.repos || []).filter((r) => {
+      if (r.branch_id !== b.id || String(r.repo_date || '').slice(0, 7) !== ym) return false;
+      const rk = `${b.id}::${r.account_no || r.customer_name}::${r.repo_date || ''}`;
+      return Boolean(repoVerifiedMap[rk]?.verified);
+    }).length;
+
     const posterHtml = buildQuotaPosterHtml({
       branchId: b.id,
       branchName: b.name,
@@ -8663,6 +8784,7 @@ function renderQuotas() {
       actColl: a.collAmount,
       actPenalties: a.penaltiesAmount,
       repoCount: a.repoCount,
+      verifiedRepoCount,
       repoAmount: a.repoAmount,
       liveQuota: ws.liveQuota || 0,
       isEstBom,
@@ -8685,6 +8807,15 @@ function renderQuotas() {
 
         ${(() => {
           const brPastDues = (data.pastDues || []).filter((pd) => pd.branch_id === b.id && Number(pd.balance) > 0);
+          const fuLog = getFollowUpLog();
+          let followedUpToday = 0;
+          let promisesDueToday = 0;
+          for (const pd of brPastDues) {
+            const ak = `${pd.branch_id}::${pd.account_no || pd.customer_name}`;
+            const ent = getFollowUpEntry(fuLog, ak);
+            if (ent?.date === todayStr) followedUpToday++;
+            if (ent?.promiseDate && ent.promiseDate <= todayStr) promisesDueToday++;
+          }
           const bucketStats = {
             '1-30': { c: 0, sum: 0, label: '1–30d' },
             '31-60': { c: 0, sum: 0, label: '31–60d' },
@@ -8730,7 +8861,10 @@ function renderQuotas() {
           return `
             <div style="margin-top:10px;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,0.03);border:1px solid var(--border-soft);">
               <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
-                <strong style="font-size:12px;color:#dfd09b;">📋 CI Action Plan (${daysLeft}d left)</strong>
+                <div>
+                  <strong style="font-size:12px;color:#dfd09b;">📋 CI Action Plan (${daysLeft}d left)</strong>
+                  <div style="font-size:10.5px;color:#94a3b8;margin-top:2px;">Today: <strong style="color:#8ecfb0;">${followedUpToday} followed up</strong> • <strong style="color:${promisesDueToday > 0 ? '#dfd09b' : '#94a3b8'};">${promisesDueToday} promises due</strong></div>
+                </div>
                 ${brPastDues.length ? `
                   <div style="display:flex;gap:5px;align-items:center;">
                     <button type="button" class="secondary q-followup-pdf-btn" data-branch="${b.id}" style="padding:4px 8px;font-size:11px;min-height:0;" title="Download PDF of all aged groups and actions">📄 PDF</button>
@@ -9038,7 +9172,7 @@ function buildQuotaPosterHtml(ctx, { includeMtd = true } = {}) {
             <span style="font-size:9px;font-weight:700;background:rgba(184,148,70,0.18);color:#ecd899;padding:1px 5px;border-radius:999px;">− TARGET</span>
           </div>
           <div style="font-size:14px;font-weight:700;color:#e2e8f0;margin-top:2px;">−${fmtCurrency(ctx.repoDed || 0)}</div>
-          <div style="font-size:10px;color:#94a3b8;line-height:1.35;margin-top:2px;">1-month due of repo'd units (${fmtWhole(ctx.repoAmount || 0)} unit val.) deducted from Initial Quota.</div>
+          <div style="font-size:10px;color:#94a3b8;line-height:1.35;margin-top:2px;">1-month due of repo'd units (${fmtWhole(ctx.repoAmount || 0)} unit val.) deducted from Initial Quota.${ctx.repoCount > 0 ? ` <strong style="color:${(ctx.verifiedRepoCount || 0) >= ctx.repoCount ? '#8ecfb0' : '#dfd09b'};">Verified: ${ctx.verifiedRepoCount || 0}/${ctx.repoCount}</strong>` : ''}</div>
         </div>
       </div>
     ` : ''}
@@ -9145,17 +9279,47 @@ document.getElementById('quotaPreviewModal')?.addEventListener('click', (e) => {
 let activeFollowUpBranchId = '';
 let activeFollowUpTier = 'PRIORITY';
 function getFollowUpLog() {
+  let local = {};
   try {
-    return JSON.parse(localStorage.getItem('ab_ci_followup_v1') || '{}');
-  } catch {
-    return {};
+    local = JSON.parse(localStorage.getItem('ab_ci_followup_v1') || '{}');
+  } catch {}
+  const remote = state.followupsData?.followups && typeof state.followupsData.followups === 'object'
+    ? state.followupsData.followups
+    : {};
+  return { ...local, ...remote };
+}
+function getFollowUpEntry(log, acctKey) {
+  const v = log?.[acctKey];
+  if (!v) return null;
+  if (typeof v === 'string') return { date: v, promiseDate: '', note: '' };
+  if (typeof v === 'object') return { date: v.date || '', promiseDate: v.promiseDate || '', note: v.note || '', by: v.by || '' };
+  return null;
+}
+async function saveFollowUpEntry(acctKey, { clear = false, promiseDate = '', note = '' } = {}) {
+  const local = getFollowUpLog();
+  if (clear) {
+    delete local[acctKey];
+    if (state.followupsData?.followups) delete state.followupsData.followups[acctKey];
+  } else {
+    const entry = { date: todayStr, promiseDate: String(promiseDate || '').trim(), note: String(note || '').trim(), by: state.userRole || 'CI', at: new Date().toISOString() };
+    local[acctKey] = entry;
+    if (!state.followupsData) state.followupsData = { followups: {}, repoVerified: {}, paymentAudits: {} };
+    if (!state.followupsData.followups) state.followupsData.followups = {};
+    state.followupsData.followups[acctKey] = entry;
+  }
+  try { localStorage.setItem('ab_ci_followup_v1', JSON.stringify(local)); } catch {}
+  try {
+    await api('/api/followups/mark', {
+      method: 'POST',
+      body: JSON.stringify({ key: acctKey, clear, date: todayStr, promiseDate, note }),
+    });
+  } catch (e) {
+    console.warn('Follow-up sync warning:', e?.message || e);
   }
 }
-function toggleFollowUpMark(acctKey) {
-  const log = getFollowUpLog();
-  if (log[acctKey] === todayStr) delete log[acctKey];
-  else log[acctKey] = todayStr;
-  try { localStorage.setItem('ab_ci_followup_v1', JSON.stringify(log)); } catch {}
+async function toggleFollowUpMark(acctKey) {
+  const ent = getFollowUpEntry(getFollowUpLog(), acctKey);
+  await saveFollowUpEntry(acctKey, { clear: ent?.date === todayStr });
 }
 
 const FOLLOWUP_ACTION_GUIDE = {
@@ -9213,16 +9377,21 @@ function renderQuotaFollowUpList() {
 
   let rows = (state.quotasData.pastDues || []).filter((pd) => pd.branch_id === activeFollowUpBranchId && Number(pd.balance) > 0);
   const agingCounts = { '1-30': 0, '31-60': 0, '61-90': 0, '91-180': 0, '180+': 0 };
+  let promisesCount = 0;
   rows = rows.map((pd) => {
     const r = enrichPastDueRow(pd);
     agingCounts[r.tierKey] = (agingCounts[r.tierKey] || 0) + 1;
-    return r;
+    const ak = `${r.branch_id}::${r.account_no || r.customer_name}`;
+    const ent = getFollowUpEntry(log, ak);
+    if (ent?.promiseDate) promisesCount++;
+    return { ...r, _acctKey: ak, _fuEntry: ent };
   });
 
   const pillsEl = document.getElementById('quotaFollowUpAgingPills');
   if (pillsEl) {
     const pillDefs = [
       ['PRIORITY', `Quickest (${agingCounts['1-30'] + agingCounts['31-60']})`],
+      ['PROMISES', `Promises (${promisesCount})`],
       ['1-30', `1–30d (${agingCounts['1-30']})`],
       ['31-60', `31–60d (${agingCounts['31-60']})`],
       ['61-90', `61–90d (${agingCounts['61-90']})`],
@@ -9248,6 +9417,8 @@ function renderQuotaFollowUpList() {
     rows = rows.filter((r) => r.tierKey === tierFilter);
   } else if (tierFilter === 'PRIORITY') {
     rows = rows.filter((r) => r.tierKey === '1-30' || r.tierKey === '31-60');
+  } else if (tierFilter === 'PROMISES') {
+    rows = rows.filter((r) => Boolean(r._fuEntry?.promiseDate));
   }
 
   if (q) {
@@ -9293,14 +9464,17 @@ function renderQuotaFollowUpList() {
           groupHeaderHtml = `<div style="margin-top:4px;padding:6px 10px;border-radius:8px;background:#1a212b;border-left:3px solid #b89446;font-size:11.5px;font-weight:700;color:#dfd09b;">${g.title}</div>`;
         }
         const cleanPhone = String(r.contact_no || '').replace(/[^0-9+]/g, '');
-        const acctKey = `${r.branch_id}::${r.account_no || r.customer_name}`;
-        const contactedToday = log[acctKey] === todayStr;
+        const acctKey = r._acctKey || `${r.branch_id}::${r.account_no || r.customer_name}`;
+        const fuEnt = r._fuEntry || getFollowUpEntry(log, acctKey);
+        const contactedToday = fuEnt?.date === todayStr;
+        const promiseDue = fuEnt?.promiseDate && fuEnt.promiseDate <= todayStr;
         const smsText = encodeURIComponent(
           `Maayong adlaw ${r.customer_name || ''}! Gentle reminder from AB Gadgetz (${branchNames[r.branch_id] || ''}) for Acct ${r.account_no || ''}: Amount Due ${fmtCurrency(r.amountDue)} (${r.monthsDue} mo / ${r.effDays}d delayed; Total Bal ${fmtCurrency(r.bal)}). Thank you!`
         );
         const dayColor = r.effDays <= 30 ? '#dfd09b' : r.effDays <= 60 ? '#d8b47c' : '#e29a9a';
+        const safeNoteAttr = String(fuEnt?.note || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
         return `${groupHeaderHtml}
-          <div style="background:${contactedToday ? 'rgba(77,158,122,0.08)' : '#151b23'};border:1px solid ${contactedToday ? 'rgba(77,158,122,0.5)' : '#28313e'};border-radius:10px;padding:10px 12px;">
+          <div style="background:${contactedToday ? 'rgba(77,158,122,0.08)' : '#151b23'};border:1px solid ${promiseDue ? 'rgba(214,190,122,0.6)' : (contactedToday ? 'rgba(77,158,122,0.5)' : '#28313e')};border-radius:10px;padding:10px 12px;">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
               <div style="min-width:0;">
                 <strong style="font-size:13.5px;color:#e2e8f0;">${r.customer_name || 'Customer'}</strong>
@@ -9314,6 +9488,14 @@ function renderQuotaFollowUpList() {
                 <div style="font-size:10.5px;font-weight:700;color:${dayColor};">${r.monthsDue} mo${r.monthsDue !== 1 ? 's' : ''} • ${r.effDays}d delayed</div>
                 <div style="font-size:10px;color:#94a3b8;">Total Bal: ${fmtCurrency(r.bal)}</div>
               </div>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:7px;">
+              <label style="font-size:10.5px;color:#94a3b8;display:inline-flex;align-items:center;gap:4px;">
+                Promise:
+                <input type="date" class="q-fu-promise" data-key="${acctKey}" value="${fuEnt?.promiseDate || ''}" style="padding:3px 6px;font-size:11px;min-height:0;width:auto;" />
+              </label>
+              <input type="text" class="q-fu-note" data-key="${acctKey}" value="${safeNoteAttr}" placeholder="Promise / field visit note..." style="flex:1;min-width:140px;padding:4px 7px;font-size:11px;min-height:0;" />
+              ${promiseDue ? '<span style="font-size:10px;font-weight:700;color:#dfd09b;background:rgba(214,190,122,0.16);padding:2px 6px;border-radius:999px;">PROMISE DUE</span>' : ''}
             </div>
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px dashed #28313e;">
               <div class="small muted">
@@ -9331,9 +9513,16 @@ function renderQuotaFollowUpList() {
     : '<div class="muted small" style="padding:12px;">No matching past-due accounts found.</div>';
 
   listEl.querySelectorAll('.q-mark-followup-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      toggleFollowUpMark(btn.dataset.key);
+    btn.addEventListener('click', async () => {
+      const k = btn.dataset.key;
+      const card = btn.closest('div[style*="border-radius:10px"]');
+      const promiseDate = card?.querySelector('.q-fu-promise')?.value || '';
+      const note = card?.querySelector('.q-fu-note')?.value || '';
+      const ent = getFollowUpEntry(getFollowUpLog(), k);
+      const changedMeta = (promiseDate !== (ent?.promiseDate || '')) || (note.trim() !== (ent?.note || '').trim());
+      await saveFollowUpEntry(k, { clear: ent?.date === todayStr && !changedMeta, promiseDate, note });
       renderQuotaFollowUpList();
+      renderQuotas();
     });
   });
 }
@@ -9428,6 +9617,9 @@ function openQuotaDrillModal(branchId, kind, ym, row) {
     .sort((a, b) => String(b.repo_date || '').localeCompare(String(a.repo_date || '')));
 
   const REBATE_FACTOR = 0.025 / 0.975;
+  const canVerify = state.userRole === 'ADMIN' || state.userRole === 'AUDITOR';
+  const repoVerifiedMap = state.followupsData?.repoVerified || {};
+  const paymentAuditsMap = state.followupsData?.paymentAudits || {};
 
   if (kind === 'repos') {
     if (titleEl) titleEl.textContent = `${brName} — Repos (${ym})`;
@@ -9436,10 +9628,39 @@ function openQuotaDrillModal(branchId, kind, ym, row) {
       formulaEl.innerHTML = `<strong>Final Target Quota Formula:</strong> Initial Quota (<code>${fmtCurrency(row.rawBomQuota)}</code>) − 1-Mo. Repo Deduction (<code>${fmtCurrency(row.repoDed)}</code> across ${repos.length} units, ${fmtCurrency(row.a.repoAmount)} total unit value) = <strong style="color:#8ecfb0;">${fmtCurrency(row.effectiveBomQuota)}</strong>`;
     }
     bodyEl.innerHTML = repos.length
-      ? `<table class="data-table" style="font-size:11.5px;"><thead><tr><th>Repo Date</th><th>Customer</th><th>Acct #</th><th>Unit</th><th>Repo Balance</th></tr></thead><tbody>${
-          repos.map((r) => `<tr><td>${r.repo_date || ''}</td><td><strong>${r.customer_name || ''}</strong></td><td>${r.account_no || ''}</td><td>${r.item || ''}</td><td style="color:#dfd09b;"><strong>${fmtCurrency(r.amount)}</strong></td></tr>`).join('')
+      ? `<table class="data-table" style="font-size:11.5px;"><thead><tr><th>Repo Date</th><th>Customer</th><th>Acct #</th><th>Unit</th><th>Repo Balance</th><th>Slip &amp; IMEI</th></tr></thead><tbody>${
+          repos.map((r) => {
+            const rk = `${branchId}::${r.account_no || r.customer_name}::${r.repo_date || ''}`;
+            const isVer = Boolean(repoVerifiedMap[rk]?.verified);
+            const verCell = canVerify
+              ? `<button type="button" class="secondary q-verify-repo-btn" data-key="${rk}" data-ver="${isVer ? '1' : '0'}" style="padding:3px 8px;font-size:11px;min-height:0;${isVer ? 'border-color:rgba(77,158,122,0.55);color:#8ecfb0;' : ''}">${isVer ? '✓ Verified' : 'Verify Slip & IMEI'}</button>`
+              : `<span style="font-size:11px;color:${isVer ? '#8ecfb0' : '#94a3b8'};">${isVer ? '✓ Verified' : 'Pending'}</span>`;
+            return `<tr><td>${r.repo_date || ''}</td><td><strong>${r.customer_name || ''}</strong></td><td>${r.account_no || ''}</td><td>${r.item || ''}</td><td style="color:#dfd09b;"><strong>${fmtCurrency(r.amount)}</strong></td><td>${verCell}</td></tr>`;
+          }).join('')
         }</tbody></table>`
       : '<div class="muted small" style="padding:12px;">No repos recorded for this month.</div>';
+    if (canVerify) {
+      bodyEl.querySelectorAll('.q-verify-repo-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const key = btn.dataset.key;
+          const nextVer = btn.dataset.ver !== '1';
+          btn.disabled = true;
+          try {
+            const res = await api('/api/quotas/repo-verify', { method: 'POST', body: JSON.stringify({ key, verified: nextVer }) });
+            if (!state.followupsData) state.followupsData = { followups: {}, repoVerified: {}, paymentAudits: {} };
+            if (!state.followupsData.repoVerified) state.followupsData.repoVerified = {};
+            if (res?.repoVerified) state.followupsData.repoVerified = res.repoVerified;
+            else if (nextVer) state.followupsData.repoVerified[key] = { verified: true, by: state.userRole, at: new Date().toISOString() };
+            else delete state.followupsData.repoVerified[key];
+            openQuotaDrillModal(branchId, kind, ym, row);
+            renderQuotas();
+          } catch (e) {
+            alert(e?.message || 'Failed to verify repo');
+            btn.disabled = false;
+          }
+        });
+      });
+    }
   } else if (kind === 'penalties') {
     const penRows = pays.filter((p) => Number(p.penalties) > 0);
     const totPen = penRows.reduce((s, p) => s + (Number(p.penalties) || 0), 0);
@@ -9485,10 +9706,38 @@ function openQuotaDrillModal(branchId, kind, ym, row) {
       formulaEl.innerHTML = `<strong>Computation:</strong> Principal (<code>${fmtCurrency(totPrin)}</code>) + Interest (<code>${fmtCurrency(totInt)}</code>) = <strong>Cash Collections</strong> (<code>${fmtCurrency(row.a.collAmount)}</code>) + 2.5% Rebates (<code>${fmtCurrency(row.rebateCredit)}</code>) = <strong style="color:#8ecfb0;">${fmtCurrency(row.collForQuota)}</strong> vs Final Target Quota (<code>${fmtCurrency(row.effectiveBomQuota)}</code>).`;
     }
     bodyEl.innerHTML = pays.length
-      ? `<table class="data-table" style="font-size:11.5px;"><thead><tr><th>Date</th><th>Customer</th><th>Acct #</th><th>Principal</th><th>Interest</th><th>Cash Paid</th></tr></thead><tbody>${
-          pays.slice(0, 250).map((p) => `<tr><td>${p.payment_date || ''}</td><td><strong>${p.customer_name || ''}</strong></td><td>${p.account_no || ''}</td><td>${fmtCurrency(p.principal)}</td><td>${fmtCurrency(p.interest)}</td><td style="color:#dfd09b;"><strong>${fmtCurrency(p.amount)}</strong></td></tr>`).join('')
+      ? `<table class="data-table" style="font-size:11.5px;"><thead><tr><th>Date</th><th>Customer</th><th>Acct #</th><th>Principal</th><th>Interest</th><th>Cash Paid</th><th>Call Audit</th></tr></thead><tbody>${
+          pays.slice(0, 250).map((p) => {
+            const pk = `${branchId}::${p.account_no || p.customer_name}::${p.payment_date || ''}::${Number(p.amount) || 0}`;
+            const isAud = Boolean(paymentAuditsMap[pk]?.verified);
+            const audCell = canVerify
+              ? `<button type="button" class="secondary q-verify-pay-btn" data-key="${pk}" data-ver="${isAud ? '1' : '0'}" style="padding:3px 8px;font-size:11px;min-height:0;${isAud ? 'border-color:rgba(77,158,122,0.55);color:#8ecfb0;' : ''}">${isAud ? '✓ Call OK' : 'Verify Call'}</button>`
+              : `<span style="font-size:11px;color:${isAud ? '#8ecfb0' : '#94a3b8'};">${isAud ? '✓ Call OK' : '—'}</span>`;
+            return `<tr><td>${p.payment_date || ''}</td><td><strong>${p.customer_name || ''}</strong></td><td>${p.account_no || ''}</td><td>${fmtCurrency(p.principal)}</td><td>${fmtCurrency(p.interest)}</td><td style="color:#dfd09b;"><strong>${fmtCurrency(p.amount)}</strong></td><td>${audCell}</td></tr>`;
+          }).join('')
         }</tbody></table>`
       : '<div class="muted small" style="padding:12px;">No payments recorded for this month.</div>';
+    if (canVerify) {
+      bodyEl.querySelectorAll('.q-verify-pay-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const key = btn.dataset.key;
+          const nextVer = btn.dataset.ver !== '1';
+          btn.disabled = true;
+          try {
+            const res = await api('/api/audits/payment', { method: 'POST', body: JSON.stringify({ key, verified: nextVer }) });
+            if (!state.followupsData) state.followupsData = { followups: {}, repoVerified: {}, paymentAudits: {} };
+            if (!state.followupsData.paymentAudits) state.followupsData.paymentAudits = {};
+            if (res?.paymentAudits) state.followupsData.paymentAudits = res.paymentAudits;
+            else if (nextVer) state.followupsData.paymentAudits[key] = { verified: true, by: state.userRole, at: new Date().toISOString() };
+            else delete state.followupsData.paymentAudits[key];
+            openQuotaDrillModal(branchId, kind, ym, row);
+          } catch (e) {
+            alert(e?.message || 'Failed to verify payment call');
+            btn.disabled = false;
+          }
+        });
+      });
+    }
   }
 
   modal.classList.remove('hidden');
@@ -12710,6 +12959,10 @@ function applyRolePermissions() {
     document.title = `Credit Investigator (${branchName}) — AB Gadgetz`;
     if (subEl) subEl.textContent = `CREDIT INVESTIGATOR (${branchName.toUpperCase()}) • VIEW & PDF ONLY`;
     if (greetEl) greetEl.textContent = `Credit Investigator • ${branchName}`;
+  } else if (role === 'AUDITOR') {
+    document.title = 'Auditor / Checker Portal — AB Gadgetz';
+    if (subEl) subEl.textContent = 'AUDITOR / CHECKER PORTAL • ALL BRANCHES (READ-ONLY + VERIFY)';
+    if (greetEl) greetEl.textContent = 'Auditor • All Branches';
   } else {
     document.title = 'Owner Admin Portal';
     if (subEl) subEl.textContent = 'OWNER ADMIN PORTAL • REALTIME SYNC';
@@ -12784,7 +13037,9 @@ function applyRolePermissions() {
       ? ['inventory']
       : role === 'CI'
         ? ['quotas', 'catalogs']
-        : ['inventory', 'sales', 'cashflow', 'activity', 'finance', 'receivables', 'quotas', 'catalogs', 'websiteStock', 'staffPins'];
+        : role === 'AUDITOR'
+          ? ['quotas', 'receivables', 'cashflow', 'activity']
+          : ['inventory', 'sales', 'cashflow', 'activity', 'finance', 'receivables', 'quotas', 'catalogs', 'websiteStock', 'staffPins'];
 
   document.querySelectorAll('.tab[data-tab], .mnav-btn[data-tab]').forEach((btn) => {
     const t = btn.dataset.tab;
@@ -12931,6 +13186,7 @@ async function loadStaffPins() {
     'CI::br-molave',
     'CI::br-tambulig',
     'CI::br-bonifacio',
+    'AUDITOR::ALL',
   ];
 
   const fillInputs = (pins) => {
@@ -13020,6 +13276,7 @@ document.getElementById('saveStaffPinsBtn')?.addEventListener('click', async () 
     'CI::br-molave',
     'CI::br-tambulig',
     'CI::br-bonifacio',
+    'AUDITOR::ALL',
   ];
   const pins = {};
   for (const key of keys) {
@@ -13084,7 +13341,7 @@ function updateAuthRoleUI() {
     box.classList.toggle('active', box.dataset.branch === branchId);
   });
 
-  branchWrap.classList.toggle('hidden', isSetup || role === 'ADMIN');
+  branchWrap.classList.toggle('hidden', isSetup || role === 'ADMIN' || role === 'AUDITOR');
 }
 
 document.querySelectorAll('#loginRoleBoxes .login-choice-box').forEach((box) => {

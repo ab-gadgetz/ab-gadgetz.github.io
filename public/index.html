@@ -31,12 +31,15 @@
       <input type="hidden" id="loginBranchSelect" value="br-molave" />
       <div id="loginRoleWrap" class="hidden" style="margin-bottom:10px;">
         <label>ACCOUNT ROLE</label>
-        <div class="login-box-grid cols-2" id="loginRoleBoxes">
+        <div class="login-box-grid" style="grid-template-columns:repeat(3,minmax(0,1fr));" id="loginRoleBoxes">
           <button type="button" class="login-choice-box active" data-role="CASHIER">
             <strong>Cashier</strong>
           </button>
           <button type="button" class="login-choice-box" data-role="CI">
             <strong>Credit Investigator</strong>
+          </button>
+          <button type="button" class="login-choice-box" data-role="AUDITOR">
+            <strong>Auditor</strong>
           </button>
         </div>
       </div>
@@ -1650,6 +1653,8 @@
             <div class="staff-pin-row">
               <label for="pin_CI_br-bonifacio">BONIFACIO CREDIT INVESTIGATOR PIN</label>
               <input type="text" id="pin_CI_br-bonifacio" inputmode="numeric" maxlength="6" pattern="\d{6}" placeholder="6-digit PIN (e.g. 223333)" />
+              <label for="pin_AUDITOR_ALL" style="margin-top:8px;">AUDITOR / CHECKER PIN (ALL BRANCHES)</label>
+              <input type="text" id="pin_AUDITOR_ALL" inputmode="numeric" maxlength="6" pattern="\d{6}" placeholder="6-digit PIN (e.g. 331111)" />
             </div>
           </div>
         </div>
