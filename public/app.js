@@ -8952,35 +8952,84 @@ function buildQuotaPosterHtml(ctx, { includeMtd = true } = {}) {
       </div>
     </div>
 
-    <div style="background:#151b23;border:1px solid #262f3b;border-radius:10px;padding:10px;margin-bottom:12px;">
-      <div style="font-size:10px;font-weight:700;letter-spacing:0.8px;color:#94a3b8;text-transform:uppercase;margin-bottom:7px;">Monthly Quota &amp; Release Targets</div>
-      <div style="display:grid;grid-template-columns:1.35fr 1fr 1fr;gap:7px;">
-        <div style="background:${hitQuota ? 'rgba(77,158,122,0.08)' : '#11161d'};border:${hitQuota ? '1px solid rgba(77,158,122,0.5)' : '1px solid #28313e'};border-radius:8px;padding:7px 9px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
-            <span style="font-size:9.5px;font-weight:700;color:${hitQuota ? '#9ee0c2' : '#94a3b8'};">COLLECTION QUOTA</span>
-            ${hitQuota ? metPill : (ctx.bomQuota > 0 ? progPill(`${collPct.toFixed(0)}%`) : '')}
-          </div>
-          <div style="font-size:14.5px;font-weight:700;color:${hitQuota ? '#a7e3c6' : '#e2e8f0'};margin-top:2px;">${ctx.bomQuota > 0 ? fmtCurrency(ctx.bomQuota) : 'Not set'}</div>
-          ${includeMtd && ctx.bomQuota > 0 ? `<div style="font-size:10px;color:${hitQuota ? '#8ecfb0' : '#94a3b8'};margin-top:2px;">${hitQuota ? `Collected ${fmtCurrency(ctx.actColl)}` : `Rem: ${fmtCurrency(collRem)}`}</div>` : ''}
+    <div style="background:#151b23;border:1px solid #262f3b;border-radius:10px;padding:10px 12px;margin-bottom:10px;">
+      <div style="display:grid;grid-template-columns:1.25fr 1fr 1fr 0.9fr;gap:8px;padding-bottom:6px;border-bottom:1px solid #262f3b;font-size:10px;font-weight:700;letter-spacing:0.6px;color:#94a3b8;text-transform:uppercase;">
+        <span>Goal</span>
+        <span>Target</span>
+        <span>Actual</span>
+        <span style="text-align:right;">Status</span>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1.25fr 1fr 1fr 0.9fr;gap:8px;align-items:center;padding:8px 0;border-bottom:1px dashed #262f3b;">
+        <div>
+          <div style="font-size:12px;font-weight:700;color:#e2e8f0;">Collection Quota</div>
+          ${ctx.repoDed ? `<div style="font-size:10px;color:#94a3b8;">1st-Day ${fmtWhole(ctx.rawBomQuota)} − ${fmtWhole(ctx.repoDed)} repo</div>` : `<div style="font-size:10px;color:#94a3b8;">Principal + Interest</div>`}
         </div>
-        <div style="background:${hitMin ? 'rgba(77,158,122,0.08)' : '#11161d'};border:${hitMin ? '1px solid rgba(77,158,122,0.5)' : '1px solid #28313e'};border-radius:8px;padding:7px 9px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
-            <span style="font-size:9.5px;font-weight:700;color:${hitMin ? '#9ee0c2' : '#94a3b8'};">MIN RELEASE</span>
-            ${hitMin ? metPill : (ctx.minRel > 0 ? progPill(`${ctx.actRel}/${ctx.minRel}`) : '')}
-          </div>
-          <div style="font-size:14.5px;font-weight:700;color:${hitMin ? '#a7e3c6' : '#e2e8f0'};margin-top:2px;">${ctx.minRel > 0 ? `${fmtNum(ctx.minRel)} orders` : '—'}</div>
-          ${includeMtd ? `<div style="font-size:10px;color:${hitMin ? '#8ecfb0' : '#94a3b8'};margin-top:2px;">Actual: ${fmtNum(ctx.actRel)} orders</div>` : ''}
+        <div style="font-size:13px;font-weight:700;color:#e2e8f0;">${ctx.bomQuota > 0 ? fmtCurrency(ctx.bomQuota) : 'Not set'}</div>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:${hitQuota ? '#8ecfb0' : '#dfd09b'};">${includeMtd ? fmtCurrency(collBase) : '—'}</div>
+          ${includeMtd && ctx.rebateCredit > 0 ? `<div style="font-size:9.5px;color:#94a3b8;">Cash ${fmtWhole(ctx.actColl)} + ${fmtWhole(ctx.rebateCredit)} reb.</div>` : ''}
         </div>
-        <div style="background:${hitMax ? 'rgba(77,158,122,0.08)' : '#11161d'};border:${hitMax ? '1px solid rgba(77,158,122,0.5)' : '1px solid #28313e'};border-radius:8px;padding:7px 9px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
-            <span style="font-size:9.5px;font-weight:700;color:${hitMax ? '#9ee0c2' : '#94a3b8'};">MAX RELEASE</span>
-            ${hitMax ? metPill : (ctx.maxRel > 0 ? progPill(`${ctx.actRel}/${ctx.maxRel}`) : '')}
-          </div>
-          <div style="font-size:14.5px;font-weight:700;color:${hitMax ? '#a7e3c6' : '#e2e8f0'};margin-top:2px;">${ctx.maxRel > 0 ? `${fmtNum(ctx.maxRel)} orders` : '—'}</div>
-          ${includeMtd && ctx.maxRel > 0 ? `<div style="font-size:10px;color:${hitMax ? '#8ecfb0' : '#94a3b8'};margin-top:2px;">${hitMax ? 'Max reached!' : `${Math.max(0, ctx.maxRel - ctx.actRel)} to go`}</div>` : ''}
+        <div style="text-align:right;">
+          ${hitQuota ? metPill : (ctx.bomQuota > 0 && includeMtd ? `<span style="font-size:11px;font-weight:700;color:#dfd09b;">${collPct.toFixed(1)}%</span><div style="font-size:9.5px;color:#94a3b8;">Rem ${fmtWhole(collRem)}</div>` : progPill('—'))}
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1.25fr 1fr 1fr 0.9fr;gap:8px;align-items:center;padding:8px 0;border-bottom:1px dashed #262f3b;">
+        <div>
+          <div style="font-size:12px;font-weight:700;color:#e2e8f0;">Min Release</div>
+          <div style="font-size:10px;color:#94a3b8;">Unlocks 0.35% tier</div>
+        </div>
+        <div style="font-size:13px;font-weight:700;color:#e2e8f0;">${ctx.minRel > 0 ? `${fmtNum(ctx.minRel)} orders` : '—'}</div>
+        <div style="font-size:13px;font-weight:700;color:${hitMin ? '#8ecfb0' : '#e2e8f0'};">${includeMtd ? `${fmtNum(ctx.actRel)} orders` : '—'}</div>
+        <div style="text-align:right;">
+          ${hitMin ? metPill : (ctx.minRel > 0 && includeMtd ? progPill(`${Math.max(0, ctx.minRel - ctx.actRel)} left`) : progPill('—'))}
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1.25fr 1fr 1fr 0.9fr;gap:8px;align-items:center;padding:8px 0 2px;">
+        <div>
+          <div style="font-size:12px;font-weight:700;color:#e2e8f0;">Max Release</div>
+          <div style="font-size:10px;color:#94a3b8;">Unlocks 0.50% tier</div>
+        </div>
+        <div style="font-size:13px;font-weight:700;color:#e2e8f0;">${ctx.maxRel > 0 ? `${fmtNum(ctx.maxRel)} orders` : '—'}</div>
+        <div style="font-size:13px;font-weight:700;color:${hitMax ? '#8ecfb0' : '#e2e8f0'};">${includeMtd ? `${fmtNum(ctx.actRel)} orders` : '—'}</div>
+        <div style="text-align:right;">
+          ${hitMax ? metPill : (ctx.maxRel > 0 && includeMtd ? progPill(`${Math.max(0, ctx.maxRel - ctx.actRel)} left`) : progPill('—'))}
         </div>
       </div>
     </div>
+
+    ${includeMtd ? `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:7px;margin-bottom:10px;">
+        <div style="background:#151b23;border:1px solid #262f3b;border-left:3px solid #4d9e7a;border-radius:8px;padding:8px 10px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
+            <span style="font-size:10px;font-weight:700;color:#8ecfb0;">2.5% REBATES</span>
+            <span style="font-size:9px;font-weight:700;background:rgba(77,158,122,0.18);color:#9ee0c2;padding:1px 5px;border-radius:999px;">+ QUOTA</span>
+          </div>
+          <div style="font-size:14px;font-weight:700;color:#e2e8f0;margin-top:2px;">${fmtCurrency(ctx.rebateCredit || 0)}</div>
+          <div style="font-size:10px;color:#94a3b8;line-height:1.35;margin-top:2px;">Added to collection progress to hit quota (cash payout stays on actual cash).</div>
+        </div>
+
+        <div style="background:#151b23;border:1px solid #262f3b;border-left:3px solid #b05b5b;border-radius:8px;padding:8px 10px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
+            <span style="font-size:10px;font-weight:700;color:#e29a9a;">PENALTIES</span>
+            <span style="font-size:9px;font-weight:700;background:rgba(176,91,91,0.18);color:#e2b4b4;padding:1px 5px;border-radius:999px;">EXCLUDED</span>
+          </div>
+          <div style="font-size:14px;font-weight:700;color:#e2e8f0;margin-top:2px;">${fmtCurrency(ctx.actPenalties || 0)}</div>
+          <div style="font-size:10px;color:#94a3b8;line-height:1.35;margin-top:2px;">Tracked separately; not counted toward Collection Quota.</div>
+        </div>
+
+        <div style="background:#151b23;border:1px solid #262f3b;border-left:3px solid #b89446;border-radius:8px;padding:8px 10px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
+            <span style="font-size:10px;font-weight:700;color:#dfd09b;">REPOS (${ctx.repoCount || 0} UNITS)</span>
+            <span style="font-size:9px;font-weight:700;background:rgba(184,148,70,0.18);color:#ecd899;padding:1px 5px;border-radius:999px;">− TARGET</span>
+          </div>
+          <div style="font-size:14px;font-weight:700;color:#e2e8f0;margin-top:2px;">−${fmtCurrency(ctx.repoDed || 0)}</div>
+          <div style="font-size:10px;color:#94a3b8;line-height:1.35;margin-top:2px;">Monthly due of repo'd units deducted from 1st-day quota.</div>
+        </div>
+      </div>
+    ` : ''}
 
     <div style="font-size:10px;font-weight:700;letter-spacing:0.8px;color:#94a3b8;text-transform:uppercase;margin-bottom:7px;">CI Incentive Structure</div>
 
