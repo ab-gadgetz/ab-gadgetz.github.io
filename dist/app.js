@@ -9502,8 +9502,8 @@ function renderQuotaFollowUpList() {
                 Est. Penalty: <strong style="color:#e29a9a;">${fmtCurrency(r.estPenalty)}</strong> • Total w/ Pen.: <strong style="color:#dfd09b;">${fmtCurrency(r.amountDue + r.estPenalty)}</strong>
               </div>
               <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                ${cleanPhone ? `<a href="tel:${cleanPhone}" class="secondary" style="display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border-radius:8px;font-size:11.5px;text-decoration:none;border:1px solid #2e3846;color:#cbd5e1;">📞 ${r.contact_no}</a>` : '<span class="small muted">No phone</span>'}
-                ${cleanPhone ? `<a href="sms:${cleanPhone}?body=${smsText}" class="secondary" style="display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border-radius:8px;font-size:11.5px;text-decoration:none;border:1px solid rgba(214,190,122,0.45);color:#d6be7a;">💬 SMS</a>` : ''}
+                ${cleanPhone ? `<button type="button" class="secondary q-fu-call-btn" data-phone="${cleanPhone}" data-raw="${r.contact_no || cleanPhone}" style="display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border-radius:8px;font-size:11.5px;min-height:0;border:1px solid #2e3846;color:#cbd5e1;">📞 ${r.contact_no}</button>` : '<span class="small muted">No phone</span>'}
+                ${cleanPhone ? `<button type="button" class="secondary q-fu-sms-btn" data-phone="${cleanPhone}" data-sms="${smsText}" style="display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border-radius:8px;font-size:11.5px;min-height:0;border:1px solid rgba(214,190,122,0.45);color:#d6be7a;">💬 SMS</button>` : ''}
                 <button type="button" class="secondary q-mark-followup-btn" data-key="${acctKey}" style="padding:5px 10px;font-size:11.5px;min-height:0;${contactedToday ? 'border-color:rgba(77,158,122,0.55);color:#8ecfb0;' : ''}">${contactedToday ? '✓ Followed Up' : 'Mark Done'}</button>
               </div>
             </div>
@@ -9511,6 +9511,37 @@ function renderQuotaFollowUpList() {
         `;
       }).join('')
     : '<div class="muted small" style="padding:12px;">No matching past-due accounts found.</div>';
+
+  const isMobileDev = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+  listEl.querySelectorAll('.q-fu-call-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const phone = btn.dataset.phone || '';
+      if (isMobileDev) {
+        window.location.href = `tel:${phone}`;
+      } else if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(btn.dataset.raw || phone).then(() => {
+          const orig = btn.textContent;
+          btn.textContent = '✓ Number Copied';
+          setTimeout(() => { btn.textContent = orig; }, 1500);
+        }).catch(() => {});
+      }
+    });
+  });
+  listEl.querySelectorAll('.q-fu-sms-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const phone = btn.dataset.phone || '';
+      const sms = btn.dataset.sms || '';
+      if (isMobileDev) {
+        window.location.href = `sms:${phone}?body=${sms}`;
+      } else if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(decodeURIComponent(sms)).then(() => {
+          const orig = btn.textContent;
+          btn.textContent = '✓ SMS Copied';
+          setTimeout(() => { btn.textContent = orig; }, 1500);
+        }).catch(() => {});
+      }
+    });
+  });
 
   listEl.querySelectorAll('.q-mark-followup-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
