@@ -242,6 +242,7 @@ async function loginAndFetchPortal(username, password) {
           const tds = extractCells(tr[1]);
           if (tds.length < 10 || !/^\d{4}-\d{2}-\d{2}/.test(tds[1])) continue;
           livePayments.push({
+            pay_id: tr[1].match(/payments\/view\/(\d+)/)?.[1] || '',
             branch_id: b.id, branch_name: b.name, payment_date: tds[1].slice(0, 10),
             account_no: tds[3], customer_name: tds[4], amount: parseNum(tds[5]),
             principal: parseNum(tds[6]), interest: parseNum(tds[7]), penalties: parseNum(tds[8]), rebates: parseNum(tds[9]),
@@ -265,15 +266,19 @@ async function loginAndFetchPortal(username, password) {
         });
         if (!r.ok) return;
         const html = await r.text();
-        const pool = new Map();
+        const pool = new Map(); const byId = new Map();
         for (const tr of html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
           const t = extractCells(tr[1]);
           if (t.length < 5 || !/^\d{4}-\d{2}-\d{2}/.test(t[0])) continue;
+          const vid = tr[1].match(/payments\/view\/(\d+)/)?.[1];
+          if (vid) byId.set(vid, { reb: parseNum(t[3]), pen: parseNum(t[4]) });
           const k = String(t[1]).trim().toUpperCase() + '|' + parseNum(t[2]);
           if (!pool.has(k)) pool.set(k, []);
           pool.get(k).push({ reb: parseNum(t[3]), pen: parseNum(t[4]) });
         }
         for (const p of mine.filter((x) => x.payment_date === date)) {
+          const ex = p.pay_id && byId.get(p.pay_id);
+          if (ex) { p.rebates = ex.reb; p.penalties = ex.pen; p.rebates_synced = true; continue; }
           const q = pool.get(String(p.customer_name).trim().toUpperCase() + '|' + p.amount);
           if (q && q.length) { const m = q.shift(); p.rebates = m.reb; p.penalties = m.pen; p.rebates_synced = true; }
         }
