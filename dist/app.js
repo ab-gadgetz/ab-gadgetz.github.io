@@ -338,7 +338,10 @@ async function staticGhApi(url, opts = {}) {
     if (isStaffPath && role === 'ADMIN') {
       throw new Error('Please use the Admin Portal URL for Owner Admin login.');
     }
-    if (role === 'CASHIER' || role === 'CI') {
+    if (role === 'AUDITOR') {
+      const ok = await verifyGhStaffPin('AUDITOR', '', pin);
+      if (!ok) throw new Error('Incorrect Auditor PIN.');
+    } else if (role === 'CASHIER' || role === 'CI') {
       if (!['br-molave', 'br-tambulig', 'br-bonifacio'].includes(branchId)) throw new Error('Please select a branch.');
       const ok = await verifyGhStaffPin(role, branchId, pin);
       if (!ok) {
@@ -349,10 +352,11 @@ async function staticGhApi(url, opts = {}) {
       const ok = await verifyGhOwnerPin(pin);
       if (!ok) throw new Error('Incorrect Owner PIN.');
     }
+    const effBranch = (role === 'ADMIN' || role === 'AUDITOR') ? '' : branchId;
     localStorage.setItem(`${prefix}auth`, '1');
     localStorage.setItem(`${prefix}role`, role);
-    localStorage.setItem(`${prefix}branch`, role === 'ADMIN' ? '' : branchId);
-    return { ok: true, role, branchId: role === 'ADMIN' ? '' : branchId };
+    localStorage.setItem(`${prefix}branch`, effBranch);
+    return { ok: true, role, branchId: effBranch };
   }
   if (pathname === '/api/auth/logout') {
     const isStaffPath = window.location.pathname.includes('/staff');
@@ -13469,7 +13473,7 @@ async function submitAuthPin() {
       body: JSON.stringify({ pin, role, branchId }),
     });
     state.userRole = res.role || role || 'ADMIN';
-    state.userBranchId = res.branchId || (state.userRole === 'ADMIN' ? '' : branchId);
+    state.userBranchId = res.branchId ?? ((state.userRole === 'ADMIN' || state.userRole === 'AUDITOR') ? '' : branchId);
     if (pinInput) pinInput.value = '';
     if (state.reauthInPlace && state.inventory) {
       state.reauthInPlace = false;
