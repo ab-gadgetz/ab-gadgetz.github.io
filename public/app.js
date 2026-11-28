@@ -8853,7 +8853,7 @@ function buildQuotaPosterHtml(ctx, { includeMtd = true } = {}) {
       <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;font-size:11px;color:#1e3a8a;margin-top:9px;">
         <span><strong>MTD Collected:</strong> ${fmtCurrency(ctx.actColl)} (${collPct.toFixed(1)}%)</span>
         <span><strong>MTD Releases:</strong> ${fmtNum(ctx.actRel)} orders</span>
-        ${ctx.liveQuota ? `<span><strong>Web AB Today:</strong> ${fmtCurrency(ctx.liveQuota)}</span>` : ''}
+        ${ctx.liveQuota && state.userRole === 'ADMIN' ? `<span><strong>Web AB Today:</strong> ${fmtCurrency(ctx.liveQuota)}</span>` : ''}
       </div>
     ` : ''}
   `;
