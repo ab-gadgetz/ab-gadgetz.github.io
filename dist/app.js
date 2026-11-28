@@ -8934,18 +8934,47 @@ function renderQuotaFollowUpList() {
   const log = getFollowUpLog();
 
   let rows = (state.quotasData.pastDues || []).filter((pd) => pd.branch_id === activeFollowUpBranchId && Number(pd.balance) > 0);
+  const agingCounts = { '1-30': 0, '31-60': 0, '61-90': 0, '91-180': 0, '180+': 0 };
   rows = rows.map((pd) => {
     const days = getEffectiveDaysDue(pd);
+    const tierKey = getAgingTier(days).key;
+    agingCounts[tierKey] = (agingCounts[tierKey] || 0) + 1;
     const bal = Number(pd.balance) || 0;
     // Estimate late penalty (~3% per 30d overdue, capped reasonably) & 2.5% prompt-payment rebate reference
     const estPenalty = days > 0 ? Math.round(bal * Math.min(0.15, Math.max(0.02, (days / 30) * 0.03))) : 0;
     const onTimeRebate = Math.round(bal * 0.025);
-    return { ...pd, effDays: days, bal, estPenalty, onTimeRebate };
+    return { ...pd, effDays: days, tierKey, bal, estPenalty, onTimeRebate };
   });
 
-  if (tierFilter === '1-30') rows = rows.filter((r) => r.effDays <= 30);
-  else if (tierFilter === '31-60') rows = rows.filter((r) => r.effDays > 30 && r.effDays <= 60);
-  else if (tierFilter === '61+') rows = rows.filter((r) => r.effDays > 60);
+  const pillsEl = document.getElementById('quotaFollowUpAgingPills');
+  if (pillsEl) {
+    const pillDefs = [
+      ['PRIORITY', `Quickest (${agingCounts['1-30'] + agingCounts['31-60']})`],
+      ['1-30', `1–30d (${agingCounts['1-30']})`],
+      ['31-60', `31–60d (${agingCounts['31-60']})`],
+      ['61-90', `61–90d (${agingCounts['61-90']})`],
+      ['91-180', `91–180d (${agingCounts['91-180']})`],
+      ['180+', `180+d (${agingCounts['180+']})`],
+      ['ALL', `All (${rows.length})`],
+    ];
+    pillsEl.innerHTML = pillDefs
+      .map(([val, label]) => {
+        const active = tierFilter === val;
+        return `<button type="button" class="secondary q-aging-pill" data-tier="${val}" style="padding:4px 9px;font-size:11px;min-height:0;border-radius:999px;${active ? 'border-color:var(--gold-bright);background:rgba(231,197,95,0.22);color:var(--gold-bright);font-weight:700;' : ''}">${label}</button>`;
+      })
+      .join('');
+    pillsEl.querySelectorAll('.q-aging-pill').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const sel = document.getElementById('quotaFollowUpTier');
+        if (sel) sel.value = btn.dataset.tier;
+        renderQuotaFollowUpList();
+      });
+    });
+  }
+
+  if (['1-30', '31-60', '61-90', '91-180', '180+'].includes(tierFilter)) {
+    rows = rows.filter((r) => r.tierKey === tierFilter);
+  }
 
   if (q) {
     rows = rows.filter((r) =>
