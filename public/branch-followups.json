@@ -1,6 +1,11 @@
 {
-  "updatedAt": null,
+  "updatedAt": "2026-11-28T14:34:24.220Z",
   "followups": {},
-  "repoVerified": {},
+  "repoVerified": {
+    "": {
+      "verifiedAt": "2026-11-28T14:34:24.220Z",
+      "byRole": "AUDITOR"
+    }
+  },
   "paymentAudits": {}
 }
