@@ -1181,14 +1181,14 @@
         </div>
 
         <div id="quotaFormulaBanner" class="sub-panel hidden" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--gold);line-height:1.55;">
-          <strong>Real Monthly Collection Target (1st Day of Month):</strong>
-          Sum of scheduled monthly amortizations (<code>Principal + Interest</code>) of active contracts as of the <strong>1st of the month</strong>, <strong>minus</strong> monthly dues of units repossessed during the month.<br />
-          <span class="muted">• <strong>Penalties:</strong> Excluded from hitting the Collection Quota.<br />• <strong>2.5% On-Time Rebates:</strong> Credited toward hitting the Quota check (<code>MTD Collected + Rebates ≥ Adjusted Quota</code>).</span>
+          <strong>Final Target Quota Formula:</strong>
+          <code>Initial Quota (1st Day of Month) − Repo Total Balance</code><br />
+          <span class="muted">• <strong>Collections to Hit Target:</strong> <code>Cash Collections + 2.5% On-Time Rebates</code> (Penalties excluded).</span>
           <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border-soft);">
-            <strong>CI Commission / Incentives (Paid on Actual Cash Collected):</strong><br />
-            • Collection Quota Hit + Maximum Release = <code>Cash Collected × 0.50%</code><br />
-            • Collection Quota Hit + Minimum Release = <code>Cash Collected × 0.35%</code><br />
-            • Collection Quota Not Hit OR Minimum Release Not Hit = <code>No Incentives</code><br />
+            <strong>CI Commission / Incentives (Based on Final Target Quota):</strong><br />
+            • Final Target Quota Hit + Maximum Release = <code>Final Target Quota × 0.50%</code><br />
+            • Final Target Quota Hit + Minimum Release = <code>Final Target Quota × 0.35%</code><br />
+            • Target Quota Not Hit OR Minimum Release Not Hit = <code>No Incentives</code><br />
             <span class="muted">If a branch has <strong>2 Credit Investigators</strong>, the earned commission is divided equally (÷ 2).</span>
           </div>
         </div>
