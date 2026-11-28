@@ -9090,6 +9090,18 @@ const FOLLOWUP_ACTION_GUIDE = {
   },
 };
 
+function enrichPastDueRow(pd) {
+  const effDays = getEffectiveDaysDue(pd);
+  const tier = getAgingTier(effDays);
+  const bal = Number(pd.balance) || 0;
+  const monthsDue = Number(pd.months_due) || (effDays >= 30 ? Math.floor(effDays / 30) : (effDays > 0 ? 1 : 0));
+  const monthlyBase = Number(pd.amount_due) || Number(pd.amortization) || 0;
+  const amountDue = monthlyBase > 0 ? Math.min(bal, monthlyBase * Math.max(1, monthsDue)) : bal;
+  const estPenalty = effDays > 0 ? Math.round(amountDue * Math.min(0.15, Math.max(0.02, (effDays / 30) * 0.03))) : 0;
+  const onTimeRebate = Math.round(amountDue * 0.025);
+  return { ...pd, effDays, tierKey: tier.key, tierAction: tier.action, bal, monthsDue, amountDue, estPenalty, onTimeRebate };
+}
+
 function renderQuotaFollowUpList() {
   const listEl = document.getElementById('quotaFollowUpList');
   const subEl = document.getElementById('quotaFollowUpSub');
@@ -9103,14 +9115,9 @@ function renderQuotaFollowUpList() {
   let rows = (state.quotasData.pastDues || []).filter((pd) => pd.branch_id === activeFollowUpBranchId && Number(pd.balance) > 0);
   const agingCounts = { '1-30': 0, '31-60': 0, '61-90': 0, '91-180': 0, '180+': 0 };
   rows = rows.map((pd) => {
-    const days = getEffectiveDaysDue(pd);
-    const tier = getAgingTier(days);
-    const tierKey = tier.key;
-    agingCounts[tierKey] = (agingCounts[tierKey] || 0) + 1;
-    const bal = Number(pd.balance) || 0;
-    const estPenalty = days > 0 ? Math.round(bal * Math.min(0.15, Math.max(0.02, (days / 30) * 0.03))) : 0;
-    const onTimeRebate = Math.round(bal * 0.025);
-    return { ...pd, effDays: days, tierKey, tierAction: tier.action, bal, estPenalty, onTimeRebate };
+    const r = enrichPastDueRow(pd);
+    agingCounts[r.tierKey] = (agingCounts[r.tierKey] || 0) + 1;
+    return r;
   });
 
   const pillsEl = document.getElementById('quotaFollowUpAgingPills');
@@ -9140,6 +9147,8 @@ function renderQuotaFollowUpList() {
 
   if (['1-30', '31-60', '61-90', '91-180', '180+'].includes(tierFilter)) {
     rows = rows.filter((r) => r.tierKey === tierFilter);
+  } else if (tierFilter === 'PRIORITY') {
+    rows = rows.filter((r) => r.tierKey === '1-30' || r.tierKey === '31-60');
   }
 
   if (q) {
@@ -9151,53 +9160,60 @@ function renderQuotaFollowUpList() {
     );
   }
 
-  if (tierFilter === 'PRIORITY') {
-    rows.sort((a, b) => {
-      const aQuick = a.effDays <= 60 ? 0 : 1;
-      const bQuick = b.effDays <= 60 ? 0 : 1;
-      return aQuick - bQuick || a.effDays - b.effDays || b.bal - a.bal;
-    });
-  } else {
-    rows.sort((a, b) => b.bal - a.bal);
-  }
+  const tierOrderMap = { '1-30': 0, '31-60': 1, '61-90': 2, '91-180': 3, '180+': 4 };
+  rows.sort((a, b) =>
+    (tierOrderMap[a.tierKey] ?? 9) - (tierOrderMap[b.tierKey] ?? 9) ||
+    String(a.release_date || '').localeCompare(String(b.release_date || ''))
+  );
 
+  const totalDueSum = rows.reduce((s, r) => s + r.amountDue, 0);
   const totalBal = rows.reduce((s, r) => s + r.bal, 0);
   if (subEl) {
-    subEl.textContent = `${branchNames[activeFollowUpBranchId] || ''} • ${rows.length} accounts • Total Due: ${fmtCurrency(totalBal)}`;
+    subEl.textContent = `${branchNames[activeFollowUpBranchId] || ''} • ${rows.length} accounts • Amount Due: ${fmtCurrency(totalDueSum)} (Total Bal: ${fmtCurrency(totalBal)})`;
   }
   if (headerEl) {
     const g = FOLLOWUP_ACTION_GUIDE[tierFilter] || FOLLOWUP_ACTION_GUIDE.ALL;
     headerEl.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px;">
         <strong style="font-size:12.5px;color:#dfd09b;">${g.title}</strong>
-        <span style="font-size:11px;font-weight:700;color:#8ecfb0;">${rows.length} accts • ${fmtCurrency(totalBal)}</span>
+        <span style="font-size:11px;font-weight:700;color:#8ecfb0;">${rows.length} accts • Due: ${fmtCurrency(totalDueSum)}</span>
       </div>
       <div style="font-size:11.5px;color:#cbd5e1;line-height:1.45;"><strong>CI Action Required:</strong> ${g.action}</div>
     `;
   }
 
-  const displayRows = rows.slice(0, 120);
+  const displayRows = rows.slice(0, 150);
+  const showGroupHeaders = tierFilter === 'PRIORITY' || tierFilter === 'ALL';
+  let lastTierKey = '';
   listEl.innerHTML = displayRows.length
     ? displayRows.map((r) => {
+        let groupHeaderHtml = '';
+        if (showGroupHeaders && r.tierKey !== lastTierKey) {
+          lastTierKey = r.tierKey;
+          const g = FOLLOWUP_ACTION_GUIDE[r.tierKey] || { title: r.tierKey, action: '' };
+          groupHeaderHtml = `<div style="margin-top:4px;padding:6px 10px;border-radius:8px;background:#1a212b;border-left:3px solid #b89446;font-size:11.5px;font-weight:700;color:#dfd09b;">${g.title}</div>`;
+        }
         const cleanPhone = String(r.contact_no || '').replace(/[^0-9+]/g, '');
         const acctKey = `${r.branch_id}::${r.account_no || r.customer_name}`;
         const contactedToday = log[acctKey] === todayStr;
         const smsText = encodeURIComponent(
-          `Maayong adlaw ${r.customer_name || ''}! Gentle reminder from AB Gadgetz (${branchNames[r.branch_id] || ''}) for Acct ${r.account_no || ''}: Balance Due ${fmtCurrency(r.bal)} (+ est. penalty ${fmtCurrency(r.estPenalty)}; 2.5% rebate applies on current/on-time dues). Thank you!`
+          `Maayong adlaw ${r.customer_name || ''}! Gentle reminder from AB Gadgetz (${branchNames[r.branch_id] || ''}) for Acct ${r.account_no || ''}: Amount Due ${fmtCurrency(r.amountDue)} (${r.monthsDue} mo / ${r.effDays}d delayed; Total Bal ${fmtCurrency(r.bal)}). Thank you!`
         );
         const dayColor = r.effDays <= 30 ? '#dfd09b' : r.effDays <= 60 ? '#d8b47c' : '#e29a9a';
-        return `
+        return `${groupHeaderHtml}
           <div style="background:${contactedToday ? 'rgba(77,158,122,0.08)' : '#151b23'};border:1px solid ${contactedToday ? 'rgba(77,158,122,0.5)' : '#28313e'};border-radius:10px;padding:10px 12px;">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
               <div style="min-width:0;">
                 <strong style="font-size:13.5px;color:#e2e8f0;">${r.customer_name || 'Customer'}</strong>
-                <div class="small muted">${r.account_no || ''} • ${r.barangay || '—'}</div>
+                <div class="small muted">Order: <strong style="color:#cbd5e1;">${r.release_date || '—'}</strong> • ${r.account_no || ''} • ${r.barangay || '—'}</div>
                 <div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px;">${r.unit || ''}</div>
                 <div style="font-size:10.5px;font-weight:600;color:#d6be7a;margin-top:3px;">Action: ${r.tierAction}</div>
               </div>
               <div style="text-align:right;flex-shrink:0;">
-                <strong style="font-size:14.5px;color:#e2e8f0;">${fmtCurrency(r.bal)}</strong>
-                <div style="font-size:10.5px;font-weight:600;color:${dayColor};">${r.effDays}d overdue</div>
+                <div style="font-size:10px;color:#94a3b8;text-transform:uppercase;">Amount Due</div>
+                <strong style="font-size:15px;color:#dfd09b;">${fmtCurrency(r.amountDue)}</strong>
+                <div style="font-size:10.5px;font-weight:700;color:${dayColor};">${r.monthsDue} mo${r.monthsDue !== 1 ? 's' : ''} • ${r.effDays}d delayed</div>
+                <div style="font-size:10px;color:#94a3b8;">Total Bal: ${fmtCurrency(r.bal)}</div>
               </div>
             </div>
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px dashed #28313e;">
@@ -9240,33 +9256,32 @@ function exportFollowUpPdf(branchId) {
   const brName = branchNames[branchId] || 'Branch';
   const rawRows = (state.quotasData.pastDues || [])
     .filter((pd) => pd.branch_id === branchId && Number(pd.balance) > 0)
-    .map((pd) => {
-      const effDays = getEffectiveDaysDue(pd);
-      const tier = getAgingTier(effDays);
-      const bal = Number(pd.balance) || 0;
-      const estPenalty = effDays > 0 ? Math.round(bal * Math.min(0.15, Math.max(0.02, (effDays / 30) * 0.03))) : 0;
-      return { ...pd, effDays, tierKey: tier.key, bal, estPenalty };
-    });
+    .map(enrichPastDueRow);
 
   const doc = new jspdfNs.jsPDF({ orientation: 'portrait', unit: 'in', format: [8.5, 13], compress: true });
   doc.setFontSize(14);
   doc.text(`AB Gadgetz — ${brName} Branch CI Follow-Up & Action Plan`, 0.4, 0.5);
   doc.setFontSize(9.5);
   doc.setTextColor(90);
-  doc.text(`As of ${todayStr} • Total Past-Due Accounts: ${rawRows.length} • Total Balance: ${fmtCurrency(rawRows.reduce((s, r) => s + r.bal, 0))}`, 0.4, 0.7);
+  const totDuePdf = rawRows.reduce((s, r) => s + r.amountDue, 0);
+  const totBalPdf = rawRows.reduce((s, r) => s + r.bal, 0);
+  doc.text(`As of ${todayStr} • ${rawRows.length} Accounts • Total Amount Due: ${fmtCurrency(totDuePdf)} • Total Balance: ${fmtCurrency(totBalPdf)}`, 0.4, 0.7);
   doc.setTextColor(0);
 
   let yPos = 0.95;
   const tierOrder = ['1-30', '31-60', '61-90', '91-180', '180+'];
   for (const tKey of tierOrder) {
-    const grp = rawRows.filter((r) => r.tierKey === tKey).sort((a, b) => b.bal - a.bal);
+    const grp = rawRows
+      .filter((r) => r.tierKey === tKey)
+      .sort((a, b) => String(a.release_date || '').localeCompare(String(b.release_date || '')));
     if (!grp.length) continue;
     const guide = FOLLOWUP_ACTION_GUIDE[tKey] || { title: tKey, action: '' };
-    const grpSum = grp.reduce((s, r) => s + r.bal, 0);
+    const grpDueSum = grp.reduce((s, r) => s + r.amountDue, 0);
+    const grpBalSum = grp.reduce((s, r) => s + r.bal, 0);
     if (yPos > 11.2) { doc.addPage([8.5, 13], 'portrait'); yPos = 0.5; }
     doc.setFontSize(11);
     doc.setFont(undefined, 'bold');
-    doc.text(`${guide.title} (${grp.length} accts • ${fmtCurrency(grpSum)})`, 0.4, yPos);
+    doc.text(`${guide.title} (${grp.length} accts • Due: ${fmtCurrency(grpDueSum)} | Bal: ${fmtCurrency(grpBalSum)})`, 0.4, yPos);
     yPos += 0.16;
     doc.setFontSize(8.5);
     doc.setFont(undefined, 'normal');
@@ -9277,17 +9292,18 @@ function exportFollowUpPdf(branchId) {
     doc.autoTable({
       startY: yPos,
       margin: { left: 0.4, right: 0.4 },
-      styles: { fontSize: 7.8, cellPadding: 0.04, overflow: 'linebreak' },
+      styles: { fontSize: 7.4, cellPadding: 0.035, overflow: 'linebreak' },
       headStyles: { fillColor: [30, 41, 59], textColor: 255, fontStyle: 'bold' },
-      head: [['Customer', 'Acct #', 'Contact', 'Barangay', 'Days', 'Balance Due', 'Est. Pen.']],
+      head: [['Order Date', 'Customer', 'Acct #', 'Contact', 'Barangay', 'Delayed', 'Amount Due', 'Total Bal']],
       body: grp.map((r) => [
+        r.release_date || '',
         r.customer_name || '',
         r.account_no || '',
         r.contact_no || '',
         r.barangay || '',
-        `${r.effDays}d`,
+        `${r.monthsDue}m / ${r.effDays}d`,
+        fmtCurrency(r.amountDue),
         fmtCurrency(r.bal),
-        fmtCurrency(r.estPenalty),
       ]),
     });
     yPos = (doc.lastAutoTable?.finalY || yPos) + 0.25;

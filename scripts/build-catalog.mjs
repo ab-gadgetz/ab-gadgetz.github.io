@@ -316,6 +316,10 @@ async function loginAndFetchPortal(username, password) {
             contact_no: tds[4] || '', barangay: tds[5] || '',
             balance: parseNum(tds[12] || tds[10] || 0),
             days_due: parseInt(String(tds[9] || '0').replace(/[^0-9]/g, ''), 10) || 0,
+            amortization: parseNum(tds[8] || 0),
+            amount_due: parseNum(tds[10] || 0),
+            months_due: parseInt(String(tds[11] || '0').replace(/[^0-9]/g, ''), 10) || 0,
+            remarks: String(tds[15] || '').trim(),
           });
         }
       }
