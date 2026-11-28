@@ -1282,10 +1282,12 @@ body.role-staff #logoutBtn {
   font-size: 11px;
   min-height: 28px;
 }
-body.role-cashier #mobileBottomNav {
+body.role-cashier #mobileBottomNav,
+body.role-auditor #mobileBottomNav {
   display: none !important;
 }
-body.role-cashier #menuHamburgerIcon {
+body.role-cashier #menuHamburgerIcon,
+body.role-auditor #menuHamburgerIcon {
   display: none !important;
 }
 body.role-cashier #menuToggleBtn {

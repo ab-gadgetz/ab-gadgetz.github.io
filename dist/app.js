@@ -13057,7 +13057,7 @@ function applyRolePermissions() {
   document.body.classList.toggle('role-staff', !isAdmin);
   document.body.classList.toggle('role-auditor', role === 'AUDITOR');
   document.body.classList.toggle('role-cashier', role === 'CASHIER');
-  document.getElementById('mobileBottomNav')?.classList.toggle('hidden', role === 'CASHIER');
+  document.getElementById('mobileBottomNav')?.classList.toggle('hidden', role === 'CASHIER' || role === 'AUDITOR');
 
   const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
   const branchName = branchNames[branchId] || 'Branch';
@@ -13152,7 +13152,7 @@ function applyRolePermissions() {
       : role === 'CI'
         ? ['quotas', 'catalogs']
         : role === 'AUDITOR'
-          ? ['quotas', 'receivables', 'cashflow', 'activity']
+          ? ['quotas']
           : ['inventory', 'sales', 'cashflow', 'activity', 'finance', 'receivables', 'quotas', 'catalogs', 'websiteStock', 'staffPins'];
 
   document.querySelectorAll('.tab[data-tab], .mnav-btn[data-tab]').forEach((btn) => {
