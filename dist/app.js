@@ -500,6 +500,7 @@ async function staticGhApi(url, opts = {}) {
       installments: bundle.allInstallments || [],
       payments: bundle.allPayments || [],
       pastDues: bundle.allPastDues || [],
+      repos: bundle.allRepos || [],
     };
   }
   if (pathname === '/api/inventory') return bundle.inventory;
@@ -8446,7 +8447,7 @@ function renderQuotas() {
   const targetYmIdx = (ymY || 2026) * 12 + ((ymM || 1) - 1);
   const actuals = {};
   for (const b of branchDefs) {
-    actuals[b.id] = { relCount: 0, relPrincipal: 0, relFinanced: 0, rel46: 0, rel712: 0, collAmount: 0, collCount: 0, schedMonthlyDue: 0, sched46: 0, sched712: 0, activeBomCount: 0 };
+    actuals[b.id] = { relCount: 0, relPrincipal: 0, relFinanced: 0, rel46: 0, rel712: 0, collAmount: 0, collCount: 0, penaltiesAmount: 0, rebatesAmount: 0, repoCount: 0, repoAmount: 0, schedMonthlyDue: 0, sched46: 0, sched712: 0, activeBomCount: 0 };
   }
   for (const i of data.installments || []) {
     const a = actuals[i.branch_id];
@@ -8478,6 +8479,14 @@ function renderQuotas() {
     if (dt !== ym || !actuals[p.branch_id]) continue;
     actuals[p.branch_id].collCount++;
     actuals[p.branch_id].collAmount += Number(p.amount) || 0;
+    actuals[p.branch_id].penaltiesAmount += Number(p.penalties) || 0;
+    actuals[p.branch_id].rebatesAmount += Number(p.rebates) || 0;
+  }
+  for (const r of data.repos || []) {
+    const dt = String(r.repo_date || '').slice(0, 7);
+    if (dt !== ym || !actuals[r.branch_id]) continue;
+    actuals[r.branch_id].repoCount++;
+    actuals[r.branch_id].repoAmount += Number(r.amount) || 0;
   }
 
   let totMinRel = 0, totMaxRel = 0, totActRel = 0, totRelPrincipal = 0;
@@ -8629,6 +8638,9 @@ function renderQuotas() {
       bomQuota: effectiveBomQuota,
       actRel: a.relCount,
       actColl: a.collAmount,
+      actPenalties: a.penaltiesAmount,
+      repoCount: a.repoCount,
+      repoAmount: a.repoAmount,
       liveQuota: ws.liveQuota || 0,
       isEstBom,
     }, { includeMtd: true });
@@ -8775,6 +8787,9 @@ function renderQuotas() {
       bomQuota,
       actRel: row.a.relCount,
       actColl: row.a.collAmount,
+      actPenalties: row.a.penaltiesAmount,
+      repoCount: row.a.repoCount,
+      repoAmount: row.a.repoAmount,
       liveQuota: row.ws.liveQuota || 0,
       isEstBom: row.isEstBom && !(card?.querySelector('.q-bom-quota')?.value),
     };
@@ -8986,8 +9001,8 @@ function buildQuotaPosterHtml(ctx, { includeMtd = true } = {}) {
 
     ${includeMtd ? `
       <div style="background:#151b23;border:1px solid #262f3b;border-radius:8px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;font-size:11px;color:#cbd5e1;margin-top:9px;">
-        <span><strong>MTD Collected:</strong> ${fmtCurrency(ctx.actColl)} (${collPct.toFixed(1)}%)</span>
-        <span><strong>MTD Releases:</strong> ${fmtNum(ctx.actRel)} orders</span>
+        <span><strong>MTD Collected:</strong> ${fmtCurrency(ctx.actColl)} (${collPct.toFixed(1)}%)${ctx.actPenalties ? ` <span style="color:#94a3b8;">(+${fmtCurrency(ctx.actPenalties)} pen. excl.)</span>` : ''}</span>
+        <span><strong>MTD Releases:</strong> ${fmtNum(ctx.actRel)} orders${ctx.repoCount ? ` • <strong>Repos:</strong> ${ctx.repoCount} (${fmtCurrency(ctx.repoAmount)})` : ''}</span>
       </div>
     ` : ''}
   `;
@@ -9218,7 +9233,7 @@ function renderQuotaFollowUpList() {
             </div>
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px dashed #28313e;">
               <div class="small muted">
-                Est. Penalty: <strong style="color:#e29a9a;">${fmtCurrency(r.estPenalty)}</strong> • On-Time Rebate (2.5%): <strong style="color:#8ecfb0;">${fmtCurrency(r.onTimeRebate)}</strong>
+                Est. Penalty: <strong style="color:#e29a9a;">${fmtCurrency(r.estPenalty)}</strong> • Total w/ Pen.: <strong style="color:#dfd09b;">${fmtCurrency(r.amountDue + r.estPenalty)}</strong>
               </div>
               <div style="display:flex;gap:6px;flex-wrap:wrap;">
                 ${cleanPhone ? `<a href="tel:${cleanPhone}" class="secondary" style="display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border-radius:8px;font-size:11.5px;text-decoration:none;border:1px solid #2e3846;color:#cbd5e1;">📞 ${r.contact_no}</a>` : '<span class="small muted">No phone</span>'}

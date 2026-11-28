@@ -326,6 +326,33 @@ async function loginAndFetchPortal(username, password) {
     } catch {}
   }
 
+  // Scrape Repo Lists for all 3 branches
+  const liveRepos = [];
+  for (const b of BRANCHES) {
+    try {
+      const rRes = await fetchWithRetry(`${PORTAL_BASE}/panel/franchise/repo_lists/${b.portalId}`, { headers: { Cookie: cookieHeader(jar) } });
+      if (rRes.ok) {
+        const rHtml = await rRes.text();
+        for (const tr of rHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
+          const tds = extractCells(tr[1]);
+          if (tds.length < 6 || !/^\d{4}-\d{2}-\d{2}/.test(tds[0])) continue;
+          const itemRaw = String(tds[1] || '').trim();
+          const acctMatch = itemRaw.match(/ACCT\s*#?:?\s*([A-Z0-9-]+)/i);
+          liveRepos.push({
+            branch_id: b.id,
+            repo_date: tds[0].slice(0, 10),
+            item: itemRaw,
+            account_no: acctMatch ? acctMatch[1] : '',
+            customer_name: String(tds[2] || '').trim(),
+            amount: parseNum(tds[4] || 0),
+            balance: parseNum(tds[5] || 0),
+            status: String(tds[6] || 'repo').trim(),
+          });
+        }
+      }
+    } catch {}
+  }
+
   // Scrape live Web AB Installment Balance Summary & Collection Quota for each branch
   const liveBranchWebSummaries = {};
   for (const b of BRANCHES) {
@@ -428,7 +455,7 @@ async function loginAndFetchPortal(username, password) {
     }
   } catch {}
 
-  return { inventoryByBranch: result, stockCardsByBranch, succeededCodesByBranch, liveInstallments, livePayments, liveExpenses, livePastDues, liveDeliveries, liveTransactions, liveBranchWebSummaries };
+  return { inventoryByBranch: result, stockCardsByBranch, succeededCodesByBranch, liveInstallments, livePayments, liveExpenses, livePastDues, liveDeliveries, liveTransactions, liveBranchWebSummaries, liveRepos };
 }
 
 const PHONE_CATEGORIES = new Set(['CELLPHONES', 'REPO', 'KEYPAD CELLPHONES']);
@@ -532,6 +559,7 @@ async function main() {
   } catch {}
 
   let liveBranchWebSummaries = {};
+  let allRepos = [];
   if (user && pass) {
     try {
       const {
@@ -545,9 +573,13 @@ async function main() {
         liveDeliveries: fetchedDeliveries,
         liveTransactions: fetchedTransactions,
         liveBranchWebSummaries: fetchedWebSummaries,
+        liveRepos: fetchedRepos,
       } = await loginAndFetchPortal(user, pass);
       if (fetchedWebSummaries && Object.keys(fetchedWebSummaries).length > 0) {
         liveBranchWebSummaries = fetchedWebSummaries;
+      }
+      if (Array.isArray(fetchedRepos) && fetchedRepos.length > 0) {
+        allRepos = fetchedRepos;
       }
       if (Array.isArray(fetchedTransactions) && fetchedTransactions.length > 0) {
         const txMap = new Map(allTransactions.map((t) => [`${t.branch_id}::${t.order_no}`, t]));
@@ -978,6 +1010,7 @@ async function main() {
     allExpenses,
     allPastDues,
     allDeliveries,
+    allRepos,
     branchWebSummaries: liveBranchWebSummaries,
     branchQuotas: (() => {
       const qPath = path.join(publicDir, 'branch-quotas.json');
