@@ -8783,95 +8783,95 @@ function buildQuotaPosterHtml(ctx, { includeMtd = true } = {}) {
   const achievedMin = hitQuota && hitMin && !hitMax;
   const noIncentiveNow = !hitQuota || !hitMin;
 
-  const metPill = '<span style="display:inline-block;background:#16a34a;color:#ffffff;font-size:9.5px;font-weight:800;padding:2px 6px;border-radius:999px;letter-spacing:0.3px;">✓ MET</span>';
-  const progPill = (txt) => `<span style="display:inline-block;background:#26303d;color:#cbd5e1;font-size:9.5px;font-weight:700;padding:2px 6px;border-radius:999px;">${txt}</span>`;
+  const metPill = '<span style="display:inline-block;background:rgba(77,158,122,0.2);color:#9ee0c2;border:1px solid rgba(77,158,122,0.45);font-size:9.5px;font-weight:700;padding:2px 6px;border-radius:999px;letter-spacing:0.3px;">✓ MET</span>';
+  const progPill = (txt) => `<span style="display:inline-block;background:#232b36;color:#94a3b8;font-size:9.5px;font-weight:700;padding:2px 6px;border-radius:999px;">${txt}</span>`;
 
   return `
-    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #eab308;padding-bottom:10px;margin-bottom:12px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(212,180,104,0.35);padding-bottom:10px;margin-bottom:12px;">
       <div style="display:flex;align-items:center;gap:9px;">
         <img src="${LOGO_SQUARE_SRC}" alt="AB Gadgetz" style="width:34px;height:34px;border-radius:8px;object-fit:cover;" />
         <div>
-          <div style="font-size:9.5px;font-weight:800;letter-spacing:1px;color:#facc15;text-transform:uppercase;">AB Gadgetz • Monthly Branch Target</div>
-          <div style="font-size:17px;font-weight:800;color:#f8fafc;line-height:1.2;">${ctx.branchName} Branch — ${monthLabel}</div>
+          <div style="font-size:9.5px;font-weight:700;letter-spacing:1px;color:#d6be7a;text-transform:uppercase;">AB Gadgetz • Monthly Branch Target</div>
+          <div style="font-size:16.5px;font-weight:700;color:#e2e8f0;line-height:1.2;">${ctx.branchName} Branch — ${monthLabel}</div>
         </div>
       </div>
-      <div style="text-align:right;font-size:10.5px;font-weight:700;color:#fde047;background:rgba(234,179,8,0.14);border:1px solid rgba(250,204,21,0.45);padding:3px 8px;border-radius:999px;white-space:nowrap;">
+      <div style="text-align:right;font-size:10.5px;font-weight:600;color:#d6be7a;background:rgba(214,190,122,0.1);border:1px solid rgba(214,190,122,0.3);padding:3px 8px;border-radius:999px;white-space:nowrap;">
         ${ctx.ciCount} Collector${ctx.ciCount > 1 ? 's' : ''}
       </div>
     </div>
 
-    <div style="background:#171d26;border:1px solid #2b3441;border-radius:10px;padding:10px;margin-bottom:12px;">
-      <div style="font-size:10px;font-weight:800;letter-spacing:0.8px;color:#94a3b8;text-transform:uppercase;margin-bottom:7px;">Monthly Quota &amp; Release Targets</div>
+    <div style="background:#151b23;border:1px solid #262f3b;border-radius:10px;padding:10px;margin-bottom:12px;">
+      <div style="font-size:10px;font-weight:700;letter-spacing:0.8px;color:#94a3b8;text-transform:uppercase;margin-bottom:7px;">Monthly Quota &amp; Release Targets</div>
       <div style="display:grid;grid-template-columns:1.35fr 1fr 1fr;gap:7px;">
-        <div style="background:${hitQuota ? 'rgba(22,163,74,0.16)' : '#11161d'};border:${hitQuota ? '2px solid #22c55e' : '1px solid #2f3947'};border-radius:8px;padding:7px 9px;">
+        <div style="background:${hitQuota ? 'rgba(77,158,122,0.08)' : '#11161d'};border:${hitQuota ? '1px solid rgba(77,158,122,0.5)' : '1px solid #28313e'};border-radius:8px;padding:7px 9px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
-            <span style="font-size:9.5px;font-weight:700;color:${hitQuota ? '#86efac' : '#94a3b8'};">COLLECTION QUOTA</span>
+            <span style="font-size:9.5px;font-weight:700;color:${hitQuota ? '#9ee0c2' : '#94a3b8'};">COLLECTION QUOTA</span>
             ${hitQuota ? metPill : (ctx.bomQuota > 0 ? progPill(`${collPct.toFixed(0)}%`) : '')}
           </div>
-          <div style="font-size:14.5px;font-weight:800;color:${hitQuota ? '#4ade80' : '#f8fafc'};margin-top:2px;">${ctx.bomQuota > 0 ? fmtCurrency(ctx.bomQuota) : 'Not set'}</div>
-          ${includeMtd && ctx.bomQuota > 0 ? `<div style="font-size:10px;color:${hitQuota ? '#86efac' : '#94a3b8'};margin-top:2px;">${hitQuota ? `Collected ${fmtCurrency(ctx.actColl)}` : `Rem: ${fmtCurrency(collRem)}`}</div>` : ''}
+          <div style="font-size:14.5px;font-weight:700;color:${hitQuota ? '#a7e3c6' : '#e2e8f0'};margin-top:2px;">${ctx.bomQuota > 0 ? fmtCurrency(ctx.bomQuota) : 'Not set'}</div>
+          ${includeMtd && ctx.bomQuota > 0 ? `<div style="font-size:10px;color:${hitQuota ? '#8ecfb0' : '#94a3b8'};margin-top:2px;">${hitQuota ? `Collected ${fmtCurrency(ctx.actColl)}` : `Rem: ${fmtCurrency(collRem)}`}</div>` : ''}
         </div>
-        <div style="background:${hitMin ? 'rgba(22,163,74,0.16)' : '#11161d'};border:${hitMin ? '2px solid #22c55e' : '1px solid #2f3947'};border-radius:8px;padding:7px 9px;">
+        <div style="background:${hitMin ? 'rgba(77,158,122,0.08)' : '#11161d'};border:${hitMin ? '1px solid rgba(77,158,122,0.5)' : '1px solid #28313e'};border-radius:8px;padding:7px 9px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
-            <span style="font-size:9.5px;font-weight:700;color:${hitMin ? '#86efac' : '#94a3b8'};">MIN RELEASE</span>
+            <span style="font-size:9.5px;font-weight:700;color:${hitMin ? '#9ee0c2' : '#94a3b8'};">MIN RELEASE</span>
             ${hitMin ? metPill : (ctx.minRel > 0 ? progPill(`${ctx.actRel}/${ctx.minRel}`) : '')}
           </div>
-          <div style="font-size:14.5px;font-weight:800;color:${hitMin ? '#4ade80' : '#f8fafc'};margin-top:2px;">${ctx.minRel > 0 ? `${fmtNum(ctx.minRel)} orders` : '—'}</div>
-          ${includeMtd ? `<div style="font-size:10px;color:${hitMin ? '#86efac' : '#94a3b8'};margin-top:2px;">Actual: ${fmtNum(ctx.actRel)} orders</div>` : ''}
+          <div style="font-size:14.5px;font-weight:700;color:${hitMin ? '#a7e3c6' : '#e2e8f0'};margin-top:2px;">${ctx.minRel > 0 ? `${fmtNum(ctx.minRel)} orders` : '—'}</div>
+          ${includeMtd ? `<div style="font-size:10px;color:${hitMin ? '#8ecfb0' : '#94a3b8'};margin-top:2px;">Actual: ${fmtNum(ctx.actRel)} orders</div>` : ''}
         </div>
-        <div style="background:${hitMax ? 'rgba(22,163,74,0.16)' : '#11161d'};border:${hitMax ? '2px solid #22c55e' : '1px solid #2f3947'};border-radius:8px;padding:7px 9px;">
+        <div style="background:${hitMax ? 'rgba(77,158,122,0.08)' : '#11161d'};border:${hitMax ? '1px solid rgba(77,158,122,0.5)' : '1px solid #28313e'};border-radius:8px;padding:7px 9px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
-            <span style="font-size:9.5px;font-weight:700;color:${hitMax ? '#86efac' : '#94a3b8'};">MAX RELEASE</span>
+            <span style="font-size:9.5px;font-weight:700;color:${hitMax ? '#9ee0c2' : '#94a3b8'};">MAX RELEASE</span>
             ${hitMax ? metPill : (ctx.maxRel > 0 ? progPill(`${ctx.actRel}/${ctx.maxRel}`) : '')}
           </div>
-          <div style="font-size:14.5px;font-weight:800;color:${hitMax ? '#4ade80' : '#f8fafc'};margin-top:2px;">${ctx.maxRel > 0 ? `${fmtNum(ctx.maxRel)} orders` : '—'}</div>
-          ${includeMtd && ctx.maxRel > 0 ? `<div style="font-size:10px;color:${hitMax ? '#86efac' : '#94a3b8'};margin-top:2px;">${hitMax ? 'Max reached!' : `${Math.max(0, ctx.maxRel - ctx.actRel)} to go`}</div>` : ''}
+          <div style="font-size:14.5px;font-weight:700;color:${hitMax ? '#a7e3c6' : '#e2e8f0'};margin-top:2px;">${ctx.maxRel > 0 ? `${fmtNum(ctx.maxRel)} orders` : '—'}</div>
+          ${includeMtd && ctx.maxRel > 0 ? `<div style="font-size:10px;color:${hitMax ? '#8ecfb0' : '#94a3b8'};margin-top:2px;">${hitMax ? 'Max reached!' : `${Math.max(0, ctx.maxRel - ctx.actRel)} to go`}</div>` : ''}
         </div>
       </div>
     </div>
 
-    <div style="font-size:10px;font-weight:800;letter-spacing:0.8px;color:#94a3b8;text-transform:uppercase;margin-bottom:7px;">CI Incentive Structure</div>
+    <div style="font-size:10px;font-weight:700;letter-spacing:0.8px;color:#94a3b8;text-transform:uppercase;margin-bottom:7px;">CI Incentive Structure</div>
 
     <div style="display:grid;gap:7px;">
-      <div style="background:rgba(22,163,74,0.12);border:${achievedMax ? '2px solid #22c55e' : '1px solid rgba(34,197,94,0.35)'};border-left:4px solid #22c55e;border-radius:8px;padding:9px 11px;display:flex;justify-content:space-between;align-items:center;gap:10px;${!achievedMax && includeMtd && !noIncentiveNow ? 'opacity:0.65;' : ''}">
+      <div style="background:#151b23;border:${achievedMax ? '1px solid rgba(77,158,122,0.55)' : '1px solid #262f3b'};border-left:3px solid #4d9e7a;border-radius:8px;padding:9px 11px;display:flex;justify-content:space-between;align-items:center;gap:10px;${!achievedMax && includeMtd && !noIncentiveNow ? 'opacity:0.72;' : ''}">
         <div>
-          <div style="font-size:12px;font-weight:800;color:#86efac;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          <div style="font-size:12px;font-weight:700;color:#d1fae5;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
             <span>Maximum Target Hit (0.50%)</span>
-            ${achievedMax ? '<span style="background:#16a34a;color:#fff;font-size:9px;padding:1px 6px;border-radius:999px;">✓ ACHIEVED</span>' : (includeMtd && hitMax && !hitQuota ? '<span style="background:#15803d;color:#fff;font-size:9px;padding:1px 6px;border-radius:999px;">✓ MAX RELEASE MET</span>' : '')}
+            ${achievedMax ? '<span style="background:rgba(77,158,122,0.22);color:#9ee0c2;border:1px solid rgba(77,158,122,0.45);font-size:9px;padding:1px 6px;border-radius:999px;">✓ ACHIEVED</span>' : (includeMtd && hitMax && !hitQuota ? '<span style="background:rgba(77,158,122,0.18);color:#9ee0c2;font-size:9px;padding:1px 6px;border-radius:999px;">✓ MAX RELEASE MET</span>' : '')}
           </div>
-          <div style="font-size:10.5px;color:#bbf7d0;">Collection Quota + ${ctx.maxRel > 0 ? `${fmtNum(ctx.maxRel)}+` : 'Max'} Releases${includeMtd && ctx.maxRel > 0 && !hitMax ? ` (${ctx.maxRel - ctx.actRel} more to 0.50%)` : ''}</div>
+          <div style="font-size:10.5px;color:#94a3b8;">Collection Quota + ${ctx.maxRel > 0 ? `${fmtNum(ctx.maxRel)}+` : 'Max'} Releases${includeMtd && ctx.maxRel > 0 && !hitMax ? ` (${ctx.maxRel - ctx.actRel} more to 0.50%)` : ''}</div>
         </div>
         <div style="text-align:right;">
-          <div style="font-size:15.5px;font-weight:800;color:#4ade80;">${fmtWhole(maxTotal)}</div>
-          ${ctx.ciCount > 1 ? `<div style="font-size:10.5px;font-weight:700;color:#86efac;">${fmtWhole(maxEach)} each CI</div>` : ''}
+          <div style="font-size:15px;font-weight:700;color:#8ecfb0;">${fmtWhole(maxTotal)}</div>
+          ${ctx.ciCount > 1 ? `<div style="font-size:10.5px;font-weight:600;color:#94a3b8;">${fmtWhole(maxEach)} each CI</div>` : ''}
         </div>
       </div>
 
-      <div style="background:rgba(234,179,8,0.12);border:${achievedMin || (includeMtd && hitMin && !hitMax) ? '2px solid #eab308' : '1px solid rgba(250,204,21,0.35)'};border-left:4px solid #eab308;border-radius:8px;padding:9px 11px;display:flex;justify-content:space-between;align-items:center;gap:10px;${achievedMax && includeMtd ? 'opacity:0.6;' : ''}">
+      <div style="background:#151b23;border:${achievedMin || (includeMtd && hitMin && !hitMax) ? '1px solid rgba(196,162,82,0.55)' : '1px solid #262f3b'};border-left:3px solid #b89446;border-radius:8px;padding:9px 11px;display:flex;justify-content:space-between;align-items:center;gap:10px;${achievedMax && includeMtd ? 'opacity:0.65;' : ''}">
         <div>
-          <div style="font-size:12px;font-weight:800;color:#fde047;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          <div style="font-size:12px;font-weight:700;color:#efe3ba;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
             <span>Minimum Target Hit (0.35%)</span>
-            ${achievedMin ? '<span style="background:#ca8a04;color:#fff;font-size:9px;padding:1px 6px;border-radius:999px;">✓ ACHIEVED</span>' : (includeMtd && hitMin && !hitMax ? '<span style="background:#ca8a04;color:#fff;font-size:9px;padding:1px 6px;border-radius:999px;">CURRENT TIER (✓ MIN MET)</span>' : '')}
+            ${achievedMin ? '<span style="background:rgba(184,148,70,0.25);color:#ecd899;border:1px solid rgba(184,148,70,0.45);font-size:9px;padding:1px 6px;border-radius:999px;">✓ ACHIEVED</span>' : (includeMtd && hitMin && !hitMax ? '<span style="background:rgba(184,148,70,0.2);color:#ecd899;border:1px solid rgba(184,148,70,0.4);font-size:9px;padding:1px 6px;border-radius:999px;">CURRENT TIER (✓ MIN MET)</span>' : '')}
           </div>
-          <div style="font-size:10.5px;color:#fef08a;">Collection Quota + ${ctx.minRel > 0 ? `${fmtNum(ctx.minRel)}` : 'Min'} Releases${includeMtd && hitMin && !hitMax && !hitQuota ? ' • Need Collection Quota' : ''}</div>
+          <div style="font-size:10.5px;color:#94a3b8;">Collection Quota + ${ctx.minRel > 0 ? `${fmtNum(ctx.minRel)}` : 'Min'} Releases${includeMtd && hitMin && !hitMax && !hitQuota ? ' • Need Collection Quota' : ''}</div>
         </div>
         <div style="text-align:right;">
-          <div style="font-size:15.5px;font-weight:800;color:#facc15;">${fmtWhole(minTotal)}</div>
-          ${ctx.ciCount > 1 ? `<div style="font-size:10.5px;font-weight:700;color:#fde047;">${fmtWhole(minEach)} each CI</div>` : ''}
+          <div style="font-size:15px;font-weight:700;color:#dfd09b;">${fmtWhole(minTotal)}</div>
+          ${ctx.ciCount > 1 ? `<div style="font-size:10.5px;font-weight:600;color:#94a3b8;">${fmtWhole(minEach)} each CI</div>` : ''}
         </div>
       </div>
 
-      <div style="background:rgba(239,68,68,0.12);border:${includeMtd && noIncentiveNow ? '2px solid #ef4444' : '1px solid rgba(239,68,68,0.35)'};border-left:4px solid #ef4444;border-radius:8px;padding:8px 11px;display:flex;justify-content:space-between;align-items:center;gap:8px;${includeMtd && !noIncentiveNow ? 'opacity:0.55;' : ''}">
-        <div style="font-size:11px;font-weight:700;color:#fca5a5;">
+      <div style="background:#151b23;border:${includeMtd && noIncentiveNow ? '1px solid rgba(176,91,91,0.5)' : '1px solid #262f3b'};border-left:3px solid #b05b5b;border-radius:8px;padding:8px 11px;display:flex;justify-content:space-between;align-items:center;gap:8px;${includeMtd && !noIncentiveNow ? 'opacity:0.6;' : ''}">
+        <div style="font-size:11px;font-weight:600;color:#e2b4b4;">
           Collection Quota Not Hit OR Release Target Not Hit
-          ${includeMtd && noIncentiveNow ? `<div style="font-size:10px;font-weight:600;color:#fecaca;margin-top:2px;">Status: ${ctx.minRel <= 0 ? 'Release target not set' : (hitMax ? '✓ Max Release Met (0.50% tier)' : hitMin ? '✓ Min Release Met (0.35% tier)' : `Need ${Math.max(0, ctx.minRel - ctx.actRel)} more release(s)`)} • ${hitQuota ? '✓ Collection Met' : `Need ${fmtCurrency(collRem)} more collection`}</div>` : ''}
+          ${includeMtd && noIncentiveNow ? `<div style="font-size:10px;font-weight:500;color:#cbd5e1;margin-top:2px;">Status: ${ctx.minRel <= 0 ? 'Release target not set' : (hitMax ? '✓ Max Release Met (0.50% tier)' : hitMin ? '✓ Min Release Met (0.35% tier)' : `Need ${Math.max(0, ctx.minRel - ctx.actRel)} more release(s)`)} • ${hitQuota ? '✓ Collection Met' : `Need ${fmtCurrency(collRem)} more collection`}</div>` : ''}
         </div>
-        <div style="font-size:11.5px;font-weight:800;color:#f87171;white-space:nowrap;">No Incentives (₱0)</div>
+        <div style="font-size:11.5px;font-weight:700;color:#e29a9a;white-space:nowrap;">No Incentives (₱0)</div>
       </div>
     </div>
 
     ${includeMtd ? `
-      <div style="background:rgba(59,130,246,0.12);border:1px solid rgba(96,165,250,0.35);border-radius:8px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;font-size:11px;color:#93c5fd;margin-top:9px;">
+      <div style="background:#151b23;border:1px solid #262f3b;border-radius:8px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;font-size:11px;color:#cbd5e1;margin-top:9px;">
         <span><strong>MTD Collected:</strong> ${fmtCurrency(ctx.actColl)} (${collPct.toFixed(1)}%)</span>
         <span><strong>MTD Releases:</strong> ${fmtNum(ctx.actRel)} orders</span>
       </div>
@@ -9030,29 +9030,29 @@ function renderQuotaFollowUpList() {
         const smsText = encodeURIComponent(
           `Maayong adlaw ${r.customer_name || ''}! Gentle reminder from AB Gadgetz (${branchNames[r.branch_id] || ''}) for Acct ${r.account_no || ''}: Balance Due ${fmtCurrency(r.bal)} (+ est. penalty ${fmtCurrency(r.estPenalty)}; 2.5% rebate applies on current/on-time dues). Thank you!`
         );
-        const dayColor = r.effDays <= 30 ? 'var(--gold-bright)' : r.effDays <= 60 ? '#fbbf24' : 'var(--danger)';
+        const dayColor = r.effDays <= 30 ? '#dfd09b' : r.effDays <= 60 ? '#d8b47c' : '#e29a9a';
         return `
-          <div style="background:${contactedToday ? 'rgba(34,197,94,0.08)' : '#171c23'};border:1px solid ${contactedToday ? 'var(--green)' : 'var(--border-soft)'};border-radius:10px;padding:10px 12px;">
+          <div style="background:${contactedToday ? 'rgba(77,158,122,0.08)' : '#151b23'};border:1px solid ${contactedToday ? 'rgba(77,158,122,0.5)' : '#28313e'};border-radius:10px;padding:10px 12px;">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
               <div style="min-width:0;">
-                <strong style="font-size:13.5px;color:var(--text);">${r.customer_name || 'Customer'}</strong>
+                <strong style="font-size:13.5px;color:#e2e8f0;">${r.customer_name || 'Customer'}</strong>
                 <div class="small muted">${r.account_no || ''} • ${r.barangay || '—'}</div>
                 <div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px;">${r.unit || ''}</div>
-                <div style="font-size:10.5px;font-weight:700;color:var(--gold-bright);margin-top:3px;">Action: ${r.tierAction}</div>
+                <div style="font-size:10.5px;font-weight:600;color:#d6be7a;margin-top:3px;">Action: ${r.tierAction}</div>
               </div>
               <div style="text-align:right;flex-shrink:0;">
-                <strong style="font-size:14.5px;color:var(--gold-bright);">${fmtCurrency(r.bal)}</strong>
-                <div style="font-size:10.5px;font-weight:700;color:${dayColor};">${r.effDays}d overdue</div>
+                <strong style="font-size:14.5px;color:#e2e8f0;">${fmtCurrency(r.bal)}</strong>
+                <div style="font-size:10.5px;font-weight:600;color:${dayColor};">${r.effDays}d overdue</div>
               </div>
             </div>
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px dashed var(--border-soft);">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px dashed #28313e;">
               <div class="small muted">
-                Est. Penalty: <strong style="color:var(--danger);">${fmtCurrency(r.estPenalty)}</strong> • On-Time Rebate (2.5%): <strong style="color:var(--green);">${fmtCurrency(r.onTimeRebate)}</strong>
+                Est. Penalty: <strong style="color:#e29a9a;">${fmtCurrency(r.estPenalty)}</strong> • On-Time Rebate (2.5%): <strong style="color:#8ecfb0;">${fmtCurrency(r.onTimeRebate)}</strong>
               </div>
               <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                ${cleanPhone ? `<a href="tel:${cleanPhone}" class="secondary" style="display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border-radius:8px;font-size:11.5px;text-decoration:none;border:1px solid var(--border-soft);color:var(--text);">📞 ${r.contact_no}</a>` : '<span class="small muted">No phone</span>'}
-                ${cleanPhone ? `<a href="sms:${cleanPhone}?body=${smsText}" class="secondary" style="display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border-radius:8px;font-size:11.5px;text-decoration:none;border:1px solid var(--gold);color:var(--gold-bright);">💬 SMS</a>` : ''}
-                <button type="button" class="secondary q-mark-followup-btn" data-key="${acctKey}" style="padding:5px 10px;font-size:11.5px;min-height:0;${contactedToday ? 'border-color:var(--green);color:var(--green);' : ''}">${contactedToday ? '✓ Followed Up' : 'Mark Done'}</button>
+                ${cleanPhone ? `<a href="tel:${cleanPhone}" class="secondary" style="display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border-radius:8px;font-size:11.5px;text-decoration:none;border:1px solid #2e3846;color:#cbd5e1;">📞 ${r.contact_no}</a>` : '<span class="small muted">No phone</span>'}
+                ${cleanPhone ? `<a href="sms:${cleanPhone}?body=${smsText}" class="secondary" style="display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border-radius:8px;font-size:11.5px;text-decoration:none;border:1px solid rgba(214,190,122,0.45);color:#d6be7a;">💬 SMS</a>` : ''}
+                <button type="button" class="secondary q-mark-followup-btn" data-key="${acctKey}" style="padding:5px 10px;font-size:11.5px;min-height:0;${contactedToday ? 'border-color:rgba(77,158,122,0.55);color:#8ecfb0;' : ''}">${contactedToday ? '✓ Followed Up' : 'Mark Done'}</button>
               </div>
             </div>
           </div>
