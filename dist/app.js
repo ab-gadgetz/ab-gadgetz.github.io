@@ -8447,7 +8447,7 @@ function renderQuotas() {
   const targetYmIdx = (ymY || 2026) * 12 + ((ymM || 1) - 1);
   const actuals = {};
   for (const b of branchDefs) {
-    actuals[b.id] = { relCount: 0, relPrincipal: 0, relFinanced: 0, rel46: 0, rel712: 0, collAmount: 0, collCount: 0, penaltiesAmount: 0, rebatesAmount: 0, repoCount: 0, repoAmount: 0, schedMonthlyDue: 0, sched46: 0, sched712: 0, activeBomCount: 0 };
+    actuals[b.id] = { relCount: 0, relPrincipal: 0, relFinanced: 0, rel46: 0, rel712: 0, collAmount: 0, collCount: 0, penaltiesAmount: 0, rebatesAmount: 0, detectedRebateCredit: 0, repoCount: 0, repoAmount: 0, repoMonthlyDed: 0, schedMonthlyDue: 0, sched46: 0, sched712: 0, activeBomCount: 0 };
   }
   for (const i of data.installments || []) {
     const a = actuals[i.branch_id];
@@ -8474,19 +8474,33 @@ function renderQuotas() {
       }
     }
   }
+  const pdByAcct = new Map((data.pastDues || []).map((pd) => [`${pd.branch_id}::${String(pd.account_no || '').trim()}`, pd]));
+  const REBATE_FACTOR = 0.025 / 0.975;
   for (const p of data.payments || []) {
     const dt = String(p.payment_date || '').slice(0, 7);
     if (dt !== ym || !actuals[p.branch_id]) continue;
-    actuals[p.branch_id].collCount++;
-    actuals[p.branch_id].collAmount += Number(p.amount) || 0;
-    actuals[p.branch_id].penaltiesAmount += Number(p.penalties) || 0;
-    actuals[p.branch_id].rebatesAmount += Number(p.rebates) || 0;
+    const a = actuals[p.branch_id];
+    const amt = Number(p.amount) || 0;
+    const pen = Number(p.penalties) || 0;
+    const expReb = Number(p.rebates) || 0;
+    a.collCount++;
+    a.collAmount += amt;
+    a.penaltiesAmount += pen;
+    a.rebatesAmount += expReb;
+    if (pen === 0) {
+      if (expReb > 0) a.detectedRebateCredit += expReb;
+      else if (amt >= 200 && Math.abs(amt % 5) >= 0.5) a.detectedRebateCredit += amt * REBATE_FACTOR;
+    }
   }
   for (const r of data.repos || []) {
     const dt = String(r.repo_date || '').slice(0, 7);
     if (dt !== ym || !actuals[r.branch_id]) continue;
-    actuals[r.branch_id].repoCount++;
-    actuals[r.branch_id].repoAmount += Number(r.amount) || 0;
+    const a = actuals[r.branch_id];
+    a.repoCount++;
+    a.repoAmount += Number(r.amount) || 0;
+    const matchedPd = pdByAcct.get(`${r.branch_id}::${String(r.account_no || '').trim()}`);
+    const moDue = Number(matchedPd?.amortization) || (Number(r.amount) > 0 ? Math.round(Number(r.amount) / 6) : 0);
+    a.repoMonthlyDed += moDue;
   }
 
   let totMinRel = 0, totMaxRel = 0, totActRel = 0, totRelPrincipal = 0;
@@ -8514,10 +8528,14 @@ function renderQuotas() {
     const estBom712 = isCurMonth && liveTot > 0 ? Math.max(0, Math.round(live712 + a.collAmount * (1 - share46) - a.rel712)) : 0;
     const estBomQ = realSchedQuota > 0 ? realSchedQuota : Number((estBom46 * 0.275 + estBom712 * 0.11).toFixed(2));
     const webAbBomQ = Number((estBom46 * 0.275 + estBom712 * 0.11).toFixed(2));
-    const effectiveBomQuota = savedBomQuota > 0 ? savedBomQuota : estBomQ;
+    const rawBomQuota = savedBomQuota > 0 ? savedBomQuota : estBomQ;
+    const repoDed = Math.round(a.repoMonthlyDed || 0);
+    const effectiveBomQuota = rawBomQuota > 0 ? Math.max(0, rawBomQuota - repoDed) : 0;
+    const rebateCredit = Math.round(a.detectedRebateCredit || 0);
+    const collForQuota = a.collAmount + rebateCredit;
     const isEstBom = savedBomQuota <= 0 && estBomQ > 0;
 
-    const hitQuota = effectiveBomQuota > 0 && a.collAmount >= effectiveBomQuota;
+    const hitQuota = effectiveBomQuota > 0 && collForQuota >= effectiveBomQuota;
     const hitMax = maxRel > 0 && a.relCount >= maxRel;
     const hitMin = minRel > 0 && a.relCount >= minRel;
     const commRate = (hitQuota && hitMax) ? 0.005 : (hitQuota && hitMin) ? 0.0035 : 0;
@@ -8532,7 +8550,7 @@ function renderQuotas() {
     totActColl += a.collAmount;
     totLiveQuota += Number(ws.liveQuota) || 0;
     totCommission += branchCommission;
-    return { b, t, a, ws, minRel, maxRel, ciCount, savedBomQuota, bom46, bom712, live46, live712, estBom46, estBom712, realSchedQuota, webAbBomQ, estBomQ, effectiveBomQuota, isEstBom, hitQuota, hitMax, hitMin, commRate, branchCommission, perCiCommission };
+    return { b, t, a, ws, minRel, maxRel, ciCount, savedBomQuota, bom46, bom712, live46, live712, estBom46, estBom712, realSchedQuota, webAbBomQ, estBomQ, rawBomQuota, repoDed, rebateCredit, collForQuota, effectiveBomQuota, isEstBom, hitQuota, hitMax, hitMin, commRate, branchCommission, perCiCommission };
   });
 
   const relPctMin = totMinRel > 0 ? Math.min(999, (totActRel / totMinRel) * 100) : 0;
@@ -8628,7 +8646,7 @@ function renderQuotas() {
     </div>
   `;
 
-  cardsEl.innerHTML = branchRows.map(({ b, a, ws, minRel, maxRel, ciCount, savedBomQuota, bom46, bom712, live46, live712, estBom46, estBom712, estBomQ, effectiveBomQuota, isEstBom, hitQuota, hitMax, hitMin, commRate, branchCommission, perCiCommission }) => {
+  cardsEl.innerHTML = branchRows.map(({ b, a, ws, minRel, maxRel, ciCount, savedBomQuota, bom46, bom712, live46, live712, estBom46, estBom712, estBomQ, rawBomQuota, repoDed, rebateCredit, collForQuota, effectiveBomQuota, isEstBom, hitQuota, hitMax, hitMin, commRate, branchCommission, perCiCommission }) => {
     const posterHtml = buildQuotaPosterHtml({
       branchName: b.name,
       ym,
@@ -8636,6 +8654,10 @@ function renderQuotas() {
       maxRel,
       ciCount,
       bomQuota: effectiveBomQuota,
+      rawBomQuota,
+      repoDed,
+      rebateCredit,
+      collForQuota,
       actRel: a.relCount,
       actColl: a.collAmount,
       actPenalties: a.penaltiesAmount,
@@ -8902,10 +8924,11 @@ function buildQuotaPosterHtml(ctx, { includeMtd = true } = {}) {
   const maxEach = maxTotal / ctx.ciCount;
   const minEach = minTotal / ctx.ciCount;
   const fmtWhole = (n) => `₱${Math.round(Number(n) || 0).toLocaleString('en-PH')}`;
-  const collPct = ctx.bomQuota > 0 ? Math.min(999, (ctx.actColl / ctx.bomQuota) * 100) : 0;
-  const collRem = ctx.bomQuota > 0 ? Math.max(0, ctx.bomQuota - ctx.actColl) : 0;
+  const collBase = ctx.collForQuota ?? ctx.actColl;
+  const collPct = ctx.bomQuota > 0 ? Math.min(999, (collBase / ctx.bomQuota) * 100) : 0;
+  const collRem = ctx.bomQuota > 0 ? Math.max(0, ctx.bomQuota - collBase) : 0;
 
-  const hitQuota = ctx.bomQuota > 0 && ctx.actColl >= ctx.bomQuota;
+  const hitQuota = ctx.bomQuota > 0 && collBase >= ctx.bomQuota;
   const hitMax = ctx.maxRel > 0 && ctx.actRel >= ctx.maxRel;
   const hitMin = ctx.minRel > 0 && ctx.actRel >= ctx.minRel;
   const achievedMax = hitQuota && hitMax;
@@ -9001,8 +9024,8 @@ function buildQuotaPosterHtml(ctx, { includeMtd = true } = {}) {
 
     ${includeMtd ? `
       <div style="background:#151b23;border:1px solid #262f3b;border-radius:8px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;font-size:11px;color:#cbd5e1;margin-top:9px;">
-        <span><strong>MTD Collected:</strong> ${fmtCurrency(ctx.actColl)} (${collPct.toFixed(1)}%)${ctx.actPenalties ? ` <span style="color:#94a3b8;">(+${fmtCurrency(ctx.actPenalties)} pen. excl.)</span>` : ''}</span>
-        <span><strong>MTD Releases:</strong> ${fmtNum(ctx.actRel)} orders${ctx.repoCount ? ` • <strong>Repos:</strong> ${ctx.repoCount} (${fmtCurrency(ctx.repoAmount)})` : ''}</span>
+        <span><strong>MTD Cash:</strong> ${fmtCurrency(ctx.actColl)} (${collPct.toFixed(1)}%)${ctx.rebateCredit ? ` <span style="color:#8ecfb0;">+${fmtCurrency(ctx.rebateCredit)} reb.</span>` : ''}${ctx.actPenalties ? ` <span style="color:#94a3b8;">(+${fmtCurrency(ctx.actPenalties)} pen. excl.)</span>` : ''}</span>
+        <span><strong>MTD Releases:</strong> ${fmtNum(ctx.actRel)} orders${ctx.repoCount ? ` • <strong>Repos:</strong> ${ctx.repoCount} (−${fmtCurrency(ctx.repoDed || 0)} target adj.)` : ''}</span>
       </div>
     ` : ''}
   `;
