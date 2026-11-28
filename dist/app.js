@@ -8830,7 +8830,7 @@ function renderQuotas() {
             const k = getAgingTier(d).key;
             if (bucketStats[k]) {
               bucketStats[k].c++;
-              bucketStats[k].sum += bal;
+              bucketStats[k].sum += enrichPastDueRow(pd).amountDue;
             }
           }
           const [mY, mM] = ym.split('-').map(Number);
@@ -9354,6 +9354,18 @@ const FOLLOWUP_ACTION_GUIDE = {
   },
 };
 
+function fmtDelay(days) {
+  const d = Math.max(0, Math.round(Number(days) || 0));
+  const y = Math.floor(d / 365);
+  const m = Math.floor((d % 365) / 30);
+  const dd = (d % 365) % 30;
+  const parts = [];
+  if (y) parts.push(y + 'y');
+  if (y || m) parts.push(m + 'm');
+  parts.push(dd + 'd');
+  return parts.join(' ');
+}
+
 function enrichPastDueRow(pd) {
   const effDays = getEffectiveDaysDue(pd);
   const tier = getAgingTier(effDays);
@@ -9473,7 +9485,7 @@ function renderQuotaFollowUpList() {
         const contactedToday = fuEnt?.date === todayStr;
         const promiseDue = fuEnt?.promiseDate && fuEnt.promiseDate <= todayStr;
         const smsText = encodeURIComponent(
-          `Maayong adlaw ${r.customer_name || ''}! Gentle reminder from AB Gadgetz (${branchNames[r.branch_id] || ''}) for Acct ${r.account_no || ''}: Amount Due ${fmtCurrency(r.amountDue)} (${r.monthsDue} mo / ${r.effDays}d delayed; Total Bal ${fmtCurrency(r.bal)}). Thank you!`
+          `Maayong adlaw ${r.customer_name || ''}! Gentle reminder from AB Gadgetz (${branchNames[r.branch_id] || ''}) for Acct ${r.account_no || ''}: Amount Due ${fmtCurrency(r.amountDue)} (${r.monthsDue} mo / ${fmtDelay(r.effDays)} delayed; Total Bal ${fmtCurrency(r.bal)}). Thank you!`
         );
         const dayColor = r.effDays <= 30 ? '#dfd09b' : r.effDays <= 60 ? '#d8b47c' : '#e29a9a';
         const safeNoteAttr = String(fuEnt?.note || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
@@ -9489,7 +9501,7 @@ function renderQuotaFollowUpList() {
               <div style="text-align:right;flex-shrink:0;">
                 <div style="font-size:10px;color:#94a3b8;text-transform:uppercase;">Amount Due</div>
                 <strong style="font-size:15px;color:#dfd09b;">${fmtCurrency(r.amountDue)}</strong>
-                <div style="font-size:10.5px;font-weight:700;color:${dayColor};">${r.monthsDue} mo${r.monthsDue !== 1 ? 's' : ''} • ${r.effDays}d delayed</div>
+                <div style="font-size:10.5px;font-weight:700;color:${dayColor};">${r.monthsDue} mo${r.monthsDue !== 1 ? 's' : ''} • ${fmtDelay(r.effDays)} delayed</div>
                 <div style="font-size:10px;color:#94a3b8;">Total Bal: ${fmtCurrency(r.bal)}</div>
               </div>
             </div>
@@ -9624,7 +9636,7 @@ function exportFollowUpPdf(branchId) {
         r.account_no || '',
         r.contact_no || '',
         r.barangay || '',
-        `${r.monthsDue}m / ${r.effDays}d`,
+        `${r.monthsDue}m / ${fmtDelay(r.effDays)}`,
         fmtCurrency(r.amountDue),
         fmtCurrency(r.bal),
       ]),
