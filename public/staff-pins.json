@@ -1,15 +1,16 @@
 {
-  "updatedAt": "2026-11-24T05:42:31.236Z",
+  "updatedAt": "2026-11-28T14:23:33.873Z",
   "hashes": {
     "CASHIER::br-molave": "pQ8bMblOK6QmBriaCqfo0Q+3efgIT4zWTNNhkoxnJ5Y=",
     "CASHIER::br-tambulig": "Y7qp3vwphC0TZMUsQCgEr/ZdOL2cZAuCckm84tfKjEw=",
     "CASHIER::br-bonifacio": "tIESThMFXihq5Qt/gFQMF4cl+M6lyN0IByogICPfM6g=",
     "CI::br-molave": "tKJLODLBJdDFNz+i1zDlrMrHlFurJBkxV8geCfmv/cQ=",
     "CI::br-tambulig": "Cw14Iwhe5CO/T1bdaqT6KFGrnNeMhR7F6Elz8wyLlxc=",
-    "CI::br-bonifacio": "CdjijSEe9NUAaaD1A6ZOLsKGyXvbZh7VQLlsY6L+BJI="
+    "CI::br-bonifacio": "CdjijSEe9NUAaaD1A6ZOLsKGyXvbZh7VQLlsY6L+BJI=",
+    "AUDITOR::ALL": "0b9P6v6YrpDzgKMko4186U8L6lr2Wdx7zt89BfIlkNA="
   },
   "encryptedPins": {
-    "iv": "GrN4cCtIdYN+X9tR",
-    "data": "ukelIEtDo8/pvcGkfagGQ24rtC3rP3dX4a/rDdZ+2Zeq/5OA0X+L6OlgHkjoQyJgjfAyBwVjJXA65md5N14ll3z35swayPsWx44jHHsr6+yuoaX0b640YO5XVX/G7APwPXeJLd8F/aSyEJWr9QPMT8U5YJOGiEDhkGYVgrvxUNCB0K5StV84dYNbErIMdsQEbwj/DDzMiO9k3WGvs+aV6KpFxSArC3/G+Y/qyVnL2WdY0BHyh0fYLGjYfNgcXzg7"
+    "iv": "fzbnnFt1ET3ycOJ7",
+    "data": "ca6zBemwfcd0il4X8cMnE1tpa9wNG7q5eCjKJlt/J1kCOo3mE8VwFNk/pRuEucLfA1x67DBVVqLVYtIvVqvTEWsegDtoNYc2C1Jxq4/xkWOpEaPs8fGyXCxKfg8MMULZIn7SqIXSzC0J4iPUFDwgRmdNpIUHx9e7OfnEpwNxTGWM/TmtgbdyYzBspBtra+0JYPyZWFKsVzkYkJnG1oEBOFBlYdj7ciyfsLVZpgWVgRhv2KRbbnBQQ0LO+3AWjUgeNzOi2PoZmO/n0FWD2H9MtivDybPCZacT"
   }
 }
