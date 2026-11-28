@@ -8441,23 +8441,37 @@ function renderQuotas() {
   const monthTargets = (data.quotas?.months && data.quotas.months[ym]) || {};
   const webSummaries = data.webSummaries || {};
 
-  // Compute monthly actuals per branch from installments & payments
+  // Compute monthly actuals & real 1st-of-month scheduled collectibles per branch
+  const [ymY, ymM] = ym.split('-').map(Number);
+  const targetYmIdx = (ymY || 2026) * 12 + ((ymM || 1) - 1);
   const actuals = {};
   for (const b of branchDefs) {
-    actuals[b.id] = { relCount: 0, relPrincipal: 0, relFinanced: 0, rel46: 0, rel712: 0, collAmount: 0, collCount: 0 };
+    actuals[b.id] = { relCount: 0, relPrincipal: 0, relFinanced: 0, rel46: 0, rel712: 0, collAmount: 0, collCount: 0, schedMonthlyDue: 0, sched46: 0, sched712: 0, activeBomCount: 0 };
   }
   for (const i of data.installments || []) {
-    const dt = String(i.sale_date || '').slice(0, 7);
-    if (dt !== ym || !actuals[i.branch_id]) continue;
     const a = actuals[i.branch_id];
-    const prin = Number(i.principal_amount) || 0;
-    const fin = Number(i.amount) || 0; // amount in portal_installments is already the financed contract balance (monthly * term) after downpayment
+    if (!a) continue;
+    const sd = String(i.sale_date || '');
+    const dt = sd.slice(0, 7);
     const term = Number(i.term) || 0;
-    a.relCount++;
-    a.relPrincipal += prin;
-    a.relFinanced += fin;
-    if (term >= 4 && term <= 6) a.rel46 += fin;
-    else if (term >= 7 && term <= 12) a.rel712 += fin;
+    if (dt === ym) {
+      const prin = Number(i.principal_amount) || 0;
+      const fin = Number(i.amount) || 0; // amount in portal_installments is already the financed contract balance (monthly * term) after downpayment
+      a.relCount++;
+      a.relPrincipal += prin;
+      a.relFinanced += fin;
+      if (term >= 4 && term <= 6) a.rel46 += fin;
+      else if (term >= 7 && term <= 12) a.rel712 += fin;
+    } else if (dt && dt < ym && term > 0) {
+      const [iy, im] = dt.split('-').map(Number);
+      if (iy && im && iy * 12 + (im - 1) + term >= targetYmIdx) {
+        const mon = Number(i.monthly) || 0;
+        a.activeBomCount++;
+        a.schedMonthlyDue += mon;
+        if (term >= 4 && term <= 6) a.sched46 += mon;
+        else if (term >= 7 && term <= 12) a.sched712 += mon;
+      }
+    }
   }
   for (const p of data.payments || []) {
     const dt = String(p.payment_date || '').slice(0, 7);
@@ -8481,14 +8495,15 @@ function renderQuotas() {
     const bom46 = Number(t.bomBal4to6) || 0;
     const bom712 = Number(t.bomBal7to12) || 0;
 
-    // Estimate 1st-of-month (before day-1 transactions) by reversing all month collections & releases from today's live Web AB balances
+    // Real 1st-of-month scheduled monthly collectible from active contracts before this month
+    const realSchedQuota = Number(a.schedMonthlyDue.toFixed(2));
     const live46 = Number(ws.bal4to6) || 0;
     const live712 = Number(ws.bal7to12) || 0;
     const liveTot = live46 + live712;
     const share46 = liveTot > 0 ? live46 / liveTot : 0.5;
     const estBom46 = isCurMonth && liveTot > 0 ? Math.max(0, Math.round(live46 + a.collAmount * share46 - a.rel46)) : 0;
     const estBom712 = isCurMonth && liveTot > 0 ? Math.max(0, Math.round(live712 + a.collAmount * (1 - share46) - a.rel712)) : 0;
-    const estBomQ = Number((estBom46 * 0.275 + estBom712 * 0.11).toFixed(2));
+    const estBomQ = realSchedQuota > 0 ? realSchedQuota : Number((estBom46 * 0.275 + estBom712 * 0.11).toFixed(2));
     const effectiveBomQuota = savedBomQuota > 0 ? savedBomQuota : estBomQ;
     const isEstBom = savedBomQuota <= 0 && estBomQ > 0;
 
