@@ -475,7 +475,7 @@ async function staticGhApi(url, opts = {}) {
   }
   if (pathname === '/api/followups/mark' && method === 'POST') {
     const body = JSON.parse(opts.body || '{}');
-    const acctKey = String(body.acctKey || '').trim();
+    const acctKey = String(body.acctKey || body.key || '').trim();
     const cur = getLocalBranchFollowups();
     if (body.clear) delete cur.followups[acctKey];
     else cur.followups[acctKey] = { date: body.date || todayStr, promiseDate: String(body.promiseDate || '').slice(0, 10), note: String(body.note || '').slice(0, 160), byRole: state.userRole || 'ADMIN', updatedAt: new Date().toISOString() };
@@ -486,10 +486,10 @@ async function staticGhApi(url, opts = {}) {
   }
   if (pathname === '/api/quotas/repo-verify' && method === 'POST') {
     const body = JSON.parse(opts.body || '{}');
-    const repoKey = String(body.repoKey || '').trim();
+    const repoKey = String(body.repoKey || body.key || '').trim();
     const cur = getLocalBranchFollowups();
     if (body.verified === false) delete cur.repoVerified[repoKey];
-    else cur.repoVerified[repoKey] = { verifiedAt: new Date().toISOString(), byRole: state.userRole || 'ADMIN' };
+    else cur.repoVerified[repoKey] = { verified: true, verifiedAt: new Date().toISOString(), byRole: state.userRole || 'ADMIN' };
     saveLocalBranchFollowups(cur);
     const token = localStorage.getItem('bs_gh_pub_token');
     if (token) pushBranchFollowupsToGh(cur, token).catch(() => {});
@@ -497,10 +497,10 @@ async function staticGhApi(url, opts = {}) {
   }
   if (pathname === '/api/audits/payment' && method === 'POST') {
     const body = JSON.parse(opts.body || '{}');
-    const payKey = String(body.payKey || '').trim();
+    const payKey = String(body.payKey || body.key || '').trim();
     const cur = getLocalBranchFollowups();
-    if (body.clear) delete cur.paymentAudits[payKey];
-    else cur.paymentAudits[payKey] = { verifiedAt: new Date().toISOString(), byRole: state.userRole || 'ADMIN' };
+    if (body.clear || body.verified === false) delete cur.paymentAudits[payKey];
+    else cur.paymentAudits[payKey] = { verified: true, verifiedAt: new Date().toISOString(), byRole: state.userRole || 'ADMIN' };
     saveLocalBranchFollowups(cur);
     const token = localStorage.getItem('bs_gh_pub_token');
     if (token) pushBranchFollowupsToGh(cur, token).catch(() => {});
