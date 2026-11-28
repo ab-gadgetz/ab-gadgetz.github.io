@@ -8650,13 +8650,21 @@ function renderQuotas() {
 
         ${(() => {
           const brPastDues = (data.pastDues || []).filter((pd) => pd.branch_id === b.id && Number(pd.balance) > 0);
-          const bucketStats = { '1-30': { c: 0, sum: 0 }, '31-60': { c: 0, sum: 0 }, '61-90': { c: 0, sum: 0 }, '91+': { c: 0, sum: 0 } };
+          const bucketStats = {
+            '1-30': { c: 0, sum: 0, label: '1–30d' },
+            '31-60': { c: 0, sum: 0, label: '31–60d' },
+            '61-90': { c: 0, sum: 0, label: '61–90d' },
+            '91-180': { c: 0, sum: 0, label: '91–180d' },
+            '180+': { c: 0, sum: 0, label: '180+d' },
+          };
           for (const pd of brPastDues) {
             const d = getEffectiveDaysDue(pd);
             const bal = Number(pd.balance) || 0;
-            const k = d <= 30 ? '1-30' : d <= 60 ? '31-60' : d <= 90 ? '61-90' : '91+';
-            bucketStats[k].c++;
-            bucketStats[k].sum += bal;
+            const k = getAgingTier(d).key;
+            if (bucketStats[k]) {
+              bucketStats[k].c++;
+              bucketStats[k].sum += bal;
+            }
           }
           const [mY, mM] = ym.split('-').map(Number);
           const lastDayOfMo = new Date(Date.UTC(mY || Number(todayStr.slice(0, 4)), mM || Number(todayStr.slice(5, 7)), 0)).getUTCDate();
@@ -8667,27 +8675,43 @@ function renderQuotas() {
           const needMin = minRel > 0 ? Math.max(0, minRel - a.relCount) : 0;
           const needMax = maxRel > 0 ? Math.max(0, maxRel - a.relCount) : 0;
           const releaseTodo = needMin > 0
-            ? `<strong>Releases:</strong> Close <strong>${needMin} more order${needMin > 1 ? 's' : ''}</strong> for Min (0.35%)${needMax > 0 ? ` or <strong>${needMax}</strong> for Max (0.50%)` : ''} — target <strong>${Math.ceil((needMax || needMin) / daysLeft)} order(s)/day</strong> via fast-tracking pending CI applications &amp; walk-ins.`
+            ? `Close <strong>${needMin} more order${needMin > 1 ? 's' : ''}</strong> for Min (0.35%)${needMax > 0 ? ` or <strong>${needMax}</strong> for Max (0.50%)` : ''} (${Math.ceil((needMax || needMin) / daysLeft)}/day).`
             : needMax > 0
-              ? `<strong>Releases:</strong> ✓ Min met! Push <strong>${needMax} more order${needMax > 1 ? 's' : ''}</strong> in ${daysLeft} day(s) (${Math.ceil(needMax / daysLeft)}/day) to upgrade from <strong>0.35% → 0.50%</strong>.`
-              : (maxRel > 0 ? '<strong>Releases:</strong> ✓ Max target met (0.50% tier unlocked)!' : '<strong>Releases:</strong> Set Min/Max release target to track orders.');
+              ? `✓ Min met! Close <strong>${needMax} more</strong> in ${daysLeft}d (${Math.ceil(needMax / daysLeft)}/day) for <strong>0.50%</strong>.`
+              : (maxRel > 0 ? '✓ Max release met (0.50% tier)!' : 'Set Min/Max release target.');
           const collTodo = needColl > 0
-            ? `<strong>Collections:</strong> Collect <strong>${fmtCurrency(needColl)}</strong> more (${daysLeft}d left → <strong>${fmtCurrency(dailyColl)}/day</strong> pace).`
-            : (effectiveBomQuota > 0 ? '<strong>Collections:</strong> ✓ Collection Quota met!' : '<strong>Collections:</strong> Set Collection Quota to track collections.');
+            ? `Collect <strong>${fmtCurrency(needColl)}</strong> more (${daysLeft}d left → <strong>${fmtCurrency(dailyColl)}/day</strong>).`
+            : (effectiveBomQuota > 0 ? '✓ Collection Quota met!' : 'Set Collection Quota.');
+
+          const ageButtons = Object.entries(bucketStats)
+            .filter(([, st]) => st.c > 0)
+            .map(([k, st]) => `
+              <button type="button" class="secondary q-aging-open-btn" data-branch="${b.id}" data-tier="${k}" style="text-align:left;padding:6px 8px;border-radius:8px;background:#151b23;border:1px solid #28313e;min-height:0;cursor:pointer;">
+                <div style="font-size:10.5px;font-weight:700;color:#dfd09b;">${st.label} (${st.c})</div>
+                <div style="font-size:11.5px;font-weight:700;color:#e2e8f0;">${fmtCurrency(st.sum)}</div>
+              </button>
+            `).join('');
+
           return `
             <div style="margin-top:10px;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,0.03);border:1px solid var(--border-soft);">
-              <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
-                <strong style="font-size:12px;color:var(--gold-bright);">📋 Specific CI Action Plan (${daysLeft}d left)</strong>
-                ${brPastDues.length ? `<button type="button" class="secondary q-followup-btn" data-branch="${b.id}" style="padding:5px 10px;font-size:11.5px;border-color:var(--gold);color:var(--gold-bright);min-height:0;">📲 Follow-Up Accounts (${brPastDues.length})</button>` : ''}
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+                <strong style="font-size:12px;color:#dfd09b;">📋 CI Action Plan (${daysLeft}d left)</strong>
+                ${brPastDues.length ? `
+                  <div style="display:flex;gap:5px;align-items:center;">
+                    <button type="button" class="secondary q-followup-pdf-btn" data-branch="${b.id}" style="padding:4px 8px;font-size:11px;min-height:0;" title="Download PDF of all aged groups and actions">📄 PDF</button>
+                    <button type="button" class="secondary q-followup-btn" data-branch="${b.id}" style="padding:4px 9px;font-size:11px;border-color:rgba(214,190,122,0.45);color:#dfd09b;min-height:0;">📲 All (${brPastDues.length})</button>
+                  </div>` : ''}
               </div>
-              <ul style="margin:0;padding-left:18px;font-size:12px;line-height:1.55;color:var(--text);">
-                <li>${releaseTodo}</li>
-                <li>${collTodo}</li>
-                ${bucketStats['1-30'].c ? `<li><strong>Step 1 — Call/SMS (1–30d):</strong> <strong>${bucketStats['1-30'].c}</strong> accts (<strong>${fmtCurrency(bucketStats['1-30'].sum)}</strong>) — fastest cash collection; remind 2.5% rebate for on-time.</li>` : ''}
-                ${bucketStats['31-60'].c ? `<li><strong>Step 2 — Field Visits (31–60d):</strong> <strong>${bucketStats['31-60'].c}</strong> accts (<strong>${fmtCurrency(bucketStats['31-60'].sum)}</strong>) — schedule barangay CI visits &amp; payment commitment.</li>` : ''}
-                ${bucketStats['61-90'].c ? `<li class="muted"><strong>Step 3 — Final Demand (61–90d):</strong> <strong>${bucketStats['61-90'].c}</strong> accts (<strong>${fmtCurrency(bucketStats['61-90'].sum)}</strong>) — issue final demand notice.</li>` : ''}
-                ${bucketStats['91+'].c ? `<li class="muted"><strong>Step 4 — Repo/Pull-Out (91+d):</strong> <strong>${bucketStats['91+'].c}</strong> accts (<strong>${fmtCurrency(bucketStats['91+'].sum)}</strong>) — priority unit pull-out / legal recovery.</li>` : ''}
-              </ul>
+              <div style="font-size:11.5px;line-height:1.5;color:#cbd5e1;margin-bottom:${ageButtons ? '8px' : '0'};">
+                <div>• ${releaseTodo}</div>
+                <div>• ${collTodo}</div>
+              </div>
+              ${ageButtons ? `
+                <div style="font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">Tap Aged Accounts To Follow Up:</div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(108px,1fr));gap:6px;">
+                  ${ageButtons}
+                </div>
+              ` : ''}
             </div>
           `;
         })()}
@@ -8782,7 +8806,19 @@ function renderQuotas() {
 
   cardsEl.querySelectorAll('.q-followup-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
-      openQuotaFollowUpModal(btn.dataset.branch);
+      openQuotaFollowUpModal(btn.dataset.branch, 'PRIORITY');
+    });
+  });
+
+  cardsEl.querySelectorAll('.q-aging-open-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      openQuotaFollowUpModal(btn.dataset.branch, btn.dataset.tier || '1-30');
+    });
+  });
+
+  cardsEl.querySelectorAll('.q-followup-pdf-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      exportFollowUpPdf(btn.dataset.branch);
     });
   });
 
@@ -9023,9 +9059,41 @@ function toggleFollowUpMark(acctKey) {
   try { localStorage.setItem('ab_ci_followup_v1', JSON.stringify(log)); } catch {}
 }
 
+const FOLLOWUP_ACTION_GUIDE = {
+  PRIORITY: {
+    title: 'Quickest To Collect (1–60 Days Past Due)',
+    action: 'Prioritize 1–30d calls/SMS first, then schedule 31–60d barangay field visits to secure immediate cash payments.',
+  },
+  '1-30': {
+    title: '1–30 Days Past Due — SMS / Call Reminder',
+    action: 'Call & SMS today. Remind customer of balance due + est. penalty, and offer 2.5% rebate on current/on-time dues. Lock in exact payment date.',
+  },
+  '31-60': {
+    title: '31–60 Days Past Due — CI Field Visit & Follow-Up',
+    action: 'Conduct barangay CI field visit, verify unit possession & borrower status, and collect partial/full payment with signed commitment.',
+  },
+  '61-90': {
+    title: '61–90 Days Past Due — Final Demand Notice',
+    action: 'Serve formal Final Demand Notice in person, warn of unit pull-out/repo, and set strict 7-day settlement deadline.',
+  },
+  '91-180': {
+    title: '91–180 Days Past Due — Priority Repo / Unit Pull-Out',
+    action: 'Execute priority unit pull-out / repossession or restructure full settlement with co-maker/guarantor.',
+  },
+  '180+': {
+    title: '180+ Days Past Due — Write-Off / Legal Recovery',
+    action: 'Escalate for legal demand / small claims recovery or coordinate voluntary unit surrender to recover residual value.',
+  },
+  ALL: {
+    title: 'All Past-Due Accounts',
+    action: 'Work from newest (1–30d) to oldest (180+d): Call/SMS → Field Visit → Final Demand → Priority Repo.',
+  },
+};
+
 function renderQuotaFollowUpList() {
   const listEl = document.getElementById('quotaFollowUpList');
   const subEl = document.getElementById('quotaFollowUpSub');
+  const headerEl = document.getElementById('quotaFollowUpActionHeader');
   if (!listEl || !state.quotasData) return;
   const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
   const q = (document.getElementById('quotaFollowUpSearch')?.value || '').trim().toLowerCase();
@@ -9040,7 +9108,6 @@ function renderQuotaFollowUpList() {
     const tierKey = tier.key;
     agingCounts[tierKey] = (agingCounts[tierKey] || 0) + 1;
     const bal = Number(pd.balance) || 0;
-    // Estimate late penalty (~3% per 30d overdue, capped reasonably) & 2.5% prompt-payment rebate reference
     const estPenalty = days > 0 ? Math.round(bal * Math.min(0.15, Math.max(0.02, (days / 30) * 0.03))) : 0;
     const onTimeRebate = Math.round(bal * 0.025);
     return { ...pd, effDays: days, tierKey, tierAction: tier.action, bal, estPenalty, onTimeRebate };
@@ -9060,7 +9127,7 @@ function renderQuotaFollowUpList() {
     pillsEl.innerHTML = pillDefs
       .map(([val, label]) => {
         const active = tierFilter === val;
-        return `<button type="button" class="secondary q-aging-pill" data-tier="${val}" style="padding:5px 10px;font-size:11.5px;min-height:0;border-radius:999px;cursor:pointer;${active ? 'border-color:var(--gold-bright);background:rgba(231,197,95,0.22);color:var(--gold-bright);font-weight:700;' : ''}">${label}</button>`;
+        return `<button type="button" class="secondary q-aging-pill" data-tier="${val}" style="padding:4px 9px;font-size:11px;min-height:0;border-radius:999px;cursor:pointer;${active ? 'border-color:rgba(214,190,122,0.65);background:rgba(214,190,122,0.18);color:#dfd09b;font-weight:700;' : ''}">${label}</button>`;
       })
       .join('');
     pillsEl.querySelectorAll('.q-aging-pill').forEach((btn) => {
@@ -9097,6 +9164,16 @@ function renderQuotaFollowUpList() {
   const totalBal = rows.reduce((s, r) => s + r.bal, 0);
   if (subEl) {
     subEl.textContent = `${branchNames[activeFollowUpBranchId] || ''} • ${rows.length} accounts • Total Due: ${fmtCurrency(totalBal)}`;
+  }
+  if (headerEl) {
+    const g = FOLLOWUP_ACTION_GUIDE[tierFilter] || FOLLOWUP_ACTION_GUIDE.ALL;
+    headerEl.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px;">
+        <strong style="font-size:12.5px;color:#dfd09b;">${g.title}</strong>
+        <span style="font-size:11px;font-weight:700;color:#8ecfb0;">${rows.length} accts • ${fmtCurrency(totalBal)}</span>
+      </div>
+      <div style="font-size:11.5px;color:#cbd5e1;line-height:1.45;"><strong>CI Action Required:</strong> ${g.action}</div>
+    `;
   }
 
   const displayRows = rows.slice(0, 120);
@@ -9146,14 +9223,82 @@ function renderQuotaFollowUpList() {
   });
 }
 
-function openQuotaFollowUpModal(branchId) {
+function openQuotaFollowUpModal(branchId, initialTier = '1-30') {
   activeFollowUpBranchId = branchId;
+  activeFollowUpTier = initialTier || '1-30';
   const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
   const titleEl = document.getElementById('quotaFollowUpTitle');
   if (titleEl) titleEl.textContent = `${branchNames[branchId] || ''} — Follow-Up Receivables`;
   renderQuotaFollowUpList();
   document.getElementById('quotaFollowUpModal')?.classList.remove('hidden');
 }
+
+function exportFollowUpPdf(branchId) {
+  const jspdfNs = window.jspdf || window.jspdf?.default;
+  if (!jspdfNs?.jsPDF || !state.quotasData) return;
+  const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
+  const brName = branchNames[branchId] || 'Branch';
+  const rawRows = (state.quotasData.pastDues || [])
+    .filter((pd) => pd.branch_id === branchId && Number(pd.balance) > 0)
+    .map((pd) => {
+      const effDays = getEffectiveDaysDue(pd);
+      const tier = getAgingTier(effDays);
+      const bal = Number(pd.balance) || 0;
+      const estPenalty = effDays > 0 ? Math.round(bal * Math.min(0.15, Math.max(0.02, (effDays / 30) * 0.03))) : 0;
+      return { ...pd, effDays, tierKey: tier.key, bal, estPenalty };
+    });
+
+  const doc = new jspdfNs.jsPDF({ orientation: 'portrait', unit: 'in', format: [8.5, 13], compress: true });
+  doc.setFontSize(14);
+  doc.text(`AB Gadgetz — ${brName} Branch CI Follow-Up & Action Plan`, 0.4, 0.5);
+  doc.setFontSize(9.5);
+  doc.setTextColor(90);
+  doc.text(`As of ${todayStr} • Total Past-Due Accounts: ${rawRows.length} • Total Balance: ${fmtCurrency(rawRows.reduce((s, r) => s + r.bal, 0))}`, 0.4, 0.7);
+  doc.setTextColor(0);
+
+  let yPos = 0.95;
+  const tierOrder = ['1-30', '31-60', '61-90', '91-180', '180+'];
+  for (const tKey of tierOrder) {
+    const grp = rawRows.filter((r) => r.tierKey === tKey).sort((a, b) => b.bal - a.bal);
+    if (!grp.length) continue;
+    const guide = FOLLOWUP_ACTION_GUIDE[tKey] || { title: tKey, action: '' };
+    const grpSum = grp.reduce((s, r) => s + r.bal, 0);
+    if (yPos > 11.2) { doc.addPage([8.5, 13], 'portrait'); yPos = 0.5; }
+    doc.setFontSize(11);
+    doc.setFont(undefined, 'bold');
+    doc.text(`${guide.title} (${grp.length} accts • ${fmtCurrency(grpSum)})`, 0.4, yPos);
+    yPos += 0.16;
+    doc.setFontSize(8.5);
+    doc.setFont(undefined, 'normal');
+    const actionLines = doc.splitTextToSize(`Action: ${guide.action}`, 7.7);
+    doc.text(actionLines, 0.4, yPos);
+    yPos += actionLines.length * 0.14 + 0.06;
+
+    doc.autoTable({
+      startY: yPos,
+      margin: { left: 0.4, right: 0.4 },
+      styles: { fontSize: 7.8, cellPadding: 0.04, overflow: 'linebreak' },
+      headStyles: { fillColor: [30, 41, 59], textColor: 255, fontStyle: 'bold' },
+      head: [['Customer', 'Acct #', 'Contact', 'Barangay', 'Days', 'Balance Due', 'Est. Pen.']],
+      body: grp.map((r) => [
+        r.customer_name || '',
+        r.account_no || '',
+        r.contact_no || '',
+        r.barangay || '',
+        `${r.effDays}d`,
+        fmtCurrency(r.bal),
+        fmtCurrency(r.estPenalty),
+      ]),
+    });
+    yPos = (doc.lastAutoTable?.finalY || yPos) + 0.25;
+  }
+
+  doc.save(`AB-Gadgetz-${brName}-CI-FollowUp-${todayStr}.pdf`);
+}
+
+document.getElementById('quotaFollowUpPdfBtn')?.addEventListener('click', () => {
+  if (activeFollowUpBranchId) exportFollowUpPdf(activeFollowUpBranchId);
+});
 
 document.getElementById('closeQuotaFollowUpBtn')?.addEventListener('click', () => {
   document.getElementById('quotaFollowUpModal')?.classList.add('hidden');

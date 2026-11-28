@@ -11,7 +11,7 @@
   <link rel="icon" href="../ab-logo-square.png" type="image/png" />
   <link rel="apple-touch-icon" href="../ab-logo-square.png" />
   <title>Staff Portal — AB Gadgetz</title>
-  <link rel="stylesheet" href="../styles.css?v=1795870765066" />
+  <link rel="stylesheet" href="../styles.css?v=1795870951242" />
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
@@ -1825,19 +1825,23 @@
 
   <!-- CI / ADMIN FOLLOW-UP COLLECTIONS MODAL (MOBILE FRIENDLY) -->
   <div id="quotaFollowUpModal" class="calc-modal hidden" role="dialog" aria-modal="true">
-    <div class="calc-modal-sheet" style="max-width:640px;">
-      <div class="calc-modal-head">
+    <div class="calc-modal-sheet" style="max-width:640px;padding:12px;">
+      <div class="calc-modal-head" style="margin-bottom:8px;">
         <div style="min-width:0;">
-          <h3 id="quotaFollowUpTitle" style="margin:0;color:var(--gold-bright);">Priority Follow-Up Accounts</h3>
+          <h3 id="quotaFollowUpTitle" style="margin:0;color:#dfd09b;font-size:15px;">Follow-Up Receivables</h3>
           <div id="quotaFollowUpSub" class="small muted"></div>
         </div>
-        <button type="button" id="closeQuotaFollowUpBtn" class="secondary" style="padding:6px 12px;">✕</button>
+        <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
+          <button type="button" id="quotaFollowUpPdfBtn" class="secondary" style="padding:5px 9px;font-size:11px;border-color:rgba(214,190,122,0.45);color:#dfd09b;" title="Download PDF of all aged groups and actions">📄 PDF</button>
+          <button type="button" id="closeQuotaFollowUpBtn" class="secondary" style="padding:5px 10px;">✕</button>
+        </div>
       </div>
       <div style="margin-bottom:8px;">
-        <input type="text" id="quotaFollowUpSearch" placeholder="Search customer name, barangay, account #..." style="width:100%;padding:7px 10px;font-size:12.5px;" />
+        <input type="text" id="quotaFollowUpSearch" placeholder="Search customer name, barangay, account #..." style="width:100%;padding:6px 9px;font-size:12px;" />
       </div>
-      <div id="quotaFollowUpAgingPills" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;"></div>
-      <div id="quotaFollowUpList" style="display:grid;gap:8px;max-height:64vh;overflow-y:auto;"></div>
+      <div id="quotaFollowUpAgingPills" style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px;"></div>
+      <div id="quotaFollowUpActionHeader" style="margin-bottom:8px;padding:9px 11px;border-radius:8px;background:#151b23;border:1px solid #28313e;border-left:3px solid #b89446;"></div>
+      <div id="quotaFollowUpList" style="display:grid;gap:7px;max-height:58vh;overflow-y:auto;"></div>
     </div>
   </div>
 
@@ -1942,6 +1946,6 @@
     </div>
   </div>
 
-  <script src="../app.js?v=1795870765066"></script>
+  <script src="../app.js?v=1795870951242"></script>
 </body>
 </html>
