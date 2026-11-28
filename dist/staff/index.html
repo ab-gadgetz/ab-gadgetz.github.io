@@ -11,7 +11,7 @@
   <link rel="icon" href="../ab-logo-square.png" type="image/png" />
   <link rel="apple-touch-icon" href="../ab-logo-square.png" />
   <title>Staff Portal — AB Gadgetz</title>
-  <link rel="stylesheet" href="../styles.css?v=1795874281454" />
+  <link rel="stylesheet" href="../styles.css?v=1795874639673" />
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
@@ -1182,12 +1182,12 @@
 
         <div id="quotaFormulaBanner" class="sub-panel hidden" style="padding:10px 12px;margin-bottom:12px;font-size:12px;border-left:3px solid var(--gold);line-height:1.55;">
           <strong>Final Target Quota Formula:</strong>
-          <code>Initial Quota (1st Day of Month) − Repo Total Balance</code><br />
-          <span class="muted">• <strong>Collections to Hit Target:</strong> <code>Cash Collections + 2.5% On-Time Rebates</code> (Penalties excluded).</span>
+          <code>Initial Quota (1st-Day Active Dues + 1–90d Matured Dues) − 1-Mo. Repo Deduction</code><br />
+          <span class="muted">• <strong>Collections to Hit Target:</strong> <code>Cash Collections + 2.5% On-Time Rebates</code> (Penalties excluded).<br />• <strong>Repos:</strong> Only 1 month's amortization of same-month repo'd units is deducted from the target.</span>
           <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border-soft);">
-            <strong>CI Commission / Incentives (Based on Final Target Quota):</strong><br />
-            • Final Target Quota Hit + Maximum Release = <code>Final Target Quota × 0.50%</code><br />
-            • Final Target Quota Hit + Minimum Release = <code>Final Target Quota × 0.35%</code><br />
+            <strong>CI Commission / Incentives (Uncapped — Paid on Actual Cash Collected):</strong><br />
+            • Final Target Quota Hit + Maximum Release = <code>Actual Cash Collected × 0.50%</code><br />
+            • Final Target Quota Hit + Minimum Release = <code>Actual Cash Collected × 0.35%</code><br />
             • Target Quota Not Hit OR Minimum Release Not Hit = <code>No Incentives</code><br />
             <span class="muted">If a branch has <strong>2 Credit Investigators</strong>, the earned commission is divided equally (÷ 2).</span>
           </div>
@@ -1961,6 +1961,6 @@
     </div>
   </div>
 
-  <script src="../app.js?v=1795874281454"></script>
+  <script src="../app.js?v=1795874639673"></script>
 </body>
 </html>

@@ -8529,7 +8529,7 @@ function renderQuotas() {
     const estBomQ = realSchedQuota > 0 ? realSchedQuota : Number((estBom46 * 0.275 + estBom712 * 0.11).toFixed(2));
     const webAbBomQ = Number((estBom46 * 0.275 + estBom712 * 0.11).toFixed(2));
     const rawBomQuota = savedBomQuota > 0 ? savedBomQuota : estBomQ;
-    const repoDed = Math.round(a.repoAmount || 0);
+    const repoDed = Math.round(a.repoMonthlyDed || 0);
     const effectiveBomQuota = rawBomQuota > 0 ? Math.max(0, rawBomQuota - repoDed) : 0;
     const rebateCredit = Math.round(a.detectedRebateCredit || 0);
     const collForQuota = a.collAmount + rebateCredit;
@@ -8539,7 +8539,7 @@ function renderQuotas() {
     const hitMax = maxRel > 0 && a.relCount >= maxRel;
     const hitMin = minRel > 0 && a.relCount >= minRel;
     const commRate = (hitQuota && hitMax) ? 0.005 : (hitQuota && hitMin) ? 0.0035 : 0;
-    const branchCommission = effectiveBomQuota * commRate;
+    const branchCommission = a.collAmount * commRate;
     const perCiCommission = branchCommission / ciCount;
 
     totMinRel += minRel;
@@ -8929,8 +8929,8 @@ function buildQuotaPosterHtml(ctx, { includeMtd = true } = {}) {
   const monthLabel = y && m
     ? new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
     : ctx.ym;
-  const maxTotal = ctx.bomQuota * 0.005;
-  const minTotal = ctx.bomQuota * 0.0035;
+  const maxTotal = Math.max(ctx.bomQuota, ctx.actColl) * 0.005;
+  const minTotal = Math.max(ctx.bomQuota, ctx.actColl) * 0.0035;
   const maxEach = maxTotal / ctx.ciCount;
   const minEach = minTotal / ctx.ciCount;
   const fmtWhole = (n) => `₱${Math.round(Number(n) || 0).toLocaleString('en-PH')}`;
@@ -9020,7 +9020,7 @@ function buildQuotaPosterHtml(ctx, { includeMtd = true } = {}) {
             <span style="font-size:9px;font-weight:700;background:rgba(77,158,122,0.18);color:#9ee0c2;padding:1px 5px;border-radius:999px;">+ QUOTA</span>
           </div>
           <div style="font-size:14px;font-weight:700;color:#e2e8f0;margin-top:2px;">${fmtCurrency(ctx.rebateCredit || 0)}</div>
-          <div style="font-size:10px;color:#94a3b8;line-height:1.35;margin-top:2px;">Added to cash collections to hit Final Target Quota (Penalties excluded).</div>
+          <div style="font-size:10px;color:#94a3b8;line-height:1.35;margin-top:2px;">Added to cash collections to hit quota; commission (0.35%/0.50%) is paid on actual cash collected.</div>
         </div>
 
         <div ${ctx.branchId ? `data-qdrill="penalties" data-branch="${ctx.branchId}"` : ''} style="background:#151b23;border:1px solid #262f3b;border-left:3px solid #b05b5b;border-radius:8px;padding:8px 10px;${ctx.branchId ? 'cursor:pointer;' : ''}" title="Click to inspect penalties collected">
@@ -9038,7 +9038,7 @@ function buildQuotaPosterHtml(ctx, { includeMtd = true } = {}) {
             <span style="font-size:9px;font-weight:700;background:rgba(184,148,70,0.18);color:#ecd899;padding:1px 5px;border-radius:999px;">− TARGET</span>
           </div>
           <div style="font-size:14px;font-weight:700;color:#e2e8f0;margin-top:2px;">−${fmtCurrency(ctx.repoDed || 0)}</div>
-          <div style="font-size:10px;color:#94a3b8;line-height:1.35;margin-top:2px;">Repo total balance deducted from Initial Quota to get Final Target Quota.</div>
+          <div style="font-size:10px;color:#94a3b8;line-height:1.35;margin-top:2px;">1-month due of repo'd units (${fmtWhole(ctx.repoAmount || 0)} unit val.) deducted from Initial Quota.</div>
         </div>
       </div>
     ` : ''}
@@ -9433,7 +9433,7 @@ function openQuotaDrillModal(branchId, kind, ym, row) {
     if (titleEl) titleEl.textContent = `${brName} — Repos (${ym})`;
     if (subEl) subEl.textContent = `${repos.length} unit(s) • Total Repo Balance: ${fmtCurrency(row.repoDed)}`;
     if (formulaEl) {
-      formulaEl.innerHTML = `<strong>Final Target Quota Formula:</strong> Initial Quota (<code>${fmtCurrency(row.rawBomQuota)}</code>) − Repo Total Balance (<code>${fmtCurrency(row.repoDed)}</code>) = <strong style="color:#8ecfb0;">${fmtCurrency(row.effectiveBomQuota)}</strong>`;
+      formulaEl.innerHTML = `<strong>Final Target Quota Formula:</strong> Initial Quota (<code>${fmtCurrency(row.rawBomQuota)}</code>) − 1-Mo. Repo Deduction (<code>${fmtCurrency(row.repoDed)}</code> across ${repos.length} units, ${fmtCurrency(row.a.repoAmount)} total unit value) = <strong style="color:#8ecfb0;">${fmtCurrency(row.effectiveBomQuota)}</strong>`;
     }
     bodyEl.innerHTML = repos.length
       ? `<table class="data-table" style="font-size:11.5px;"><thead><tr><th>Repo Date</th><th>Customer</th><th>Acct #</th><th>Unit</th><th>Repo Balance</th></tr></thead><tbody>${
