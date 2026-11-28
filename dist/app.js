@@ -8559,35 +8559,49 @@ function renderQuotas() {
           </div>
         </div>
 
-        <div class="q-poster-wrap" style="background:#ffffff;color:#111827;border-radius:12px;padding:16px;border:1px solid #e5e7eb;">
+        <div class="q-poster-wrap" style="background:#11161d;color:#f8fafc;border-radius:12px;padding:16px;border:1px solid #2b3441;">
           ${posterHtml}
         </div>
 
         ${(() => {
           const brPastDues = (data.pastDues || []).filter((pd) => pd.branch_id === b.id && Number(pd.balance) > 0);
-          const pdQuick = brPastDues.filter((pd) => getEffectiveDaysDue(pd) <= 60);
-          const pdQuickSum = pdQuick.reduce((s, pd) => s + (Number(pd.balance) || 0), 0);
+          const bucketStats = { '1-30': { c: 0, sum: 0 }, '31-60': { c: 0, sum: 0 }, '61-90': { c: 0, sum: 0 }, '91+': { c: 0, sum: 0 } };
+          for (const pd of brPastDues) {
+            const d = getEffectiveDaysDue(pd);
+            const bal = Number(pd.balance) || 0;
+            const k = d <= 30 ? '1-30' : d <= 60 ? '31-60' : d <= 90 ? '61-90' : '91+';
+            bucketStats[k].c++;
+            bucketStats[k].sum += bal;
+          }
+          const [mY, mM] = ym.split('-').map(Number);
+          const lastDayOfMo = new Date(Date.UTC(mY || Number(todayStr.slice(0, 4)), mM || Number(todayStr.slice(5, 7)), 0)).getUTCDate();
+          const curDay = isCurMonth ? Number(todayStr.slice(8, 10)) : 1;
+          const daysLeft = isCurMonth ? Math.max(1, lastDayOfMo - curDay + 1) : lastDayOfMo;
           const needColl = effectiveBomQuota > 0 ? Math.max(0, effectiveBomQuota - a.collAmount) : 0;
+          const dailyColl = needColl > 0 ? needColl / daysLeft : 0;
           const needMin = minRel > 0 ? Math.max(0, minRel - a.relCount) : 0;
           const needMax = maxRel > 0 ? Math.max(0, maxRel - a.relCount) : 0;
           const releaseTodo = needMin > 0
-            ? `Release <strong>${needMin} more order${needMin > 1 ? 's' : ''}</strong> for Min (0.35%)${needMax > 0 ? ` or <strong>${needMax}</strong> for Max (0.50%)` : ''}.`
+            ? `<strong>Releases:</strong> Close <strong>${needMin} more order${needMin > 1 ? 's' : ''}</strong> for Min (0.35%)${needMax > 0 ? ` or <strong>${needMax}</strong> for Max (0.50%)` : ''} — target <strong>${Math.ceil((needMax || needMin) / daysLeft)} order(s)/day</strong> via fast-tracking pending CI applications &amp; walk-ins.`
             : needMax > 0
-              ? `✓ Min met! Release <strong>${needMax} more order${needMax > 1 ? 's' : ''}</strong> to upgrade to Max (0.50%).`
-              : (maxRel > 0 ? '✓ Release target fully met (0.50% tier)!' : 'Set Min/Max release target to track orders.');
+              ? `<strong>Releases:</strong> ✓ Min met! Push <strong>${needMax} more order${needMax > 1 ? 's' : ''}</strong> in ${daysLeft} day(s) (${Math.ceil(needMax / daysLeft)}/day) to upgrade from <strong>0.35% → 0.50%</strong>.`
+              : (maxRel > 0 ? '<strong>Releases:</strong> ✓ Max target met (0.50% tier unlocked)!' : '<strong>Releases:</strong> Set Min/Max release target to track orders.');
           const collTodo = needColl > 0
-            ? `Collect <strong>${fmtCurrency(needColl)}</strong> more to hit Collection Quota.`
-            : (effectiveBomQuota > 0 ? '✓ Collection Quota met!' : 'Set Collection Quota to track collections.');
+            ? `<strong>Collections:</strong> Collect <strong>${fmtCurrency(needColl)}</strong> more (${daysLeft}d left → <strong>${fmtCurrency(dailyColl)}/day</strong> pace).`
+            : (effectiveBomQuota > 0 ? '<strong>Collections:</strong> ✓ Collection Quota met!' : '<strong>Collections:</strong> Set Collection Quota to track collections.');
           return `
             <div style="margin-top:10px;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,0.03);border:1px solid var(--border-soft);">
               <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
-                <strong style="font-size:12px;color:var(--gold-bright);">📋 Action Plan To Hit Target</strong>
+                <strong style="font-size:12px;color:var(--gold-bright);">📋 Specific CI Action Plan (${daysLeft}d left)</strong>
                 ${brPastDues.length ? `<button type="button" class="secondary q-followup-btn" data-branch="${b.id}" style="padding:5px 10px;font-size:11.5px;border-color:var(--gold);color:var(--gold-bright);min-height:0;">📲 Follow-Up Accounts (${brPastDues.length})</button>` : ''}
               </div>
               <ul style="margin:0;padding-left:18px;font-size:12px;line-height:1.55;color:var(--text);">
                 <li>${releaseTodo}</li>
                 <li>${collTodo}</li>
-                ${brPastDues.length ? `<li class="muted">Priority receivables: <strong>${pdQuick.length}</strong> accounts (1–60d due) totaling <strong>${fmtCurrency(pdQuickSum)}</strong> — tap Follow-Up Accounts to call/SMS.</li>` : ''}
+                ${bucketStats['1-30'].c ? `<li><strong>Step 1 — Call/SMS (1–30d):</strong> <strong>${bucketStats['1-30'].c}</strong> accts (<strong>${fmtCurrency(bucketStats['1-30'].sum)}</strong>) — fastest cash collection; remind 2.5% rebate for on-time.</li>` : ''}
+                ${bucketStats['31-60'].c ? `<li><strong>Step 2 — Field Visits (31–60d):</strong> <strong>${bucketStats['31-60'].c}</strong> accts (<strong>${fmtCurrency(bucketStats['31-60'].sum)}</strong>) — schedule barangay CI visits &amp; payment commitment.</li>` : ''}
+                ${bucketStats['61-90'].c ? `<li class="muted"><strong>Step 3 — Final Demand (61–90d):</strong> <strong>${bucketStats['61-90'].c}</strong> accts (<strong>${fmtCurrency(bucketStats['61-90'].sum)}</strong>) — issue final demand notice.</li>` : ''}
+                ${bucketStats['91+'].c ? `<li class="muted"><strong>Step 4 — Repo/Pull-Out (91+d):</strong> <strong>${bucketStats['91+'].c}</strong> accts (<strong>${fmtCurrency(bucketStats['91+'].sum)}</strong>) — priority unit pull-out / legal recovery.</li>` : ''}
               </ul>
             </div>
           `;
@@ -8763,94 +8777,94 @@ function buildQuotaPosterHtml(ctx, { includeMtd = true } = {}) {
   const noIncentiveNow = !hitQuota || !hitMin;
 
   const metPill = '<span style="display:inline-block;background:#16a34a;color:#ffffff;font-size:9.5px;font-weight:800;padding:2px 6px;border-radius:999px;letter-spacing:0.3px;">✓ MET</span>';
-  const progPill = (txt) => `<span style="display:inline-block;background:#e2e8f0;color:#334155;font-size:9.5px;font-weight:700;padding:2px 6px;border-radius:999px;">${txt}</span>`;
+  const progPill = (txt) => `<span style="display:inline-block;background:#26303d;color:#cbd5e1;font-size:9.5px;font-weight:700;padding:2px 6px;border-radius:999px;">${txt}</span>`;
 
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #eab308;padding-bottom:10px;margin-bottom:12px;">
       <div style="display:flex;align-items:center;gap:9px;">
         <img src="${LOGO_SQUARE_SRC}" alt="AB Gadgetz" style="width:34px;height:34px;border-radius:8px;object-fit:cover;" />
         <div>
-          <div style="font-size:9.5px;font-weight:800;letter-spacing:1px;color:#a16207;text-transform:uppercase;">AB Gadgetz • Monthly Branch Target</div>
-          <div style="font-size:17px;font-weight:800;color:#111827;line-height:1.2;">${ctx.branchName} Branch — ${monthLabel}</div>
+          <div style="font-size:9.5px;font-weight:800;letter-spacing:1px;color:#facc15;text-transform:uppercase;">AB Gadgetz • Monthly Branch Target</div>
+          <div style="font-size:17px;font-weight:800;color:#f8fafc;line-height:1.2;">${ctx.branchName} Branch — ${monthLabel}</div>
         </div>
       </div>
-      <div style="text-align:right;font-size:10.5px;font-weight:700;color:#4b5563;background:#fef9c3;border:1px solid #fde047;padding:3px 8px;border-radius:999px;white-space:nowrap;">
+      <div style="text-align:right;font-size:10.5px;font-weight:700;color:#fde047;background:rgba(234,179,8,0.14);border:1px solid rgba(250,204,21,0.45);padding:3px 8px;border-radius:999px;white-space:nowrap;">
         ${ctx.ciCount} Collector${ctx.ciCount > 1 ? 's' : ''}
       </div>
     </div>
 
-    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px;margin-bottom:12px;">
-      <div style="font-size:10px;font-weight:800;letter-spacing:0.8px;color:#475569;text-transform:uppercase;margin-bottom:7px;">Monthly Quota &amp; Release Targets</div>
+    <div style="background:#171d26;border:1px solid #2b3441;border-radius:10px;padding:10px;margin-bottom:12px;">
+      <div style="font-size:10px;font-weight:800;letter-spacing:0.8px;color:#94a3b8;text-transform:uppercase;margin-bottom:7px;">Monthly Quota &amp; Release Targets</div>
       <div style="display:grid;grid-template-columns:1.35fr 1fr 1fr;gap:7px;">
-        <div style="background:${hitQuota ? '#f0fdf4' : '#ffffff'};border:${hitQuota ? '2px solid #16a34a' : '1px solid #cbd5e1'};border-radius:8px;padding:7px 9px;">
+        <div style="background:${hitQuota ? 'rgba(22,163,74,0.16)' : '#11161d'};border:${hitQuota ? '2px solid #22c55e' : '1px solid #2f3947'};border-radius:8px;padding:7px 9px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
-            <span style="font-size:9.5px;font-weight:700;color:${hitQuota ? '#166534' : '#64748b'};">COLLECTION QUOTA</span>
+            <span style="font-size:9.5px;font-weight:700;color:${hitQuota ? '#86efac' : '#94a3b8'};">COLLECTION QUOTA</span>
             ${hitQuota ? metPill : (ctx.bomQuota > 0 ? progPill(`${collPct.toFixed(0)}%`) : '')}
           </div>
-          <div style="font-size:14.5px;font-weight:800;color:${hitQuota ? '#15803d' : '#0f172a'};margin-top:2px;">${ctx.bomQuota > 0 ? fmtCurrency(ctx.bomQuota) : 'Not set'}</div>
-          ${includeMtd && ctx.bomQuota > 0 ? `<div style="font-size:10px;color:${hitQuota ? '#166534' : '#64748b'};margin-top:2px;">${hitQuota ? `Collected ${fmtCurrency(ctx.actColl)}` : `Rem: ${fmtCurrency(collRem)}`}</div>` : ''}
+          <div style="font-size:14.5px;font-weight:800;color:${hitQuota ? '#4ade80' : '#f8fafc'};margin-top:2px;">${ctx.bomQuota > 0 ? fmtCurrency(ctx.bomQuota) : 'Not set'}</div>
+          ${includeMtd && ctx.bomQuota > 0 ? `<div style="font-size:10px;color:${hitQuota ? '#86efac' : '#94a3b8'};margin-top:2px;">${hitQuota ? `Collected ${fmtCurrency(ctx.actColl)}` : `Rem: ${fmtCurrency(collRem)}`}</div>` : ''}
         </div>
-        <div style="background:${hitMin ? '#f0fdf4' : '#ffffff'};border:${hitMin ? '2px solid #16a34a' : '1px solid #cbd5e1'};border-radius:8px;padding:7px 9px;">
+        <div style="background:${hitMin ? 'rgba(22,163,74,0.16)' : '#11161d'};border:${hitMin ? '2px solid #22c55e' : '1px solid #2f3947'};border-radius:8px;padding:7px 9px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
-            <span style="font-size:9.5px;font-weight:700;color:${hitMin ? '#166534' : '#64748b'};">MIN RELEASE</span>
+            <span style="font-size:9.5px;font-weight:700;color:${hitMin ? '#86efac' : '#94a3b8'};">MIN RELEASE</span>
             ${hitMin ? metPill : (ctx.minRel > 0 ? progPill(`${ctx.actRel}/${ctx.minRel}`) : '')}
           </div>
-          <div style="font-size:14.5px;font-weight:800;color:${hitMin ? '#15803d' : '#0f172a'};margin-top:2px;">${ctx.minRel > 0 ? `${fmtNum(ctx.minRel)} orders` : '—'}</div>
-          ${includeMtd ? `<div style="font-size:10px;color:${hitMin ? '#166534' : '#64748b'};margin-top:2px;">Actual: ${fmtNum(ctx.actRel)} orders</div>` : ''}
+          <div style="font-size:14.5px;font-weight:800;color:${hitMin ? '#4ade80' : '#f8fafc'};margin-top:2px;">${ctx.minRel > 0 ? `${fmtNum(ctx.minRel)} orders` : '—'}</div>
+          ${includeMtd ? `<div style="font-size:10px;color:${hitMin ? '#86efac' : '#94a3b8'};margin-top:2px;">Actual: ${fmtNum(ctx.actRel)} orders</div>` : ''}
         </div>
-        <div style="background:${hitMax ? '#f0fdf4' : '#ffffff'};border:${hitMax ? '2px solid #16a34a' : '1px solid #cbd5e1'};border-radius:8px;padding:7px 9px;">
+        <div style="background:${hitMax ? 'rgba(22,163,74,0.16)' : '#11161d'};border:${hitMax ? '2px solid #22c55e' : '1px solid #2f3947'};border-radius:8px;padding:7px 9px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
-            <span style="font-size:9.5px;font-weight:700;color:${hitMax ? '#166534' : '#64748b'};">MAX RELEASE</span>
+            <span style="font-size:9.5px;font-weight:700;color:${hitMax ? '#86efac' : '#94a3b8'};">MAX RELEASE</span>
             ${hitMax ? metPill : (ctx.maxRel > 0 ? progPill(`${ctx.actRel}/${ctx.maxRel}`) : '')}
           </div>
-          <div style="font-size:14.5px;font-weight:800;color:${hitMax ? '#15803d' : '#0f172a'};margin-top:2px;">${ctx.maxRel > 0 ? `${fmtNum(ctx.maxRel)} orders` : '—'}</div>
-          ${includeMtd && ctx.maxRel > 0 ? `<div style="font-size:10px;color:${hitMax ? '#166534' : '#64748b'};margin-top:2px;">${hitMax ? 'Max reached!' : `${Math.max(0, ctx.maxRel - ctx.actRel)} to go`}</div>` : ''}
+          <div style="font-size:14.5px;font-weight:800;color:${hitMax ? '#4ade80' : '#f8fafc'};margin-top:2px;">${ctx.maxRel > 0 ? `${fmtNum(ctx.maxRel)} orders` : '—'}</div>
+          ${includeMtd && ctx.maxRel > 0 ? `<div style="font-size:10px;color:${hitMax ? '#86efac' : '#94a3b8'};margin-top:2px;">${hitMax ? 'Max reached!' : `${Math.max(0, ctx.maxRel - ctx.actRel)} to go`}</div>` : ''}
         </div>
       </div>
     </div>
 
-    <div style="font-size:10px;font-weight:800;letter-spacing:0.8px;color:#475569;text-transform:uppercase;margin-bottom:7px;">CI Incentive Structure</div>
+    <div style="font-size:10px;font-weight:800;letter-spacing:0.8px;color:#94a3b8;text-transform:uppercase;margin-bottom:7px;">CI Incentive Structure</div>
 
     <div style="display:grid;gap:7px;">
-      <div style="background:#f0fdf4;border:${achievedMax ? '2px solid #16a34a' : '1px solid #86efac'};border-left:4px solid #16a34a;border-radius:8px;padding:9px 11px;display:flex;justify-content:space-between;align-items:center;gap:10px;${!achievedMax && includeMtd && !noIncentiveNow ? 'opacity:0.65;' : ''}">
+      <div style="background:rgba(22,163,74,0.12);border:${achievedMax ? '2px solid #22c55e' : '1px solid rgba(34,197,94,0.35)'};border-left:4px solid #22c55e;border-radius:8px;padding:9px 11px;display:flex;justify-content:space-between;align-items:center;gap:10px;${!achievedMax && includeMtd && !noIncentiveNow ? 'opacity:0.65;' : ''}">
         <div>
-          <div style="font-size:12px;font-weight:800;color:#14532d;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          <div style="font-size:12px;font-weight:800;color:#86efac;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
             <span>Maximum Target Hit (0.50%)</span>
             ${achievedMax ? '<span style="background:#16a34a;color:#fff;font-size:9px;padding:1px 6px;border-radius:999px;">✓ ACHIEVED</span>' : (includeMtd && hitMax && !hitQuota ? '<span style="background:#15803d;color:#fff;font-size:9px;padding:1px 6px;border-radius:999px;">✓ MAX RELEASE MET</span>' : '')}
           </div>
-          <div style="font-size:10.5px;color:#166534;">Collection Quota + ${ctx.maxRel > 0 ? `${fmtNum(ctx.maxRel)}+` : 'Max'} Releases${includeMtd && ctx.maxRel > 0 && !hitMax ? ` (${ctx.maxRel - ctx.actRel} more to 0.50%)` : ''}</div>
+          <div style="font-size:10.5px;color:#bbf7d0;">Collection Quota + ${ctx.maxRel > 0 ? `${fmtNum(ctx.maxRel)}+` : 'Max'} Releases${includeMtd && ctx.maxRel > 0 && !hitMax ? ` (${ctx.maxRel - ctx.actRel} more to 0.50%)` : ''}</div>
         </div>
         <div style="text-align:right;">
-          <div style="font-size:15.5px;font-weight:800;color:#15803d;">${fmtWhole(maxTotal)}</div>
-          ${ctx.ciCount > 1 ? `<div style="font-size:10.5px;font-weight:700;color:#166534;">${fmtWhole(maxEach)} each CI</div>` : ''}
+          <div style="font-size:15.5px;font-weight:800;color:#4ade80;">${fmtWhole(maxTotal)}</div>
+          ${ctx.ciCount > 1 ? `<div style="font-size:10.5px;font-weight:700;color:#86efac;">${fmtWhole(maxEach)} each CI</div>` : ''}
         </div>
       </div>
 
-      <div style="background:#fefce8;border:${achievedMin || (includeMtd && hitMin && !hitMax) ? '2px solid #ca8a04' : '1px solid #fde047'};border-left:4px solid #ca8a04;border-radius:8px;padding:9px 11px;display:flex;justify-content:space-between;align-items:center;gap:10px;${achievedMax && includeMtd ? 'opacity:0.6;' : ''}">
+      <div style="background:rgba(234,179,8,0.12);border:${achievedMin || (includeMtd && hitMin && !hitMax) ? '2px solid #eab308' : '1px solid rgba(250,204,21,0.35)'};border-left:4px solid #eab308;border-radius:8px;padding:9px 11px;display:flex;justify-content:space-between;align-items:center;gap:10px;${achievedMax && includeMtd ? 'opacity:0.6;' : ''}">
         <div>
-          <div style="font-size:12px;font-weight:800;color:#713f12;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          <div style="font-size:12px;font-weight:800;color:#fde047;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
             <span>Minimum Target Hit (0.35%)</span>
             ${achievedMin ? '<span style="background:#ca8a04;color:#fff;font-size:9px;padding:1px 6px;border-radius:999px;">✓ ACHIEVED</span>' : (includeMtd && hitMin && !hitMax ? '<span style="background:#ca8a04;color:#fff;font-size:9px;padding:1px 6px;border-radius:999px;">CURRENT TIER (✓ MIN MET)</span>' : '')}
           </div>
-          <div style="font-size:10.5px;color:#854d0e;">Collection Quota + ${ctx.minRel > 0 ? `${fmtNum(ctx.minRel)}` : 'Min'} Releases${includeMtd && hitMin && !hitMax && !hitQuota ? ' • Need Collection Quota' : ''}</div>
+          <div style="font-size:10.5px;color:#fef08a;">Collection Quota + ${ctx.minRel > 0 ? `${fmtNum(ctx.minRel)}` : 'Min'} Releases${includeMtd && hitMin && !hitMax && !hitQuota ? ' • Need Collection Quota' : ''}</div>
         </div>
         <div style="text-align:right;">
-          <div style="font-size:15.5px;font-weight:800;color:#a16207;">${fmtWhole(minTotal)}</div>
-          ${ctx.ciCount > 1 ? `<div style="font-size:10.5px;font-weight:700;color:#854d0e;">${fmtWhole(minEach)} each CI</div>` : ''}
+          <div style="font-size:15.5px;font-weight:800;color:#facc15;">${fmtWhole(minTotal)}</div>
+          ${ctx.ciCount > 1 ? `<div style="font-size:10.5px;font-weight:700;color:#fde047;">${fmtWhole(minEach)} each CI</div>` : ''}
         </div>
       </div>
 
-      <div style="background:#fef2f2;border:${includeMtd && noIncentiveNow ? '2px solid #dc2626' : '1px solid #fecaca'};border-left:4px solid #dc2626;border-radius:8px;padding:8px 11px;display:flex;justify-content:space-between;align-items:center;gap:8px;${includeMtd && !noIncentiveNow ? 'opacity:0.55;' : ''}">
-        <div style="font-size:11px;font-weight:700;color:#991b1b;">
+      <div style="background:rgba(239,68,68,0.12);border:${includeMtd && noIncentiveNow ? '2px solid #ef4444' : '1px solid rgba(239,68,68,0.35)'};border-left:4px solid #ef4444;border-radius:8px;padding:8px 11px;display:flex;justify-content:space-between;align-items:center;gap:8px;${includeMtd && !noIncentiveNow ? 'opacity:0.55;' : ''}">
+        <div style="font-size:11px;font-weight:700;color:#fca5a5;">
           Collection Quota Not Hit OR Release Target Not Hit
-          ${includeMtd && noIncentiveNow ? `<div style="font-size:10px;font-weight:600;color:#b91c1c;margin-top:2px;">Status: ${ctx.minRel <= 0 ? 'Release target not set' : (hitMax ? '✓ Max Release Met (0.50% tier)' : hitMin ? '✓ Min Release Met (0.35% tier)' : `Need ${Math.max(0, ctx.minRel - ctx.actRel)} more release(s)`)} • ${hitQuota ? '✓ Collection Met' : `Need ${fmtCurrency(collRem)} more collection`}</div>` : ''}
+          ${includeMtd && noIncentiveNow ? `<div style="font-size:10px;font-weight:600;color:#fecaca;margin-top:2px;">Status: ${ctx.minRel <= 0 ? 'Release target not set' : (hitMax ? '✓ Max Release Met (0.50% tier)' : hitMin ? '✓ Min Release Met (0.35% tier)' : `Need ${Math.max(0, ctx.minRel - ctx.actRel)} more release(s)`)} • ${hitQuota ? '✓ Collection Met' : `Need ${fmtCurrency(collRem)} more collection`}</div>` : ''}
         </div>
-        <div style="font-size:11.5px;font-weight:800;color:#dc2626;white-space:nowrap;">No Incentives (₱0)</div>
+        <div style="font-size:11.5px;font-weight:800;color:#f87171;white-space:nowrap;">No Incentives (₱0)</div>
       </div>
     </div>
 
     ${includeMtd ? `
-      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;font-size:11px;color:#1e3a8a;margin-top:9px;">
+      <div style="background:rgba(59,130,246,0.12);border:1px solid rgba(96,165,250,0.35);border-radius:8px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;font-size:11px;color:#93c5fd;margin-top:9px;">
         <span><strong>MTD Collected:</strong> ${fmtCurrency(ctx.actColl)} (${collPct.toFixed(1)}%)</span>
         <span><strong>MTD Releases:</strong> ${fmtNum(ctx.actRel)} orders</span>
         ${ctx.liveQuota && state.userRole === 'ADMIN' ? `<span><strong>Web AB Today:</strong> ${fmtCurrency(ctx.liveQuota)}</span>` : ''}
@@ -8910,6 +8924,7 @@ document.getElementById('quotaPreviewModal')?.addEventListener('click', (e) => {
   if (e.target.id === 'quotaPreviewModal') document.getElementById('quotaPreviewModal').classList.add('hidden');
 });
 let activeFollowUpBranchId = '';
+let activeFollowUpTier = 'PRIORITY';
 function getFollowUpLog() {
   try {
     return JSON.parse(localStorage.getItem('ab_ci_followup_v1') || '{}');
@@ -8930,20 +8945,21 @@ function renderQuotaFollowUpList() {
   if (!listEl || !state.quotasData) return;
   const branchNames = { 'br-molave': 'Molave', 'br-tambulig': 'Tambulig', 'br-bonifacio': 'Bonifacio' };
   const q = (document.getElementById('quotaFollowUpSearch')?.value || '').trim().toLowerCase();
-  const tierFilter = document.getElementById('quotaFollowUpTier')?.value || 'PRIORITY';
+  const tierFilter = activeFollowUpTier || 'PRIORITY';
   const log = getFollowUpLog();
 
   let rows = (state.quotasData.pastDues || []).filter((pd) => pd.branch_id === activeFollowUpBranchId && Number(pd.balance) > 0);
   const agingCounts = { '1-30': 0, '31-60': 0, '61-90': 0, '91-180': 0, '180+': 0 };
   rows = rows.map((pd) => {
     const days = getEffectiveDaysDue(pd);
-    const tierKey = getAgingTier(days).key;
+    const tier = getAgingTier(days);
+    const tierKey = tier.key;
     agingCounts[tierKey] = (agingCounts[tierKey] || 0) + 1;
     const bal = Number(pd.balance) || 0;
     // Estimate late penalty (~3% per 30d overdue, capped reasonably) & 2.5% prompt-payment rebate reference
     const estPenalty = days > 0 ? Math.round(bal * Math.min(0.15, Math.max(0.02, (days / 30) * 0.03))) : 0;
     const onTimeRebate = Math.round(bal * 0.025);
-    return { ...pd, effDays: days, tierKey, bal, estPenalty, onTimeRebate };
+    return { ...pd, effDays: days, tierKey, tierAction: tier.action, bal, estPenalty, onTimeRebate };
   });
 
   const pillsEl = document.getElementById('quotaFollowUpAgingPills');
@@ -8960,13 +8976,12 @@ function renderQuotaFollowUpList() {
     pillsEl.innerHTML = pillDefs
       .map(([val, label]) => {
         const active = tierFilter === val;
-        return `<button type="button" class="secondary q-aging-pill" data-tier="${val}" style="padding:4px 9px;font-size:11px;min-height:0;border-radius:999px;${active ? 'border-color:var(--gold-bright);background:rgba(231,197,95,0.22);color:var(--gold-bright);font-weight:700;' : ''}">${label}</button>`;
+        return `<button type="button" class="secondary q-aging-pill" data-tier="${val}" style="padding:5px 10px;font-size:11.5px;min-height:0;border-radius:999px;cursor:pointer;${active ? 'border-color:var(--gold-bright);background:rgba(231,197,95,0.22);color:var(--gold-bright);font-weight:700;' : ''}">${label}</button>`;
       })
       .join('');
     pillsEl.querySelectorAll('.q-aging-pill').forEach((btn) => {
       btn.addEventListener('click', () => {
-        const sel = document.getElementById('quotaFollowUpTier');
-        if (sel) sel.value = btn.dataset.tier;
+        activeFollowUpTier = btn.dataset.tier || 'PRIORITY';
         renderQuotaFollowUpList();
       });
     });
@@ -9017,6 +9032,7 @@ function renderQuotaFollowUpList() {
                 <strong style="font-size:13.5px;color:var(--text);">${r.customer_name || 'Customer'}</strong>
                 <div class="small muted">${r.account_no || ''} • ${r.barangay || '—'}</div>
                 <div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px;">${r.unit || ''}</div>
+                <div style="font-size:10.5px;font-weight:700;color:var(--gold-bright);margin-top:3px;">Action: ${r.tierAction}</div>
               </div>
               <div style="text-align:right;flex-shrink:0;">
                 <strong style="font-size:14.5px;color:var(--gold-bright);">${fmtCurrency(r.bal)}</strong>
@@ -9062,7 +9078,6 @@ document.getElementById('quotaFollowUpModal')?.addEventListener('click', (e) => 
   if (e.target.id === 'quotaFollowUpModal') document.getElementById('quotaFollowUpModal').classList.add('hidden');
 });
 document.getElementById('quotaFollowUpSearch')?.addEventListener('input', renderQuotaFollowUpList);
-document.getElementById('quotaFollowUpTier')?.addEventListener('change', renderQuotaFollowUpList);
 
 document.getElementById('quotaPreviewCopyBtn')?.addEventListener('click', async () => {
   if (activeQuotaPreviewCtx) {
