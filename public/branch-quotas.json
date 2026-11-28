@@ -1,4 +1,37 @@
-{
-  "updatedAt": null,
-  "months": {}
+﻿{
+    "updatedAt":  "2026-11-28T15:18:22.4350375Z",
+    "months":  {
+                   "2026-11":  {
+                                   "br-molave":  {
+                                                     "bomBal4to6":  0,
+                                                     "minRelease":  55,
+                                                     "ciCount":  2,
+                                                     "bomBal7to12":  0,
+                                                     "note":  "Published from owner view",
+                                                     "bomQuota":  0,
+                                                     "maxRelease":  60,
+                                                     "lockedAt":  "2026-11-28T15:18:22.4350375Z"
+                                                 },
+                                   "br-tambulig":  {
+                                                       "bomBal4to6":  0,
+                                                       "minRelease":  55,
+                                                       "ciCount":  2,
+                                                       "bomBal7to12":  0,
+                                                       "note":  "Published from owner view",
+                                                       "bomQuota":  0,
+                                                       "maxRelease":  60,
+                                                       "lockedAt":  "2026-11-28T15:18:22.4350375Z"
+                                                   },
+                                   "br-bonifacio":  {
+                                                        "bomBal4to6":  0,
+                                                        "minRelease":  35,
+                                                        "ciCount":  1,
+                                                        "bomBal7to12":  0,
+                                                        "note":  "Published from owner view",
+                                                        "bomQuota":  0,
+                                                        "maxRelease":  40,
+                                                        "lockedAt":  "2026-11-28T15:18:22.4350375Z"
+                                                    }
+                               }
+               }
 }
