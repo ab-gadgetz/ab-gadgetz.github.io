@@ -9490,15 +9490,15 @@ function renderQuotaFollowUpList() {
         const dayColor = r.effDays <= 30 ? '#dfd09b' : r.effDays <= 60 ? '#d8b47c' : '#e29a9a';
         const safeNoteAttr = String(fuEnt?.note || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
         return `${groupHeaderHtml}
-          <div style="background:${contactedToday ? 'rgba(77,158,122,0.08)' : '#151b23'};border:1px solid ${promiseDue ? 'rgba(214,190,122,0.6)' : (contactedToday ? 'rgba(77,158,122,0.5)' : '#28313e')};border-radius:10px;padding:10px 12px;">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
-              <div style="min-width:0;">
+          <div style="background:${contactedToday ? 'rgba(77,158,122,0.08)' : '#151b23'};border:1px solid ${promiseDue ? 'rgba(214,190,122,0.6)' : (contactedToday ? 'rgba(77,158,122,0.5)' : '#28313e')};border-radius:10px;padding:10px 12px;min-width:0;max-width:100%;box-sizing:border-box;overflow:hidden;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;min-width:0;">
+              <div style="min-width:0;flex:1 1 0;overflow:hidden;">
                 <strong style="font-size:13.5px;color:#e2e8f0;">${r.customer_name || 'Customer'}</strong>
                 <div class="small muted">Order: <strong style="color:#cbd5e1;">${r.release_date || '—'}</strong> • ${r.account_no || ''} • ${r.barangay || '—'}</div>
-                <div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px;">${r.unit || ''}</div>
+                <div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;">${r.unit || ''}</div>
                 <div style="font-size:10.5px;font-weight:600;color:#d6be7a;margin-top:3px;">Action: ${r.tierAction}</div>
               </div>
-              <div style="text-align:right;flex-shrink:0;">
+              <div style="text-align:right;flex-shrink:0;max-width:42%;">
                 <div style="font-size:10px;color:#94a3b8;text-transform:uppercase;">Amount Due</div>
                 <strong style="font-size:15px;color:#dfd09b;">${fmtCurrency(r.amountDue)}</strong>
                 <div style="font-size:10.5px;font-weight:700;color:${dayColor};">${r.monthsDue} mo${r.monthsDue !== 1 ? 's' : ''} • ${fmtDelay(r.effDays)} delayed</div>
@@ -9510,7 +9510,7 @@ function renderQuotaFollowUpList() {
                 Promise:
                 <input type="date" class="q-fu-promise" data-key="${acctKey}" value="${fuEnt?.promiseDate || ''}" style="padding:3px 6px;font-size:11px;min-height:0;width:auto;" />
               </label>
-              <input type="text" class="q-fu-note" data-key="${acctKey}" value="${safeNoteAttr}" placeholder="Promise / field visit note..." style="flex:1;min-width:140px;padding:4px 7px;font-size:11px;min-height:0;" />
+              <input type="text" class="q-fu-note" data-key="${acctKey}" value="${safeNoteAttr}" placeholder="Promise / field visit note..." style="flex:1 1 100%;min-width:0;box-sizing:border-box;padding:4px 7px;font-size:11px;min-height:0;" />
               ${promiseDue ? '<span style="font-size:10px;font-weight:700;color:#dfd09b;background:rgba(214,190,122,0.16);padding:2px 6px;border-radius:999px;">PROMISE DUE</span>' : ''}
             </div>
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px dashed #28313e;">
