@@ -12977,6 +12977,7 @@ function applyRolePermissions() {
   const isAdmin = role === 'ADMIN';
 
   document.body.classList.toggle('role-staff', !isAdmin);
+  document.body.classList.toggle('role-auditor', role === 'AUDITOR');
   document.body.classList.toggle('role-cashier', role === 'CASHIER');
   document.getElementById('mobileBottomNav')?.classList.toggle('hidden', role === 'CASHIER');
 
@@ -13089,6 +13090,10 @@ function applyRolePermissions() {
       globalBranchSel.disabled = true;
     } else {
       globalBranchSel.disabled = false;
+      if (role === 'AUDITOR' && !state._auditorBranchInit) {
+        globalBranchSel.value = '';
+        state._auditorBranchInit = true;
+      }
     }
   }
 

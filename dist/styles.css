@@ -1259,6 +1259,9 @@ body.role-staff .owner-bar-main {
 body.role-staff .owner-branch {
   display: none !important;
 }
+body.role-staff.role-auditor .owner-branch {
+  display: flex !important;
+}
 body.role-staff .sync-controls {
   display: grid;
   grid-template-columns: auto auto;
