@@ -8593,7 +8593,7 @@ function renderQuotas() {
     }
   }
   const pdByAcct = new Map((data.pastDues || []).map((pd) => [`${pd.branch_id}::${String(pd.account_no || '').trim()}`, pd]));
-  const REBATE_FACTOR = 0.025 / 0.975;
+  const rebMap = buildRebateMap(data.payments);
   for (const p of data.payments || []) {
     const dt = String(p.payment_date || '').slice(0, 7);
     if (dt !== ym || !actuals[p.branch_id]) continue;
@@ -8605,10 +8605,7 @@ function renderQuotas() {
     a.collAmount += amt;
     a.penaltiesAmount += pen;
     a.rebatesAmount += expReb;
-    if (pen === 0) {
-      if (expReb > 0) a.detectedRebateCredit += expReb;
-      else if (amt >= 200 && Math.abs(amt % 5) >= 0.5) a.detectedRebateCredit += amt * REBATE_FACTOR;
-    }
+    a.detectedRebateCredit += rebMap.get(p) || 0;
   }
   for (const r of data.repos || []) {
     const dt = String(r.repo_date || '').slice(0, 7);
@@ -9711,14 +9708,13 @@ function openQuotaDrillModal(branchId, kind, ym, row) {
       : '<div class="muted small" style="padding:12px;">No late penalties recorded for this month.</div>';
   } else if (kind === 'rebates') {
     const rebRows = [];
+    const rebMap = buildRebateMap(pays);
     for (const p of pays) {
       const amt = Number(p.amount) || 0;
       const pen = Number(p.penalties) || 0;
       const expReb = Number(p.rebates) || 0;
       if (pen > 0) continue;
-      let reb = 0;
-      if (expReb > 0) reb = expReb;
-      else if (amt >= 200 && Math.abs(amt % 5) >= 0.5) reb = amt * REBATE_FACTOR;
+      const reb = rebMap.get(p) || 0;
       if (reb > 0) rebRows.push({ ...p, reb, fullAmort: amt + reb });
     }
     const totReb = rebRows.reduce((s, r) => s + r.reb, 0);
@@ -10008,6 +10004,31 @@ function initSalesDateInputs() {
   }
 }
 
+// Rebate inference: group split payments by account+date; a round-5 combined total means full amort was paid (no rebate).
+function buildRebateMap(payments) {
+  const F = 0.025 / 0.975;
+  const groups = new Map();
+  for (const p of payments || []) {
+    const k = p.branch_id + '::' + String(p.account_no || '').trim() + '::' + String(p.payment_date || '').slice(0, 10);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(p);
+  }
+  const map = new Map();
+  for (const list of groups.values()) {
+    const total = list.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const pen = list.reduce((s, p) => s + (Number(p.penalties) || 0), 0);
+    const exp = list.reduce((s, p) => s + (Number(p.rebates) || 0), 0);
+    for (const p of list) {
+      let reb = 0;
+      if (pen === 0) {
+        if (exp > 0) reb = Number(p.rebates) || 0;
+        else if (total >= 200 && Math.abs(total % 5) >= 0.5 && (Number(p.amount) || 0) >= 200) reb = (Number(p.amount) || 0) * F;
+      }
+      map.set(p, reb);
+    }
+  }
+  return map;
+}
 function analyzePaymentRebates(payments, mode = 'DETECTED') {
   const byEvent = new Map();
   for (const p of payments || []) {
