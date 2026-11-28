@@ -9592,18 +9592,37 @@ function exportFollowUpPdf(branchId) {
   const rawRows = (state.quotasData.pastDues || [])
     .filter((pd) => pd.branch_id === branchId && Number(pd.balance) > 0)
     .map(enrichPastDueRow);
+  // jsPDF's built-in font is Latin-1 only: keep all text ASCII-safe so nothing renders garbled.
+  const T = (v) => String(v == null ? '' : v)
+    .replace(/[\u2013\u2014]/g, '-').replace(/[\u2022\u00b7]/g, '|').replace(/\u2192/g, '->')
+    .replace(/\u20b1/g, 'PHP ').replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"')
+    .replace(/[^\x20-\x7e\u00a0-\u00ff]/g, '');
+  const money = (n) => 'PHP ' + (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  const doc = new jspdfNs.jsPDF({ orientation: 'portrait', unit: 'in', format: [8.5, 13], compress: true });
-  doc.setFontSize(14);
-  doc.text(`AB Gadgetz — ${brName} Branch CI Follow-Up & Action Plan`, 0.4, 0.5);
-  doc.setFontSize(9.5);
-  doc.setTextColor(90);
+  // Long bond paper: 8.5 x 13 in, portrait
+  const PW = 8.5, PH = 13, M = 0.5, CW = PW - M * 2;
+  const doc = new jspdfNs.jsPDF({ orientation: 'portrait', unit: 'in', format: [PW, PH], compress: true });
   const totDuePdf = rawRows.reduce((s, r) => s + r.amountDue, 0);
   const totBalPdf = rawRows.reduce((s, r) => s + r.bal, 0);
-  doc.text(`As of ${todayStr} • ${rawRows.length} Accounts • Total Amount Due: ${fmtCurrency(totDuePdf)} • Total Balance: ${fmtCurrency(totBalPdf)}`, 0.4, 0.7);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(15);
+  doc.setTextColor(20, 30, 48);
+  doc.text(T('AB GADGETZ - ' + brName.toUpperCase() + ' BRANCH'), M, M + 0.15);
+  doc.setFontSize(11);
+  doc.text('Credit Investigator Follow-Up & Action Plan', M, M + 0.38);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(90);
+  doc.text('As of ' + todayStr + '   |   ' + rawRows.length + ' accounts', M, M + 0.58);
+  doc.text('Total Amount Due: ' + money(totDuePdf) + '   |   Total Balance: ' + money(totBalPdf), M, M + 0.74);
+  doc.setDrawColor(30, 41, 59);
+  doc.setLineWidth(0.02);
+  doc.line(M, M + 0.84, PW - M, M + 0.84);
   doc.setTextColor(0);
 
-  let yPos = 0.95;
+  let yPos = M + 1.08;
+  const BOTTOM = PH - 0.7;
   const tierOrder = ['1-30', '31-60', '61-90', '91-180', '180+'];
   for (const tKey of tierOrder) {
     const grp = rawRows
@@ -9613,38 +9632,69 @@ function exportFollowUpPdf(branchId) {
     const guide = FOLLOWUP_ACTION_GUIDE[tKey] || { title: tKey, action: '' };
     const grpDueSum = grp.reduce((s, r) => s + r.amountDue, 0);
     const grpBalSum = grp.reduce((s, r) => s + r.bal, 0);
-    if (yPos > 11.2) { doc.addPage([8.5, 13], 'portrait'); yPos = 0.5; }
+    const actionLines = doc.splitTextToSize(T('Action: ' + guide.action), CW);
+    const blockH = 0.2 + 0.18 + actionLines.length * 0.15 + 0.5;
+    if (yPos + blockH > BOTTOM) { doc.addPage([PW, PH], 'portrait'); yPos = M; }
+    doc.setFont('helvetica', 'bold');
     doc.setFontSize(11);
-    doc.setFont(undefined, 'bold');
-    doc.text(`${guide.title} (${grp.length} accts • Due: ${fmtCurrency(grpDueSum)} | Bal: ${fmtCurrency(grpBalSum)})`, 0.4, yPos);
+    doc.setTextColor(20, 30, 48);
+    doc.text(T(guide.title), M, yPos);
+    yPos += 0.17;
+    doc.setFontSize(9);
+    doc.setTextColor(60);
+    doc.text(grp.length + ' accounts   |   Amount Due: ' + money(grpDueSum) + '   |   Total Balance: ' + money(grpBalSum), M, yPos);
     yPos += 0.16;
+    doc.setFont('helvetica', 'normal');
     doc.setFontSize(8.5);
-    doc.setFont(undefined, 'normal');
-    const actionLines = doc.splitTextToSize(`Action: ${guide.action}`, 7.7);
-    doc.text(actionLines, 0.4, yPos);
-    yPos += actionLines.length * 0.14 + 0.06;
+    doc.setTextColor(0);
+    doc.text(actionLines, M, yPos);
+    yPos += actionLines.length * 0.15 + 0.06;
 
     doc.autoTable({
       startY: yPos,
-      margin: { left: 0.4, right: 0.4 },
-      styles: { fontSize: 7.4, cellPadding: 0.035, overflow: 'linebreak' },
-      headStyles: { fillColor: [30, 41, 59], textColor: 255, fontStyle: 'bold' },
+      margin: { left: M, right: M, top: M, bottom: 0.7 },
+      tableWidth: CW,
+      styles: { font: 'helvetica', fontSize: 7.6, cellPadding: 0.04, overflow: 'linebreak', valign: 'middle', lineColor: [220, 224, 230], lineWidth: 0.005 },
+      headStyles: { fillColor: [30, 41, 59], textColor: 255, fontStyle: 'bold', halign: 'center' },
+      alternateRowStyles: { fillColor: [247, 248, 250] },
+      showHead: 'everyPage',
+      columnStyles: {
+        0: { cellWidth: 0.7 },
+        1: { cellWidth: 1.45 },
+        2: { cellWidth: 0.95 },
+        3: { cellWidth: 0.9 },
+        4: { cellWidth: 0.95 },
+        5: { cellWidth: 0.8, halign: 'center' },
+        6: { cellWidth: 0.85, halign: 'right' },
+        7: { cellWidth: 0.9, halign: 'right' },
+      },
       head: [['Order Date', 'Customer', 'Acct #', 'Contact', 'Barangay', 'Delayed', 'Amount Due', 'Total Bal']],
       body: grp.map((r) => [
-        r.release_date || '',
-        r.customer_name || '',
-        r.account_no || '',
-        r.contact_no || '',
-        r.barangay || '',
-        `${r.monthsDue}m / ${fmtDelay(r.effDays)}`,
-        fmtCurrency(r.amountDue),
-        fmtCurrency(r.bal),
+        T(r.release_date || ''),
+        T(r.customer_name || ''),
+        T(r.account_no || ''),
+        T(r.contact_no || ''),
+        T(r.barangay || ''),
+        T(fmtDelay(r.effDays)),
+        T(money(r.amountDue).replace('PHP ', '')),
+        T(money(r.bal).replace('PHP ', '')),
       ]),
     });
-    yPos = (doc.lastAutoTable?.finalY || yPos) + 0.25;
+    yPos = (doc.lastAutoTable?.finalY || yPos) + 0.3;
   }
 
-  doc.save(`AB-Gadgetz-${brName}-CI-FollowUp-${todayStr}.pdf`);
+  // Footer on every page
+  const pages = doc.getNumberOfPages();
+  for (let i = 1; i <= pages; i++) {
+    doc.setPage(i);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(120);
+    doc.text(T('AB Gadgetz - ' + brName + ' Branch - CI Follow-Up - ' + todayStr + ' (amounts in PHP)'), M, PH - 0.4);
+    doc.text('Page ' + i + ' of ' + pages, PW - M, PH - 0.4, { align: 'right' });
+  }
+
+  doc.save('AB-Gadgetz-' + brName + '-CI-FollowUp-' + todayStr + '.pdf');
 }
 
 function openQuotaDrillModal(branchId, kind, ym, row) {
