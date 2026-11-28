@@ -8514,30 +8514,36 @@ function renderQuotas() {
   const collPct = totBomQuota > 0 ? Math.min(999, (totActColl / totBomQuota) * 100) : 0;
   const bomLabelDate = `${ym}-01`;
 
-  kpiEl.classList.toggle('hidden', !isAdmin);
+  const summaryWrap = document.getElementById('quotaSummaryWrap');
+  const summaryBarText = document.getElementById('quotaSummaryBarText');
+  if (summaryWrap) summaryWrap.classList.toggle('hidden', !isAdmin);
   cardsEl.style.gridTemplateColumns = visibleBranches.length <= 1 ? '1fr' : 'repeat(auto-fit,minmax(300px,1fr))';
 
   const webAbPerBranch = branchRows
     .filter((r) => Number(r.ws.liveQuota) > 0)
-    .map((r) => `${r.b.name}: <strong>${fmtCurrency(r.ws.liveQuota)}</strong>`)
+    .map((r) => `${r.b.name}: <span style="font-weight:700;color:#e2e8f0;">${fmtCurrency(r.ws.liveQuota)}</span>`)
     .join(' • ');
 
+  if (summaryBarText) {
+    summaryBarText.innerHTML = `📊 <strong>Summary:</strong> ${fmtNum(totActRel)} orders • Collected ${fmtCurrency(totActColl)} (${collPct.toFixed(1)}%) • Web AB Today: <span style="color:#dfd09b;font-weight:700;">${fmtCurrency(totLiveQuota)}</span>`;
+  }
+
   kpiEl.innerHTML = `
-    <div class="summary-box" style="padding:10px 12px;">
-      <div style="font-size:10px;font-weight:800;letter-spacing:0.6px;color:var(--muted);">MONTHLY INSTALLMENT RELEASES (${ym})</div>
-      <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-top:2px;">
-        <strong style="font-size:18px;color:${totMinRel > 0 && totActRel >= totMinRel ? 'var(--green)' : 'var(--gold-bright)'};">${fmtNum(totActRel)} orders</strong>
-        <span class="small muted">(${fmtCurrency(totRelPrincipal)})</span>
+    <div style="background:#151b23;border:1px solid #28313e;border-radius:10px;padding:9px 12px;">
+      <div style="font-size:10px;font-weight:700;letter-spacing:0.6px;color:#94a3b8;">MONTHLY INSTALLMENT RELEASES (${ym})</div>
+      <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-top:3px;">
+        <span style="font-size:16px;font-weight:700;color:${totMinRel > 0 && totActRel >= totMinRel ? '#8ecfb0' : '#dfd09b'};">${fmtNum(totActRel)} orders</span>
+        <span style="font-size:11.5px;color:#94a3b8;">(${fmtCurrency(totRelPrincipal)})</span>
       </div>
-      <div class="small muted" style="margin-top:2px;">Min: <strong>${totMinRel > 0 ? fmtNum(totMinRel) : '—'}</strong> • Max: <strong>${totMaxRel > 0 ? fmtNum(totMaxRel) : '—'}</strong>${totMinRel > 0 ? ` (${relPctMin.toFixed(0)}% of Min)` : ''}</div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:3px;">Min: <span style="font-weight:700;color:#e2e8f0;">${totMinRel > 0 ? fmtNum(totMinRel) : '—'}</span> • Max: <span style="font-weight:700;color:#e2e8f0;">${totMaxRel > 0 ? fmtNum(totMaxRel) : '—'}</span>${totMinRel > 0 ? ` (${relPctMin.toFixed(0)}% of Min)` : ''}</div>
     </div>
-    <div class="summary-box" style="padding:10px 12px;border-color:var(--gold);">
-      <div style="font-size:10px;font-weight:800;letter-spacing:0.6px;color:var(--muted);">COLLECTION QUOTA &amp; WEB AB TODAY (${ym})</div>
-      <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-top:2px;">
-        <strong style="font-size:18px;color:${totBomQuota > 0 && totActColl >= totBomQuota ? 'var(--green)' : '#60a5fa'};">${fmtCurrency(totActColl)}</strong>
-        <span class="small muted">/ ${totBomQuota > 0 ? fmtCurrency(totBomQuota) : '—'} (${collPct.toFixed(1)}%) • CI: <strong style="color:${totCommission > 0 ? 'var(--green)' : 'var(--muted)'};">${fmtCurrency(totCommission)}</strong></span>
+    <div style="background:#151b23;border:1px solid rgba(214,190,122,0.4);border-radius:10px;padding:9px 12px;">
+      <div style="font-size:10px;font-weight:700;letter-spacing:0.6px;color:#94a3b8;">COLLECTION QUOTA &amp; WEB AB TODAY (${ym})</div>
+      <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-top:3px;">
+        <span style="font-size:16px;font-weight:700;color:${totBomQuota > 0 && totActColl >= totBomQuota ? '#8ecfb0' : '#93c5fd'};">${fmtCurrency(totActColl)}</span>
+        <span style="font-size:11.5px;color:#94a3b8;">/ ${totBomQuota > 0 ? fmtCurrency(totBomQuota) : '—'} (${collPct.toFixed(1)}%) • CI: <span style="font-weight:700;color:${totCommission > 0 ? '#8ecfb0' : '#94a3b8'};">${fmtCurrency(totCommission)}</span></span>
       </div>
-      <div class="small muted" style="margin-top:2px;">Web AB Today: <strong style="color:var(--gold-bright);">${fmtCurrency(totLiveQuota)}</strong>${webAbPerBranch ? ` (${webAbPerBranch})` : ''}</div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:3px;">Web AB Today: <span style="font-weight:700;color:#dfd09b;">${fmtCurrency(totLiveQuota)}</span>${webAbPerBranch ? ` (${webAbPerBranch})` : ''}</div>
     </div>
   `;
 
@@ -9089,6 +9095,15 @@ document.getElementById('quotaPreviewCopyBtn')?.addEventListener('click', async 
   if (activeQuotaPreviewCtx) {
     await copyQuotaText(activeQuotaPreviewCtx, document.getElementById('quotaPreviewCopyBtn'));
   }
+});
+
+document.getElementById('quotaSummaryToggleBtn')?.addEventListener('click', () => {
+  const grid = document.getElementById('quotaKpiGrid');
+  const caret = document.getElementById('quotaSummaryCaret');
+  if (!grid) return;
+  const open = grid.style.display === 'none' || getComputedStyle(grid).display === 'none';
+  grid.style.display = open ? 'grid' : 'none';
+  if (caret) caret.textContent = open ? '−' : '+';
 });
 
 document.getElementById('quotaInfoToggleBtn')?.addEventListener('click', () => {

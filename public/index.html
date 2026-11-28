@@ -1193,7 +1193,13 @@
           </div>
         </div>
 
-        <div class="sales-big-grid" id="quotaKpiGrid" style="margin-bottom:14px;"></div>
+        <div id="quotaSummaryWrap" class="hidden" style="margin-bottom:10px;">
+          <button type="button" id="quotaSummaryToggleBtn" class="secondary" style="width:100%;display:flex;justify-content:space-between;align-items:center;padding:7px 11px;font-size:12px;text-align:left;">
+            <span id="quotaSummaryBarText">📊 Summary &amp; Web AB Today</span>
+            <span id="quotaSummaryCaret" style="font-weight:700;">+</span>
+          </button>
+          <div id="quotaKpiGrid" style="display:none;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px;margin-top:8px;"></div>
+        </div>
         <div id="quotaBranchCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;"></div>
       </div>
     </section>
