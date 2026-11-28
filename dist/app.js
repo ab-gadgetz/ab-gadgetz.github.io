@@ -8504,6 +8504,7 @@ function renderQuotas() {
     const estBom46 = isCurMonth && liveTot > 0 ? Math.max(0, Math.round(live46 + a.collAmount * share46 - a.rel46)) : 0;
     const estBom712 = isCurMonth && liveTot > 0 ? Math.max(0, Math.round(live712 + a.collAmount * (1 - share46) - a.rel712)) : 0;
     const estBomQ = realSchedQuota > 0 ? realSchedQuota : Number((estBom46 * 0.275 + estBom712 * 0.11).toFixed(2));
+    const webAbBomQ = Number((estBom46 * 0.275 + estBom712 * 0.11).toFixed(2));
     const effectiveBomQuota = savedBomQuota > 0 ? savedBomQuota : estBomQ;
     const isEstBom = savedBomQuota <= 0 && estBomQ > 0;
 
@@ -8522,7 +8523,7 @@ function renderQuotas() {
     totActColl += a.collAmount;
     totLiveQuota += Number(ws.liveQuota) || 0;
     totCommission += branchCommission;
-    return { b, t, a, ws, minRel, maxRel, ciCount, savedBomQuota, bom46, bom712, live46, live712, estBom46, estBom712, estBomQ, effectiveBomQuota, isEstBom, hitQuota, hitMax, hitMin, commRate, branchCommission, perCiCommission };
+    return { b, t, a, ws, minRel, maxRel, ciCount, savedBomQuota, bom46, bom712, live46, live712, estBom46, estBom712, realSchedQuota, webAbBomQ, estBomQ, effectiveBomQuota, isEstBom, hitQuota, hitMax, hitMin, commRate, branchCommission, perCiCommission };
   });
 
   const relPctMin = totMinRel > 0 ? Math.min(999, (totActRel / totMinRel) * 100) : 0;
@@ -8543,6 +8544,31 @@ function renderQuotas() {
     summaryBarText.innerHTML = `📊 <strong>Summary:</strong> ${fmtNum(totActRel)} orders • Collected ${fmtCurrency(totActColl)} (${collPct.toFixed(1)}%) • Web AB Today: <span style="color:#dfd09b;font-weight:700;">${fmtCurrency(totLiveQuota)}</span>`;
   }
 
+  const varianceRowsHtml = branchRows.map((r) => {
+    const realQ = r.realSchedQuota;
+    const webQ = r.webAbBomQ;
+    const diff = webQ > 0 && realQ > 0 ? webQ - realQ : 0;
+    const diffPct = realQ > 0 && webQ > 0 ? (diff / realQ) * 100 : 0;
+    const mtdPct = realQ > 0 ? (r.a.collAmount / realQ) * 100 : 0;
+    return `
+      <tr>
+        <td><strong>${r.b.name}</strong></td>
+        <td>${fmtNum(r.a.activeBomCount)}</td>
+        <td style="color:#8ecfb0;"><strong>${fmtCurrency(realQ)}</strong></td>
+        <td style="color:#dfd09b;">${webQ > 0 ? fmtCurrency(webQ) : '—'}</td>
+        <td style="color:${Math.abs(diff) < 3000 ? '#8ecfb0' : '#e29a9a'};">${webQ > 0 ? `${diff >= 0 ? '+' : ''}${fmtCurrency(diff)} (${diff >= 0 ? '+' : ''}${diffPct.toFixed(1)}%)` : '—'}</td>
+        <td>${fmtCurrency(r.a.collAmount)} <span class="muted">(${mtdPct.toFixed(1)}%)</span></td>
+      </tr>
+    `;
+  }).join('');
+
+  const totRealQ = branchRows.reduce((s, r) => s + r.realSchedQuota, 0);
+  const totWebQ = branchRows.reduce((s, r) => s + r.webAbBomQ, 0);
+  const totActiveBom = branchRows.reduce((s, r) => s + r.a.activeBomCount, 0);
+  const totVar = totWebQ > 0 ? totWebQ - totRealQ : 0;
+  const totVarPct = totRealQ > 0 && totWebQ > 0 ? (totVar / totRealQ) * 100 : 0;
+  const totMtdRealPct = totRealQ > 0 ? (totActColl / totRealQ) * 100 : 0;
+
   kpiEl.innerHTML = `
     <div style="background:#151b23;border:1px solid #28313e;border-radius:10px;padding:9px 12px;">
       <div style="font-size:10px;font-weight:700;letter-spacing:0.6px;color:#94a3b8;">MONTHLY INSTALLMENT RELEASES (${ym})</div>
@@ -8559,6 +8585,37 @@ function renderQuotas() {
         <span style="font-size:11.5px;color:#94a3b8;">/ ${totBomQuota > 0 ? fmtCurrency(totBomQuota) : '—'} (${collPct.toFixed(1)}%) • CI: <span style="font-weight:700;color:${totCommission > 0 ? '#8ecfb0' : '#94a3b8'};">${fmtCurrency(totCommission)}</span></span>
       </div>
       <div style="font-size:11px;color:#94a3b8;margin-top:3px;">Web AB Today: <span style="font-weight:700;color:#dfd09b;">${fmtCurrency(totLiveQuota)}</span>${webAbPerBranch ? ` (${webAbPerBranch})` : ''}</div>
+    </div>
+    <div style="grid-column:1 / -1;background:#151b23;border:1px solid #28313e;border-radius:10px;padding:10px 12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:6px;">
+        <span style="font-size:11px;font-weight:700;color:#dfd09b;letter-spacing:0.4px;">ADMIN VARIANCE REPORT — REAL COLLECTIBLE VS WEB AB (${bomLabelDate})</span>
+        <span class="small muted">Admin Only • Compares scheduled monthly dues vs Web AB 27.5% / 11% formula</span>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" style="font-size:11.5px;">
+          <thead>
+            <tr>
+              <th>Branch</th>
+              <th>Active Accts (${bomLabelDate})</th>
+              <th>Real Collectible (Sched.)</th>
+              <th>Web AB BOM Quota</th>
+              <th>Variance (Web AB − Real)</th>
+              <th>Collected MTD (% of Real)</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${varianceRowsHtml}
+            <tr style="border-top:2px solid #2e3846;">
+              <td><strong>Total</strong></td>
+              <td><strong>${fmtNum(totActiveBom)}</strong></td>
+              <td style="color:#8ecfb0;"><strong>${fmtCurrency(totRealQ)}</strong></td>
+              <td style="color:#dfd09b;"><strong>${totWebQ > 0 ? fmtCurrency(totWebQ) : '—'}</strong></td>
+              <td style="color:${Math.abs(totVar) < 5000 ? '#8ecfb0' : '#e29a9a'};"><strong>${totWebQ > 0 ? `${totVar >= 0 ? '+' : ''}${fmtCurrency(totVar)} (${totVar >= 0 ? '+' : ''}${totVarPct.toFixed(1)}%)` : '—'}</strong></td>
+              <td><strong>${fmtCurrency(totActColl)} <span class="muted">(${totMtdRealPct.toFixed(1)}%)</span></strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   `;
 
