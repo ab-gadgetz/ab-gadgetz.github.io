@@ -8403,9 +8403,19 @@ async function loadQuotas(forceRefresh = false) {
     renderQuotas();
     return;
   }
-  state.quotasData = await api(forceRefresh ? '/api/quotas?refresh=1' : '/api/quotas');
-  state._quotasLoadedAt = Date.now();
-  renderQuotas();
+  const cardsEl = document.getElementById('quotaBranchCards');
+  if (cardsEl && !state.quotasData) {
+    cardsEl.innerHTML = '<div class="muted small" style="padding:12px;">Loading branch targets &amp; Web AB live quota...</div>';
+  }
+  try {
+    state.quotasData = await api(forceRefresh ? '/api/quotas?refresh=1' : '/api/quotas');
+    state._quotasLoadedAt = Date.now();
+    renderQuotas();
+  } catch (err) {
+    if (cardsEl) {
+      cardsEl.innerHTML = `<div class="error-msg" style="padding:12px;">Could not load quotas: ${err.message}</div>`;
+    }
+  }
 }
 
 function renderQuotas() {
