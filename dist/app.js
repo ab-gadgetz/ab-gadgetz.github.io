@@ -10012,6 +10012,7 @@ function buildRebateMap(payments) {
   for (const p of payments || []) {
     const amt = Number(p.amount) || 0;
     let reb = 0;
+    if (p.rebates_synced) { map.set(p, Number(p.rebates) || 0); continue; }
     if (!(Number(p.penalties) > 0)) {
       if (Number(p.rebates) > 0) reb = Number(p.rebates);
       else if (amt >= 200 && Math.abs(amt % 5) >= 0.5) reb = Math.round(amt * F);

@@ -250,6 +250,37 @@ async function loginAndFetchPortal(username, password) {
       }
     } catch {}
 
+    // Overlay Web AB's authoritative Rebates column (Payments Report filter) onto this branch's payments.
+    try {
+      const pg = await fetch(`${PORTAL_BASE}/panel/payments`, { headers: { Cookie: cookieHeader(jar) } });
+      const token = (await pg.text()).match(/name="_token" value="([^"]+)"/)?.[1];
+      const mine = livePayments.filter((p) => p.branch_id === b.id);
+      const cutoff = new Date(now.getTime() - 62 * 86400000).toISOString().slice(0, 10);
+      const dates = [...new Set(mine.map((p) => p.payment_date))].filter((d) => d >= cutoff);
+      const fetchDate = async (date) => {
+        const body = new URLSearchParams({ _token: token, branch: String(b.portalId), payment_date: date });
+        const r = await fetch(`${PORTAL_BASE}/panel/payments/filter/date`, {
+          method: 'POST', redirect: 'manual',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookieHeader(jar) }, body: body.toString(),
+        });
+        if (!r.ok) return;
+        const html = await r.text();
+        const pool = new Map();
+        for (const tr of html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
+          const t = extractCells(tr[1]);
+          if (t.length < 5 || !/^\d{4}-\d{2}-\d{2}/.test(t[0])) continue;
+          const k = String(t[1]).trim().toUpperCase() + '|' + parseNum(t[2]);
+          if (!pool.has(k)) pool.set(k, []);
+          pool.get(k).push({ reb: parseNum(t[3]), pen: parseNum(t[4]) });
+        }
+        for (const p of mine.filter((x) => x.payment_date === date)) {
+          const q = pool.get(String(p.customer_name).trim().toUpperCase() + '|' + p.amount);
+          if (q && q.length) { const m = q.shift(); p.rebates = m.reb; p.penalties = m.pen; p.rebates_synced = true; }
+        }
+      };
+      if (token) for (let i = 0; i < dates.length; i += 5) await Promise.all(dates.slice(i, i + 5).map((d) => fetchDate(d).catch(() => {})));
+    } catch {}
+
     let emptyExpStreak = 0;
     for (let mOffset = 0; mOffset < 60; mOffset++) {
       const d = new Date(now.getFullYear(), now.getMonth() - mOffset, 1);
