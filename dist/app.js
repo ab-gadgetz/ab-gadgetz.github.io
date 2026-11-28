@@ -8464,54 +8464,21 @@ function renderQuotas() {
     actuals[p.branch_id].collAmount += Number(p.amount) || 0;
   }
 
-  let totMinRel = 0, totMaxRel = 0, totActRel = 0, totRelCount = 0;
+  let totMinRel = 0, totMaxRel = 0, totActRel = 0, totRelPrincipal = 0;
   let totBomQuota = 0, totActColl = 0, totLiveQuota = 0;
 
-  for (const b of visibleBranches) {
-    const t = monthTargets[b.id] || {};
-    const a = actuals[b.id];
-    const ws = webSummaries[b.id] || {};
-    totMinRel += Number(t.minRelease) || 0;
-    totMaxRel += Number(t.maxRelease) || 0;
-    totActRel += a.relPrincipal;
-    totRelCount += a.relCount;
-    totBomQuota += Number(t.bomQuota) || 0;
-    totActColl += a.collAmount;
-    totLiveQuota += Number(ws.liveQuota) || 0;
-  }
-
-  const relPctMin = totMinRel > 0 ? Math.min(999, (totActRel / totMinRel) * 100) : 0;
-  const collPct = totBomQuota > 0 ? Math.min(999, (totActColl / totBomQuota) * 100) : 0;
-
-  kpiEl.innerHTML = `
-    <div class="summary-box sales-big-box">
-      <div class="sales-big-main">
-        <div class="sales-big-title">MONTHLY INSTALLMENT RELEASE (${ym})</div>
-        <strong class="sales-big-val" style="color:${totMinRel > 0 && totActRel >= totMinRel ? 'var(--green)' : 'var(--gold-bright)'};">${fmtCurrency(totActRel)}</strong>
-        <div class="summary-note">${totRelCount} releases • Min: <strong>${totMinRel > 0 ? fmtCurrency(totMinRel) : 'Not set'}</strong> • Max: <strong>${totMaxRel > 0 ? fmtCurrency(totMaxRel) : 'Not set'}</strong>${totMinRel > 0 ? ` (${relPctMin.toFixed(1)}% of Min)` : ''}</div>
-      </div>
-    </div>
-    <div class="summary-box sales-big-box" style="border-color:var(--gold);">
-      <div class="sales-big-main">
-        <div class="sales-big-title">COLLECTION QUOTA VS ACTUAL (${ym})</div>
-        <strong class="sales-big-val" style="color:${totBomQuota > 0 && totActColl >= totBomQuota ? 'var(--green)' : '#60a5fa'};">${fmtCurrency(totActColl)}</strong>
-        <div class="summary-note">BOM Target: <strong>${totBomQuota > 0 ? fmtCurrency(totBomQuota) : 'Not locked'}</strong>${totBomQuota > 0 ? ` (${collPct.toFixed(1)}% • Rem: ${fmtCurrency(Math.max(0, totBomQuota - totActColl))})` : ''} • Live Today: <strong style="color:var(--gold-bright);">${fmtCurrency(totLiveQuota)}</strong></div>
-      </div>
-    </div>
-  `;
-
   const isCurMonth = ym === todayStr.slice(0, 7);
-  cardsEl.innerHTML = visibleBranches.map((b) => {
+  const branchRows = visibleBranches.map((b) => {
     const t = monthTargets[b.id] || {};
     const a = actuals[b.id];
     const ws = webSummaries[b.id] || {};
     const minRel = Number(t.minRelease) || 0;
     const maxRel = Number(t.maxRelease) || 0;
-    const bomQuota = Number(t.bomQuota) || 0;
+    const savedBomQuota = Number(t.bomQuota) || 0;
     const bom46 = Number(t.bomBal4to6) || 0;
     const bom712 = Number(t.bomBal7to12) || 0;
 
-    // Estimate BOM by reversing current month's collections & releases from live Web AB balances
+    // Estimate 1st-of-month (before day-1 transactions) by reversing all month collections & releases from today's live Web AB balances
     const live46 = Number(ws.bal4to6) || 0;
     const live712 = Number(ws.bal7to12) || 0;
     const liveTot = live46 + live712;
@@ -8519,18 +8486,52 @@ function renderQuotas() {
     const estBom46 = isCurMonth && liveTot > 0 ? Math.max(0, Math.round(live46 + a.collAmount * share46 - a.rel46)) : 0;
     const estBom712 = isCurMonth && liveTot > 0 ? Math.max(0, Math.round(live712 + a.collAmount * (1 - share46) - a.rel712)) : 0;
     const estBomQ = Number((estBom46 * 0.275 + estBom712 * 0.11).toFixed(2));
+    const effectiveBomQuota = savedBomQuota > 0 ? savedBomQuota : estBomQ;
+    const isEstBom = savedBomQuota <= 0 && estBomQ > 0;
 
-    const relBarMax = maxRel > 0 ? maxRel : (minRel > 0 ? minRel : Math.max(1, a.relPrincipal));
-    const relBarPct = Math.min(100, (a.relPrincipal / relBarMax) * 100);
+    totMinRel += minRel;
+    totMaxRel += maxRel;
+    totActRel += a.relCount;
+    totRelPrincipal += a.relPrincipal;
+    totBomQuota += effectiveBomQuota;
+    totActColl += a.collAmount;
+    totLiveQuota += Number(ws.liveQuota) || 0;
+    return { b, t, a, ws, minRel, maxRel, savedBomQuota, bom46, bom712, live46, live712, estBom46, estBom712, estBomQ, effectiveBomQuota, isEstBom };
+  });
+
+  const relPctMin = totMinRel > 0 ? Math.min(999, (totActRel / totMinRel) * 100) : 0;
+  const collPct = totBomQuota > 0 ? Math.min(999, (totActColl / totBomQuota) * 100) : 0;
+  const bomLabelDate = `${ym}-01`;
+
+  kpiEl.innerHTML = `
+    <div class="summary-box sales-big-box">
+      <div class="sales-big-main">
+        <div class="sales-big-title">MONTHLY INSTALLMENT RELEASE ORDERS (${ym})</div>
+        <strong class="sales-big-val" style="color:${totMinRel > 0 && totActRel >= totMinRel ? 'var(--green)' : 'var(--gold-bright)'};">${fmtNum(totActRel)} orders</strong>
+        <div class="summary-note">Principal: <strong>${fmtCurrency(totRelPrincipal)}</strong> • Min: <strong>${totMinRel > 0 ? fmtNum(totMinRel) : 'Not set'}</strong> • Max: <strong>${totMaxRel > 0 ? fmtNum(totMaxRel) : 'Not set'}</strong>${totMinRel > 0 ? ` (${relPctMin.toFixed(1)}% of Min)` : ''}</div>
+      </div>
+    </div>
+    <div class="summary-box sales-big-box" style="border-color:var(--gold);">
+      <div class="sales-big-main">
+        <div class="sales-big-title">COLLECTION QUOTA VS ACTUAL (${ym})</div>
+        <strong class="sales-big-val" style="color:${totBomQuota > 0 && totActColl >= totBomQuota ? 'var(--green)' : '#60a5fa'};">${fmtCurrency(totActColl)}</strong>
+        <div class="summary-note">${bomLabelDate} Target (Before Tx): <strong>${totBomQuota > 0 ? fmtCurrency(totBomQuota) : 'Not set'}</strong>${totBomQuota > 0 ? ` (${collPct.toFixed(1)}% • Rem: ${fmtCurrency(Math.max(0, totBomQuota - totActColl))})` : ''} • Live Today: <strong style="color:var(--gold-bright);">${fmtCurrency(totLiveQuota)}</strong></div>
+      </div>
+    </div>
+  `;
+
+  cardsEl.innerHTML = branchRows.map(({ b, a, ws, minRel, maxRel, savedBomQuota, bom46, bom712, live46, live712, estBom46, estBom712, estBomQ, effectiveBomQuota, isEstBom }) => {
+    const relBarMax = maxRel > 0 ? maxRel : (minRel > 0 ? minRel : Math.max(1, a.relCount));
+    const relBarPct = Math.min(100, (a.relCount / relBarMax) * 100);
     let relBadge = '<span class="badge" style="font-size:10px;">No Target</span>';
     if (minRel > 0 || maxRel > 0) {
-      if (maxRel > 0 && a.relPrincipal > maxRel) relBadge = '<span class="badge" style="background:rgba(245,158,11,0.2);color:#fbbf24;font-size:10px;">Over Max</span>';
-      else if (a.relPrincipal >= minRel) relBadge = '<span class="badge badge-ok" style="font-size:10px;">Target Met ✓</span>';
+      if (maxRel > 0 && a.relCount > maxRel) relBadge = '<span class="badge" style="background:rgba(245,158,11,0.2);color:#fbbf24;font-size:10px;">Over Max</span>';
+      else if (a.relCount >= minRel) relBadge = '<span class="badge badge-ok" style="font-size:10px;">Target Met ✓</span>';
       else relBadge = '<span class="badge" style="background:rgba(96,165,250,0.2);color:#93c5fd;font-size:10px;">In Progress</span>';
     }
 
-    const collBarPct = bomQuota > 0 ? Math.min(100, (a.collAmount / bomQuota) * 100) : 0;
-    const collRem = bomQuota > 0 ? Math.max(0, bomQuota - a.collAmount) : 0;
+    const collBarPct = effectiveBomQuota > 0 ? Math.min(100, (a.collAmount / effectiveBomQuota) * 100) : 0;
+    const collRem = effectiveBomQuota > 0 ? Math.max(0, effectiveBomQuota - a.collAmount) : 0;
 
     return `
       <div class="sub-panel quota-branch-card" data-branch="${b.id}" style="padding:12px;">
@@ -8541,29 +8542,29 @@ function renderQuotas() {
 
         <div style="margin-bottom:12px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,0.03);border:1px solid var(--border-soft);">
           <div style="display:flex;justify-content:space-between;font-size:11.5px;margin-bottom:4px;">
-            <span class="muted">Installment Release (Principal)</span>
-            <strong>${fmtCurrency(a.relPrincipal)} <span class="muted">(${a.relCount})</span></strong>
+            <span class="muted">Installment Releases</span>
+            <strong>${fmtNum(a.relCount)} orders <span class="muted">(${fmtCurrency(a.relPrincipal)})</span></strong>
           </div>
           <div style="height:6px;background:rgba(255,255,255,0.08);border-radius:99px;overflow:hidden;margin-bottom:5px;">
-            <div style="height:100%;width:${relBarPct.toFixed(1)}%;background:${a.relPrincipal >= minRel && minRel > 0 ? 'var(--green)' : 'var(--gold)'};"></div>
+            <div style="height:100%;width:${relBarPct.toFixed(1)}%;background:${a.relCount >= minRel && minRel > 0 ? 'var(--green)' : 'var(--gold)'};"></div>
           </div>
           <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);">
-            <span>Min: <strong style="color:var(--text);">${minRel > 0 ? fmtCurrency(minRel) : '—'}</strong></span>
-            <span>Max: <strong style="color:var(--text);">${maxRel > 0 ? fmtCurrency(maxRel) : '—'}</strong></span>
+            <span>Min: <strong style="color:var(--text);">${minRel > 0 ? `${fmtNum(minRel)} orders` : '—'}</strong></span>
+            <span>Max: <strong style="color:var(--text);">${maxRel > 0 ? `${fmtNum(maxRel)} orders` : '—'}</strong></span>
           </div>
         </div>
 
         <div style="margin-bottom:${isAdmin ? '12px' : '0'};padding:8px 10px;border-radius:8px;background:rgba(255,255,255,0.03);border:1px solid var(--border-soft);">
           <div style="display:flex;justify-content:space-between;font-size:11.5px;margin-bottom:4px;">
-            <span class="muted">Collection vs BOM Quota</span>
-            <strong style="color:${bomQuota > 0 && a.collAmount >= bomQuota ? 'var(--green)' : '#60a5fa'};">${fmtCurrency(a.collAmount)} <span class="muted">(${a.collCount})</span></strong>
+            <span class="muted">Collection vs ${bomLabelDate} Quota</span>
+            <strong style="color:${effectiveBomQuota > 0 && a.collAmount >= effectiveBomQuota ? 'var(--green)' : '#60a5fa'};">${fmtCurrency(a.collAmount)} <span class="muted">(${a.collCount})</span></strong>
           </div>
           <div style="height:6px;background:rgba(255,255,255,0.08);border-radius:99px;overflow:hidden;margin-bottom:5px;">
-            <div style="height:100%;width:${collBarPct.toFixed(1)}%;background:${bomQuota > 0 && a.collAmount >= bomQuota ? 'var(--green)' : '#60a5fa'};"></div>
+            <div style="height:100%;width:${collBarPct.toFixed(1)}%;background:${effectiveBomQuota > 0 && a.collAmount >= effectiveBomQuota ? 'var(--green)' : '#60a5fa'};"></div>
           </div>
           <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px;">
-            <span>BOM Target: <strong style="color:var(--text);">${bomQuota > 0 ? fmtCurrency(bomQuota) : 'Not locked'}</strong></span>
-            <span>${bomQuota > 0 ? `${collBarPct.toFixed(1)}% • Rem: ${fmtCurrency(collRem)}` : 'Set BOM below'}</span>
+            <span>${isEstBom ? 'Est. ' : ''}${bomLabelDate} Quota: <strong style="color:var(--text);">${effectiveBomQuota > 0 ? fmtCurrency(effectiveBomQuota) : 'Not set'}</strong></span>
+            <span>${effectiveBomQuota > 0 ? `${collBarPct.toFixed(1)}% • Rem: ${fmtCurrency(collRem)}` : 'Set below'}</span>
           </div>
           ${ws.liveQuota ? `
             <div style="font-size:11px;padding-top:6px;border-top:1px dashed var(--border-soft);color:var(--muted);line-height:1.45;">
@@ -8578,28 +8579,28 @@ function renderQuotas() {
           <div style="padding-top:8px;border-top:1px solid var(--border-soft);">
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px;">
               <div>
-                <label style="font-size:10px;color:var(--muted);">MIN RELEASE (₱)</label>
-                <input type="number" class="q-min-rel" value="${minRel || ''}" min="0" step="1000" placeholder="e.g. 300000" style="padding:5px 7px;font-size:12px;" />
+                <label style="font-size:10px;color:var(--muted);">MIN RELEASE (ORDERS)</label>
+                <input type="number" class="q-min-rel" value="${minRel || ''}" min="0" step="1" placeholder="e.g. 50" style="padding:5px 7px;font-size:12px;" />
               </div>
               <div>
-                <label style="font-size:10px;color:var(--muted);">MAX RELEASE (₱)</label>
-                <input type="number" class="q-max-rel" value="${maxRel || ''}" min="0" step="1000" placeholder="e.g. 500000" style="padding:5px 7px;font-size:12px;" />
+                <label style="font-size:10px;color:var(--muted);">MAX RELEASE (ORDERS)</label>
+                <input type="number" class="q-max-rel" value="${maxRel || ''}" min="0" step="1" placeholder="e.g. 60" style="padding:5px 7px;font-size:12px;" />
               </div>
               <div>
-                <label style="font-size:10px;color:var(--muted);">BOM 4–6 MOS BAL</label>
+                <label style="font-size:10px;color:var(--muted);">BOM 4–6 MOS (${bomLabelDate})</label>
                 <input type="number" class="q-bom-46" value="${bom46 || ''}" min="0" step="0.01" placeholder="${estBom46 || '0'}" style="padding:5px 7px;font-size:12px;" />
               </div>
               <div>
-                <label style="font-size:10px;color:var(--muted);">BOM 7–12 MOS BAL</label>
+                <label style="font-size:10px;color:var(--muted);">BOM 7–12 MOS (${bomLabelDate})</label>
                 <input type="number" class="q-bom-712" value="${bom712 || ''}" min="0" step="0.01" placeholder="${estBom712 || '0'}" style="padding:5px 7px;font-size:12px;" />
               </div>
             </div>
             <div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap;">
               <div style="flex:1;min-width:130px;">
-                <label style="font-size:10px;color:var(--gold-bright);">BOM COLLECTION QUOTA (₱)</label>
-                <input type="number" class="q-bom-quota" value="${bomQuota || ''}" min="0" step="0.01" placeholder="${estBomQ || '0'}" style="padding:5px 7px;font-size:12px;border-color:var(--gold);" />
+                <label style="font-size:10px;color:var(--gold-bright);">${bomLabelDate} COLLECTION QUOTA (₱)</label>
+                <input type="number" class="q-bom-quota" value="${savedBomQuota || ''}" min="0" step="0.01" placeholder="${estBomQ || '0'}" style="padding:5px 7px;font-size:12px;border-color:var(--gold);" />
               </div>
-              ${estBomQ > 0 ? `<button type="button" class="secondary q-est-btn" data-b46="${estBom46}" data-b712="${estBom712}" data-bq="${estBomQ}" style="padding:6px 8px;font-size:11px;" title="Estimate Month-Start Balance & Quota from Today's Live Web AB">Est. BOM</button>` : ''}
+              ${estBomQ > 0 ? `<button type="button" class="secondary q-est-btn" data-b46="${estBom46}" data-b712="${estBom712}" data-bq="${estBomQ}" style="padding:6px 8px;font-size:11px;" title="Fill ${bomLabelDate} Balance & Quota before day-1 transactions">Est. ${bomLabelDate}</button>` : ''}
               <button type="button" class="q-save-btn" style="padding:6px 12px;font-size:11.5px;">SAVE</button>
             </div>
             <div class="q-save-msg small" style="margin-top:4px;color:var(--gold-bright);"></div>
