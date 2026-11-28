@@ -466,6 +466,7 @@ async function staticGhApi(url, opts = {}) {
     cur.months[month][branchId] = {
       minRelease: Number(body.minRelease) || 0,
       maxRelease: Number(body.maxRelease) || 0,
+      ciCount: Math.max(1, parseInt(body.ciCount, 10) || 1),
       bomBal4to6: Number(body.bomBal4to6) || 0,
       bomBal7to12: Number(body.bomBal7to12) || 0,
       bomQuota: Number(body.bomQuota) || 0,
@@ -8465,7 +8466,7 @@ function renderQuotas() {
   }
 
   let totMinRel = 0, totMaxRel = 0, totActRel = 0, totRelPrincipal = 0;
-  let totBomQuota = 0, totActColl = 0, totLiveQuota = 0;
+  let totBomQuota = 0, totActColl = 0, totLiveQuota = 0, totCommission = 0;
 
   const isCurMonth = ym === todayStr.slice(0, 7);
   const branchRows = visibleBranches.map((b) => {
@@ -8474,6 +8475,7 @@ function renderQuotas() {
     const ws = webSummaries[b.id] || {};
     const minRel = Number(t.minRelease) || 0;
     const maxRel = Number(t.maxRelease) || 0;
+    const ciCount = Math.max(1, parseInt(t.ciCount, 10) || 1);
     const savedBomQuota = Number(t.bomQuota) || 0;
     const bom46 = Number(t.bomBal4to6) || 0;
     const bom712 = Number(t.bomBal7to12) || 0;
@@ -8489,6 +8491,13 @@ function renderQuotas() {
     const effectiveBomQuota = savedBomQuota > 0 ? savedBomQuota : estBomQ;
     const isEstBom = savedBomQuota <= 0 && estBomQ > 0;
 
+    const hitQuota = effectiveBomQuota > 0 && a.collAmount >= effectiveBomQuota;
+    const hitMax = maxRel > 0 && a.relCount >= maxRel;
+    const hitMin = minRel > 0 && a.relCount >= minRel;
+    const commRate = (hitQuota && hitMax) ? 0.005 : (hitQuota && hitMin) ? 0.0035 : 0;
+    const branchCommission = a.collAmount * commRate;
+    const perCiCommission = branchCommission / ciCount;
+
     totMinRel += minRel;
     totMaxRel += maxRel;
     totActRel += a.relCount;
@@ -8496,7 +8505,8 @@ function renderQuotas() {
     totBomQuota += effectiveBomQuota;
     totActColl += a.collAmount;
     totLiveQuota += Number(ws.liveQuota) || 0;
-    return { b, t, a, ws, minRel, maxRel, savedBomQuota, bom46, bom712, live46, live712, estBom46, estBom712, estBomQ, effectiveBomQuota, isEstBom };
+    totCommission += branchCommission;
+    return { b, t, a, ws, minRel, maxRel, ciCount, savedBomQuota, bom46, bom712, live46, live712, estBom46, estBom712, estBomQ, effectiveBomQuota, isEstBom, hitQuota, hitMax, hitMin, commRate, branchCommission, perCiCommission };
   });
 
   const relPctMin = totMinRel > 0 ? Math.min(999, (totActRel / totMinRel) * 100) : 0;
@@ -8513,14 +8523,14 @@ function renderQuotas() {
     </div>
     <div class="summary-box sales-big-box" style="border-color:var(--gold);">
       <div class="sales-big-main">
-        <div class="sales-big-title">COLLECTION QUOTA VS ACTUAL (${ym})</div>
+        <div class="sales-big-title">COLLECTION QUOTA &amp; CI COMMISSION (${ym})</div>
         <strong class="sales-big-val" style="color:${totBomQuota > 0 && totActColl >= totBomQuota ? 'var(--green)' : '#60a5fa'};">${fmtCurrency(totActColl)}</strong>
-        <div class="summary-note">${bomLabelDate} Target (Before Tx): <strong>${totBomQuota > 0 ? fmtCurrency(totBomQuota) : 'Not set'}</strong>${totBomQuota > 0 ? ` (${collPct.toFixed(1)}% • Rem: ${fmtCurrency(Math.max(0, totBomQuota - totActColl))})` : ''} • Live Today: <strong style="color:var(--gold-bright);">${fmtCurrency(totLiveQuota)}</strong></div>
+        <div class="summary-note">${bomLabelDate} Target: <strong>${totBomQuota > 0 ? fmtCurrency(totBomQuota) : 'Not set'}</strong>${totBomQuota > 0 ? ` (${collPct.toFixed(1)}%)` : ''} • Total CI Incentives: <strong style="color:${totCommission > 0 ? 'var(--green)' : 'var(--muted)'};">${fmtCurrency(totCommission)}</strong></div>
       </div>
     </div>
   `;
 
-  cardsEl.innerHTML = branchRows.map(({ b, a, ws, minRel, maxRel, savedBomQuota, bom46, bom712, live46, live712, estBom46, estBom712, estBomQ, effectiveBomQuota, isEstBom }) => {
+  cardsEl.innerHTML = branchRows.map(({ b, a, ws, minRel, maxRel, ciCount, savedBomQuota, bom46, bom712, live46, live712, estBom46, estBom712, estBomQ, effectiveBomQuota, isEstBom, hitQuota, hitMax, hitMin, commRate, branchCommission, perCiCommission }) => {
     const relBarMax = maxRel > 0 ? maxRel : (minRel > 0 ? minRel : Math.max(1, a.relCount));
     const relBarPct = Math.min(100, (a.relCount / relBarMax) * 100);
     let relBadge = '<span class="badge" style="font-size:10px;">No Target</span>';
@@ -8575,6 +8585,20 @@ function renderQuotas() {
           ` : ''}
         </div>
 
+        <div style="margin-bottom:${isAdmin ? '12px' : '0'};padding:8px 10px;border-radius:8px;background:${commRate > 0 ? 'rgba(34,197,94,0.08)' : 'rgba(255,255,255,0.03)'};border:1px solid ${commRate > 0 ? 'var(--green)' : 'var(--border-soft)'};">
+          <div style="display:flex;justify-content:space-between;align-items:center;font-size:11.5px;margin-bottom:4px;">
+            <span class="muted">CI Incentive (${ciCount} CI${ciCount > 1 ? 's' : ''})</span>
+            <strong style="color:${commRate > 0 ? 'var(--green)' : 'var(--muted)'};">
+              ${commRate > 0 ? `${(commRate * 100).toFixed(2)}% • ${fmtCurrency(branchCommission)}` : 'No Incentives'}
+            </strong>
+          </div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.45;">
+            ${commRate > 0
+              ? `<div>${hitMax ? 'Quota Hit + Max Release (0.50%)' : 'Quota Hit + Min Release (0.35%)'} • Each CI (${ciCount}): <strong style="color:var(--gold-bright);">${fmtCurrency(perCiCommission)}</strong></div>`
+              : `<div>Need: ${!hitQuota ? 'Hit Collection Quota' : ''}${!hitQuota && !hitMin ? ' + ' : ''}${!hitMin ? 'Hit Min Release' : ''} to unlock 0.35% (${fmtCurrency((a.collAmount * 0.0035) / ciCount)}/CI) or Max for 0.5% (${fmtCurrency((a.collAmount * 0.005) / ciCount)}/CI)</div>`}
+          </div>
+        </div>
+
         ${isAdmin ? `
           <div style="padding-top:8px;border-top:1px solid var(--border-soft);">
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px;">
@@ -8596,7 +8620,14 @@ function renderQuotas() {
               </div>
             </div>
             <div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap;">
-              <div style="flex:1;min-width:130px;">
+              <div style="width:76px;">
+                <label style="font-size:10px;color:var(--muted);">NO. OF CIs</label>
+                <select class="q-ci-count" style="padding:5px 6px;font-size:12px;">
+                  <option value="1" ${ciCount === 1 ? 'selected' : ''}>1 CI</option>
+                  <option value="2" ${ciCount === 2 ? 'selected' : ''}>2 CIs</option>
+                </select>
+              </div>
+              <div style="flex:1;min-width:120px;">
                 <label style="font-size:10px;color:var(--gold-bright);">${bomLabelDate} COLLECTION QUOTA (₱)</label>
                 <input type="number" class="q-bom-quota" value="${savedBomQuota || ''}" min="0" step="0.01" placeholder="${estBomQ || '0'}" style="padding:5px 7px;font-size:12px;border-color:var(--gold);" />
               </div>
@@ -8642,6 +8673,7 @@ function renderQuotas() {
             branchId: bid,
             minRelease: Number(card.querySelector('.q-min-rel')?.value) || 0,
             maxRelease: Number(card.querySelector('.q-max-rel')?.value) || 0,
+            ciCount: Math.max(1, parseInt(card.querySelector('.q-ci-count')?.value || '1', 10) || 1),
             bomBal4to6: Number(b46El?.value) || 0,
             bomBal7to12: Number(b712El?.value) || 0,
             bomQuota: Number(bqEl?.value) || 0,
