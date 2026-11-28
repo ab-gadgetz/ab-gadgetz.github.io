@@ -1,9 +1,14 @@
 {
-  "updatedAt": "2026-11-28T14:35:13.981Z",
+  "updatedAt": "2026-11-28T15:36:57.968Z",
   "followups": {},
   "repoVerified": {
     "": {
       "verifiedAt": "2026-11-28T14:35:13.980Z",
+      "byRole": "AUDITOR"
+    },
+    "br-molave::MO-470-07-26::2026-11-21": {
+      "verified": true,
+      "verifiedAt": "2026-11-28T15:36:57.968Z",
       "byRole": "AUDITOR"
     }
   },
